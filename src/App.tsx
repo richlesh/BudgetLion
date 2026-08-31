@@ -41,6 +41,8 @@ export function App() {
   const [dark, setDark] = useState(false);
   // Persisted ledger column widths (colId -> px), loaded from settings.
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
+  // Print/PDF font options, kept in a ref for the once-registered print handler.
+  const printFontRef = useRef<{ font?: string; size?: number }>({});
   // Transaction id staged for deletion, pending user confirmation.
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   // Right-click account context menu + view/edit account dialogs.
@@ -102,7 +104,10 @@ export function App() {
   const doPrint = useCallback(() => {
     const acct = selectedRef.current;
     if (!acct) return;
-    const html = ledgerToHtml(acct, ledgerRef.current, categoriesRef.current);
+    const html = ledgerToHtml(acct, ledgerRef.current, categoriesRef.current, {
+      font: printFontRef.current.font,
+      sizePx: printFontRef.current.size,
+    });
     void window.ledger.printLedger(html);
   }, []);
 
@@ -147,6 +152,20 @@ export function App() {
     }
   }, [refreshAccounts, refreshCategories, refreshLedger]);
 
+  // Apply the chosen ledger font/size to the grid via CSS variables, and remember
+  // the print font/size for PDF/print export.
+  function applyFontSettings(s: {
+    ledgerFont?: string;
+    ledgerFontSize?: number;
+    printFont?: string;
+    printFontSize?: number;
+  }) {
+    const root = document.documentElement;
+    root.style.setProperty("--ledger-font", s.ledgerFont ? `"${s.ledgerFont}"` : "");
+    root.style.setProperty("--ledger-font-size", s.ledgerFontSize ? `${s.ledgerFontSize}px` : "");
+    printFontRef.current = { font: s.printFont, size: s.printFontSize };
+  }
+
   // Initial load + theme + menu wiring. Menu listeners are registered ONCE.
   useEffect(() => {
     void refreshAccounts();
@@ -156,11 +175,13 @@ export function App() {
       document.body.classList.toggle("dark", isDark);
       setDark(isDark);
       if (s.ledgerColumnWidths) setColumnWidths(s.ledgerColumnWidths);
+      applyFontSettings(s);
     });
     window.ledger.onSettingsChanged((s) => {
       const isDark = s.theme === "dark";
       document.body.classList.toggle("dark", isDark);
       setDark(isDark);
+      applyFontSettings(s);
     });
     window.ledger.onMenuNewTransaction(() => {
       if (selectedRef.current) setShowTxDialog(true);
@@ -506,6 +527,7 @@ export function App() {
           rows={ledger}
           categories={categories}
           accounts={accounts}
+          printFont={{ font: printFontRef.current.font, sizePx: printFontRef.current.size }}
           onCancel={() => setShowExportDialog(false)}
           onDone={(message) => {
             setShowExportDialog(false);

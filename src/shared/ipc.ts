@@ -21,6 +21,11 @@ export interface AppSettings {
   userName?: string;
   windowBounds?: { width: number; height: number; x?: number; y?: number };
   ledgerColumnWidths?: Record<string, number>;
+  // Fonts (empty string = system default)
+  ledgerFont?: string;
+  ledgerFontSize?: number;
+  printFont?: string;
+  printFontSize?: number;
 }
 
 /** Result of the main-process file open used by the Import dialog. */

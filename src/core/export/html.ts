@@ -14,10 +14,16 @@ function esc(s: string): string {
 export function ledgerToHtml(
   account: Account,
   rows: LedgerRow[],
-  categories: Category[]
+  categories: Category[],
+  fontOptions?: { font?: string; sizePx?: number }
 ): string {
   const catName = new Map(categories.map((c) => [c.id, c.name]));
   const generated = new Date().toLocaleString();
+  // Print/PDF font: chosen family (falls back to system) + base size.
+  const bodyFont = fontOptions?.font
+    ? `"${fontOptions.font}", -apple-system, Arial, sans-serif`
+    : `-apple-system, Arial, sans-serif`;
+  const baseSize = fontOptions?.sizePx && fontOptions.sizePx > 0 ? fontOptions.sizePx : 12;
 
   const bodyRows = rows
     .filter((r) => r.kind === "transaction" && r.transaction)
@@ -39,10 +45,10 @@ export function ledgerToHtml(
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>${esc(account.name)} Ledger</title>
 <style>
-  body { font-family: -apple-system, Arial, sans-serif; color: #111; margin: 24px; }
-  h1 { font-size: 20px; margin: 0 0 2px; }
-  .sub { color: #666; font-size: 12px; margin-bottom: 16px; }
-  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  body { font-family: ${bodyFont}; color: #111; margin: 24px; font-size: ${baseSize}px; }
+  h1 { font-size: ${baseSize + 8}px; margin: 0 0 2px; }
+  .sub { color: #666; font-size: ${Math.max(10, baseSize - 2)}px; margin-bottom: 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: ${baseSize}px; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #ddd; }
   th { background: #f2f2f2; }
   .num { text-align: right; font-variant-numeric: tabular-nums; }

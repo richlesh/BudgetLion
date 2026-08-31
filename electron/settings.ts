@@ -14,6 +14,11 @@ export interface Settings {
   // UI persistence
   windowBounds?: { width: number; height: number; x?: number; y?: number };
   ledgerColumnWidths?: Record<string, number>;
+  // Fonts (empty string = system default)
+  ledgerFont?: string;
+  ledgerFontSize?: number;
+  printFont?: string;
+  printFontSize?: number;
 }
 
 const SETTINGS_PATH = join(homedir(), ".budgetlion-settings.json");

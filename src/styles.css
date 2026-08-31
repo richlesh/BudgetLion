@@ -159,6 +159,9 @@ button:disabled {
 .grid-wrap {
   flex: 1;
   min-height: 0;
+  /* Ledger font/size chosen in Settings (fall back to app defaults when unset). */
+  --ag-font-family: var(--ledger-font, inherit);
+  --ag-font-size: var(--ledger-font-size, 14px);
 }
 
 .empty {

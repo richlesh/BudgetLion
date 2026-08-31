@@ -8,6 +8,7 @@ interface Props {
   rows: LedgerRow[];
   categories: Category[];
   accounts: Account[];
+  printFont?: { font?: string; sizePx?: number };
   onCancel: () => void;
   onDone: (message: string) => void;
 }
@@ -22,7 +23,7 @@ function safeName(account: Account): string {
   return account.name.replace(/[^a-z0-9\-_ ]/gi, "_") + "-ledger";
 }
 
-export function ExportDialog({ account, rows, categories, accounts, onCancel, onDone }: Props) {
+export function ExportDialog({ account, rows, categories, accounts, printFont, onCancel, onDone }: Props) {
   const [format, setFormat] = useState<ExportFormat>("csv");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -77,7 +78,10 @@ export function ExportDialog({ account, rows, categories, accounts, onCancel, on
           "qif"
         );
       } else if (format === "pdf") {
-        ok = await window.ledger.exportPdf(name, ledgerToHtml(account, filteredRows, categories));
+        ok = await window.ledger.exportPdf(
+          name,
+          ledgerToHtml(account, filteredRows, categories, printFont)
+        );
       }
       if (ok) onDone(`Exported ${account.name} as ${format.toUpperCase()}.`);
       else setBusy(false); // user cancelled the save dialog
