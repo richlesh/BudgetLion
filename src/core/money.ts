@@ -20,19 +20,25 @@ export function isLiability(type: AccountType): boolean {
   return type === "credit_card" || type === "loan";
 }
 
-/** Parse a percent string (e.g. "4.25") to basis points (425). Null if blank/invalid. */
+/**
+ * Parse a percent string (e.g. "4.25" or "4.125") to basis points. Supports up to
+ * three decimal places of percent, which is a tenth of a basis point, so the
+ * stored value may be fractional (e.g. 4.125% -> 412.5 bps). Null if blank/invalid.
+ */
 export function percentToBps(input: string): number | null {
   const s = input.trim().replace(/%/g, "");
   if (s === "") return null;
   const value = Number(s);
   if (!Number.isFinite(value)) return null;
-  return Math.round(value * 100);
+  // Round to a tenth of a basis point (= 3 decimal places of percent).
+  return Math.round(value * 1000) / 10;
 }
 
-/** Format basis points (425) as a percent string ("4.25"). Empty string for null. */
+/** Format basis points (may be fractional) as a percent string ("4.125"). Empty for null. */
 export function bpsToPercent(bps: number | null | undefined): string {
   if (bps == null) return "";
-  return String(bps / 100);
+  // Trim trailing zeros from the (up to 3) decimal places.
+  return String(Number((bps / 100).toFixed(3)));
 }
 
 /** Format integer cents as a currency string, e.g. 123456 -> "$1,234.56". */
