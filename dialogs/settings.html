@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Settings</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, sans-serif;
+      background: #f5f5f5;
+      color: #1e1e1e;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      height: 100vh;
+    }
+    body.dark { background: #1e1e1e; color: #e0e0e0; }
+    h1 { font-size: 16px; font-weight: 600; }
+    .field { display: flex; flex-direction: column; gap: 4px; }
+    label { font-size: 14px; color: #666; }
+    body.dark label { color: #aaa; }
+    select, input {
+      width: 100%;
+      background: #fff;
+      color: #1e1e1e;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 14px;
+      outline: none;
+    }
+    body.dark select, body.dark input { background: #3a3a3c; color: #e0e0e0; border-color: #555; }
+    select:focus, input:focus { border-color: #0a84ff; }
+    .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: auto; }
+    button { padding: 8px 20px; border-radius: 8px; border: none; font-size: 14px; cursor: pointer; }
+    #cancel-btn { background: #ddd; color: #1e1e1e; }
+    body.dark #cancel-btn { background: #3a3a3c; color: #e0e0e0; }
+    #save-btn { background: #0a84ff; color: #fff; }
+  </style>
+</head>
+<body>
+  <h1>Settings</h1>
+  <div class="field">
+    <label for="theme">Theme</label>
+    <select id="theme">
+      <option value="light">Light</option>
+      <option value="dark">Dark</option>
+    </select>
+  </div>
+  <div class="field">
+    <label for="currency">Default currency (ISO 4217)</label>
+    <input id="currency" type="text" maxlength="3" placeholder="USD" spellcheck="false" style="text-transform:uppercase;">
+  </div>
+  <div class="row">
+    <button id="cancel-btn">Cancel</button>
+    <button id="save-btn">Save</button>
+  </div>
+
+  <script>
+    const { ipcRenderer } = require("electron");
+
+    const themeSel = document.getElementById("theme");
+    const currencyInput = document.getElementById("currency");
+
+    ipcRenderer.invoke("settings-get").then((settings) => {
+      themeSel.value = settings.theme || "light";
+      currencyInput.value = settings.defaultCurrency || "USD";
+      if (themeSel.value === "dark") document.body.classList.add("dark");
+    });
+
+    // Live theme preview
+    themeSel.addEventListener("change", () => {
+      document.body.classList.toggle("dark", themeSel.value === "dark");
+    });
+
+    document.getElementById("save-btn").addEventListener("click", () => {
+      ipcRenderer.invoke("settings-save", {
+        theme: themeSel.value,
+        defaultCurrency: (currencyInput.value || "USD").toUpperCase().trim(),
+      });
+    });
+
+    document.getElementById("cancel-btn").addEventListener("click", () => ipcRenderer.invoke("settings-close"));
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") ipcRenderer.invoke("settings-close");
+    });
+  </script>
+</body>
+</html>

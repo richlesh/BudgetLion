@@ -1,0 +1,124 @@
+{
+  "name": "budgetlion",
+  "productName": "BudgetLion",
+  "version": "0.1.0",
+  "description": "BudgetLion - Personal finance ledger with double-entry accounting",
+  "main": "dist-electron/electron/main/main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev:renderer": "vite",
+    "dev:electron": "tsc -p tsconfig.electron.json && node scripts/copy-assets.mjs && wait-on http://localhost:5173 && cross-env NODE_ENV=development electron .",
+    "build:renderer": "vite build",
+    "build:electron": "tsc -p tsconfig.electron.json && node scripts/copy-assets.mjs",
+    "build": "npm run build:renderer && npm run build:electron",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.electron.json --noEmit",
+    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "postinstall": "electron-builder install-app-deps && node scripts/fix-electron.mjs",
+    "fix:electron": "node scripts/fix-electron.mjs",
+    "start": "npm run build && electron .",
+    "dist:mac:x64": "npm run build && electron-builder --mac --x64",
+    "dist:mac:arm64": "npm run build && electron-builder --mac --arm64",
+    "dist:win:x64": "npm run build && electron-builder --win --x64",
+    "dist:win:arm64": "npm run build && electron-builder --win --arm64",
+    "dist:linux:x64": "npm run build && electron-builder --linux --x64",
+    "dist:linux:arm64": "npm run build && electron-builder --linux --arm64"
+  },
+  "build": {
+    "appId": "com.richardlesh.budgetlion",
+    "productName": "BudgetLion",
+    "icon": "resources/app_icon",
+    "artifactName": "BudgetLion-${version}-${arch}.${ext}",
+    "files": [
+      "dist/**",
+      "dist-electron/**",
+      "dialogs/**",
+      "resources/**",
+      "utilities.cjs",
+      "license.cjs",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "**/node_modules/better-sqlite3/**"
+    ],
+    "afterPack": "./afterPack.cjs",
+    "mac": {
+      "category": "public.app-category.finance",
+      "target": "dmg",
+      "icon": "resources/app_icon.icns",
+      "identity": "RICHARD A LESH (MMZ3Y97NTP)",
+      "notarize": true,
+      "entitlements": "entitlements.plist",
+      "entitlementsInherit": "entitlements.plist"
+    },
+    "dmg": {
+      "icon": "resources/app_icon.icns"
+    },
+    "win": {
+      "icon": "resources/app_icon.ico",
+      "target": "nsis"
+    },
+    "linux": {
+      "icon": "resources/app_icon_256.png",
+      "category": "Office",
+      "target": [
+        {
+          "target": "deb",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "rpm",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "rpm": {
+      "fpm": [
+        "--rpm-rpmbuild-define",
+        "_build_id_links none"
+      ]
+    }
+  },
+  "keywords": [],
+  "homepage": "https://glowingcat.com/BudgetLion.html",
+  "author": {
+    "name": "Richard Lesh",
+    "email": "richlesh@github.com"
+  },
+  "license": "ISC",
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.10.0",
+    "@types/papaparse": "^5.3.15",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3",
+    "wait-on": "^8.0.1"
+  },
+  "dependencies": {
+    "ag-grid-community": "^33.0.2",
+    "ag-grid-react": "^33.0.2",
+    "better-sqlite3": "^11.7.0",
+    "papaparse": "^5.4.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "uuid": "^11.0.3"
+  },
+  "allowScripts": {
+    "electron@33.4.11": true,
+    "better-sqlite3@11.10.0": true,
+    "esbuild@0.25.12": true
+  }
+}

@@ -1,0 +1,77 @@
+name: Build and Release Windows
+
+on:
+  push:
+    tags:
+      - '*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release version tag (e.g. 0.1.0)"
+        required: true
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    permissions:
+      id-token: write
+      contents: write
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    strategy:
+      matrix:
+        arch: [x64, arm64]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Inject license salt
+        run: |
+          @"
+          const LICENSE_SALT = "${{ secrets.LICENSE_SALT }}";
+          module.exports = { LICENSE_SALT };
+          "@ | Set-Content license.js
+        shell: powershell
+
+      - name: Build renderer + main
+        run: npm run build
+
+      - name: Build Windows ${{ matrix.arch }} installer
+        run: ./node_modules/.bin/electron-builder --win --${{ matrix.arch }} --publish never
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign installer with Azure Artifact Signing
+        uses: azure/artifact-signing-action@v1
+        with:
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.AZURE_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          files-folder: ${{ github.workspace }}\dist
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Upload installer to release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          name: BudgetLion ${{ inputs.tag || github.ref_name }}
+          draft: true
+          files: dist/*.exe

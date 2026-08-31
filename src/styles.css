@@ -1,0 +1,289 @@
+:root {
+  --bg: #f5f5f5;
+  --panel: #ffffff;
+  --border: #d9dce1;
+  --text: #1e1e1e;
+  --muted: #6b7075;
+  --accent: #0a84ff;
+}
+
+body.dark {
+  --bg: #1e1f22;
+  --panel: #26282c;
+  --border: #3a3d42;
+  --text: #e6e6e6;
+  --muted: #9aa0a6;
+  --accent: #5b8def;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.app {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  height: 100vh;
+}
+
+.sidebar {
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  padding: 12px;
+  overflow-y: auto;
+}
+
+.sidebar h1 {
+  font-size: 16px;
+  margin: 4px 8px 12px;
+}
+
+.account-item {
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.account-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.account-item.active {
+  background: var(--accent);
+  color: white;
+}
+
+.account-item .bal {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.account-item.active .bal {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.account-type {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.account-main {
+  min-width: 0;
+}
+
+.account-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-number {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.account-item.active .account-number {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+/* Right-hand column: balance on top, account type beneath it. */
+.account-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.account-item.active .account-type {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 16px;
+  gap: 12px;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.toolbar h2 {
+  margin: 0;
+  font-size: 18px;
+  flex: 1;
+}
+
+button {
+  background: var(--accent);
+  color: white;
+  border: none;
+  padding: 7px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+button.secondary {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.grid-wrap {
+  flex: 1;
+  min-height: 0;
+}
+
+.empty {
+  color: var(--muted);
+  padding: 40px;
+  text-align: center;
+}
+
+.neg {
+  color: #ff6b6b;
+}
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dialog {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+  width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dialog h3 {
+  margin: 0;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.field label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.field input,
+.field select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 7px 8px;
+  font-size: 13px;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.error {
+  color: #ff6b6b;
+  font-size: 12px;
+}
+
+.toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--accent);
+  color: #fff;
+  padding: 10px 18px;
+  border-radius: 8px;
+  font-size: 13px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  z-index: 1000;
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 6px;
+  line-height: 0;
+}
+
+.icon-btn:hover {
+  color: #ff6b6b;
+  border-color: #ff6b6b;
+}
+
+/* Emphasize the confirm (destructive) action in the delete dialog. */
+button.danger {
+  background: #e5484d;
+  color: white;
+  border: none;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 1000;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+  min-width: 140px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+}
+
+.context-menu-item {
+  background: transparent;
+  color: var(--text);
+  border: none;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 5px;
+}
+
+.context-menu-item:hover {
+  background: var(--accent);
+  color: white;
+}
