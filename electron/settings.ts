@@ -19,6 +19,11 @@ export interface Settings {
   ledgerFontSize?: number;
   printFont?: string;
   printFontSize?: number;
+  // AI / LLM
+  vendor?: string;
+  model?: string;
+  apiKeys?: Record<string, string>;
+  defaultModels?: Record<string, string>;
 }
 
 const SETTINGS_PATH = join(homedir(), ".budgetlion-settings.json");
@@ -26,12 +31,21 @@ const SETTINGS_PATH = join(homedir(), ".budgetlion-settings.json");
 const DEFAULTS: Settings = {
   theme: "light",
   defaultCurrency: "USD",
+  vendor: "openai",
+  model: "",
+  apiKeys: {},
+  defaultModels: {},
 };
 
 export function loadSettings(): Settings {
   try {
     const saved = JSON.parse(readFileSync(SETTINGS_PATH, "utf8")) as Partial<Settings>;
-    return { ...DEFAULTS, ...saved };
+    return {
+      ...DEFAULTS,
+      ...saved,
+      apiKeys: { ...(DEFAULTS.apiKeys ?? {}), ...(saved.apiKeys ?? {}) },
+      defaultModels: { ...(DEFAULTS.defaultModels ?? {}), ...(saved.defaultModels ?? {}) },
+    };
   } catch {
     return { ...DEFAULTS };
   }

@@ -9,6 +9,7 @@
 import { app, BrowserWindow, ipcMain, Menu, shell, type MenuItemConstructorOptions } from "electron";
 import { join } from "node:path";
 import { loadSettings, saveSettings, type Settings } from "./settings.js";
+import { loadVendors } from "./ai/vendors.js";
 
 // License validation lives in plain CJS at the app root (shared with the dialog HTML).
 const appRoot = app.getAppPath();
@@ -135,7 +136,7 @@ function openSettings(): void {
   if (settingsWin && !settingsWin.isDestroyed()) return settingsWin.focus();
   settingsWin = new BrowserWindow({
     width: 420,
-    height: 520,
+    height: 640,
     resizable: true,
     parent: mainWinRef ?? undefined,
     modal: true,
@@ -156,6 +157,9 @@ ipcMain.handle("settings-save", (_e, partial: Partial<Settings>) => {
 
 // ---- Shared IPC used by all dialogs + the main renderer ----
 ipcMain.handle("settings-get", () => loadSettings());
+
+// Settings + the AI vendor catalog, for the settings dialog's LLM section.
+ipcMain.handle("settings-get-data", () => ({ settings: loadSettings(), VENDORS: loadVendors() }));
 
 // Programmatic settings patch used by the renderer (window bounds, column widths,
 // etc.). Unlike "settings-save" this has no UI side effects (no window close) and

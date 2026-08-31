@@ -12,7 +12,7 @@
       padding: 24px;
       display: flex;
       flex-direction: column;
-      gap: 14px;
+      gap: 12px;
       min-height: 100vh;
     }
     body.dark { background: #1e1e1e; color: #e0e0e0; }
@@ -43,6 +43,9 @@
     #cancel-btn { background: #ddd; color: #1e1e1e; }
     body.dark #cancel-btn { background: #3a3a3c; color: #e0e0e0; }
     #save-btn { background: #0a84ff; color: #fff; }
+    .api-key-link { font-size: 13px; color: #0a84ff; text-decoration: none; margin-top: 4px; display: inline-block; }
+    body.dark .api-key-link { color: #4da3ff; }
+    .api-key-link:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -60,27 +63,67 @@
     <input id="currency" type="text" maxlength="3" placeholder="USD" spellcheck="false" style="text-transform:uppercase;">
   </div>
 
+  <!-- AI / LLM -->
+  <div class="section-title">AI Assistant</div>
+  <div class="field">
+    <label>Vendor</label>
+    <select id="vendor"></select>
+  </div>
+  <div class="field">
+    <label>Model</label>
+    <select id="model"></select>
+  </div>
+
+  <!-- Standard single API-key vendors -->
+  <div class="field" id="api-key-section">
+    <label>API Key</label>
+    <input id="apiKey" type="password" placeholder="Enter API key…">
+    <a id="api-key-link" class="api-key-link" href="#" target="_blank">Get API key…</a>
+  </div>
+
+  <!-- Microsoft / Azure -->
+  <div id="microsoft-section" style="display:none;">
+    <div class="field"><label>API Key</label><input id="microsoft-api-key" type="password" placeholder="Enter Azure OpenAI API key…"></div>
+    <div class="field" style="margin-top:8px;"><label>Endpoint URL</label><input id="microsoft-endpoint" type="text" placeholder="https://your-resource.openai.azure.com"></div>
+    <a id="microsoft-key-link" class="api-key-link" href="#" target="_blank">Get Azure OpenAI credentials…</a>
+  </div>
+
+  <!-- Amazon -->
+  <div id="amazon-section" style="display:none;">
+    <div class="field"><label>AWS Access Key ID</label><input id="amazon-access-key" type="password" placeholder="Enter AWS Access Key ID…"></div>
+    <div class="field" style="margin-top:8px;"><label>AWS Secret Access Key</label><input id="amazon-secret-key" type="password" placeholder="Enter AWS Secret Access Key…"></div>
+    <div class="field" style="margin-top:8px;"><label>AWS Region</label><input id="amazon-region" type="text" placeholder="us-east-1"></div>
+    <a id="amazon-key-link" class="api-key-link" href="#" target="_blank">Get AWS credentials…</a>
+  </div>
+
+  <!-- IBM -->
+  <div id="ibm-section" style="display:none;">
+    <div class="field"><label>IBM Cloud API Key</label><input id="ibm-api-key" type="password" placeholder="Enter IBM Cloud API key…"></div>
+    <div class="field" style="margin-top:8px;"><label>Endpoint URL</label><input id="ibm-endpoint" type="text" placeholder="https://us-south.ml.cloud.ibm.com"></div>
+    <div class="field" style="margin-top:8px;"><label>Project ID</label><input id="ibm-project-id" type="text" placeholder="Enter project ID…"></div>
+    <a id="ibm-key-link" class="api-key-link" href="#" target="_blank">Get IBM Cloud API key…</a>
+  </div>
+
+  <!-- Generic (OpenAI-compatible) -->
+  <div id="generic-section" style="display:none;">
+    <div class="field"><label>API Key</label><input id="generic-api-key" type="password" placeholder="Enter API key…"></div>
+    <div class="field" style="margin-top:8px;"><label>Endpoint URL</label><input id="generic-endpoint" type="text" placeholder="https://api.example.com/v1"></div>
+  </div>
+
+  <!-- Generic (YAML) -->
+  <div id="generic-yaml-section" style="display:none;">
+    <div class="field"><label>API Key / Token</label><input id="generic-yaml-api-key" type="password" placeholder="Enter API key or token…"></div>
+  </div>
+
   <!-- Fonts -->
   <div class="section-title">Fonts</div>
   <div class="row-fields">
-    <div class="field" style="flex:2">
-      <label>Ledger Font</label>
-      <select id="ledger-font"></select>
-    </div>
-    <div class="field" style="flex:1">
-      <label>Size</label>
-      <select id="ledger-font-size"></select>
-    </div>
+    <div class="field" style="flex:2"><label>Ledger Font</label><select id="ledger-font"></select></div>
+    <div class="field" style="flex:1"><label>Size</label><select id="ledger-font-size"></select></div>
   </div>
   <div class="row-fields">
-    <div class="field" style="flex:2">
-      <label>Print / PDF Font</label>
-      <select id="print-font"></select>
-    </div>
-    <div class="field" style="flex:1">
-      <label>Size</label>
-      <select id="print-font-size"></select>
-    </div>
+    <div class="field" style="flex:2"><label>Print / PDF Font</label><select id="print-font"></select></div>
+    <div class="field" style="flex:1"><label>Size</label><select id="print-font-size"></select></div>
   </div>
 
   <div class="row">
@@ -93,12 +136,17 @@
 
     const themeSel = document.getElementById("theme");
     const currencyInput = document.getElementById("currency");
+    const vendorSel = document.getElementById("vendor");
+    const modelSel = document.getElementById("model");
+    const apiKeyIn = document.getElementById("apiKey");
+    const apiKeyLink = document.getElementById("api-key-link");
     const ledgerFontSel = document.getElementById("ledger-font");
     const ledgerFontSizeSel = document.getElementById("ledger-font-size");
     const printFontSel = document.getElementById("print-font");
     const printFontSizeSel = document.getElementById("print-font-size");
 
-    // Detect available fonts via canvas width probing (from NeuroPanther pattern).
+    let vendors, current;
+
     function detectFonts() {
       const canvas = document.createElement("canvas");
       const ctx = canvas.getContext("2d");
@@ -126,7 +174,6 @@
       found.unshift("System Default");
       return found;
     }
-
     function fillFontSelect(sel, fonts, value) {
       fonts.forEach((f) => {
         const opt = document.createElement("option");
@@ -137,38 +184,157 @@
       });
       sel.value = value || "";
     }
-
     function fillSizeSelect(sel, value, fallback) {
-      const sizes = [9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 22, 24];
-      sizes.forEach((s) => {
+      [9,10,11,12,13,14,15,16,18,20,22,24].forEach((s) => {
         const opt = document.createElement("option");
-        opt.value = String(s);
-        opt.textContent = s + "px";
+        opt.value = String(s); opt.textContent = s + "px";
         sel.appendChild(opt);
       });
       sel.value = String(value || fallback);
     }
 
-    ipcRenderer.invoke("settings-get").then((settings) => {
-      themeSel.value = settings.theme || "light";
-      currencyInput.value = settings.defaultCurrency || "USD";
+    // --- AI vendor/model handling ---
+    function credentialSections() {
+      return ["api-key-section","microsoft-section","amazon-section","ibm-section","generic-section","generic-yaml-section"];
+    }
+    function updateVendorUI(vendor) {
+      credentialSections().forEach((id) => { document.getElementById(id).style.display = "none"; });
+      if (vendor === "amazon") {
+        document.getElementById("amazon-section").style.display = "";
+        document.getElementById("amazon-access-key").value = current.apiKeys.amazonAccessKey || "";
+        document.getElementById("amazon-secret-key").value = current.apiKeys.amazonSecretKey || "";
+        document.getElementById("amazon-region").value = current.apiKeys.amazonRegion || "us-east-1";
+        document.getElementById("amazon-key-link").href = vendors[vendor].apiKeyUrl || "#";
+      } else if (vendor === "microsoft") {
+        document.getElementById("microsoft-section").style.display = "";
+        document.getElementById("microsoft-api-key").value = current.apiKeys.microsoftApiKey || "";
+        document.getElementById("microsoft-endpoint").value = current.apiKeys.microsoftEndpoint || "";
+        document.getElementById("microsoft-key-link").href = vendors[vendor].apiKeyUrl || "#";
+      } else if (vendor === "ibm") {
+        document.getElementById("ibm-section").style.display = "";
+        document.getElementById("ibm-api-key").value = current.apiKeys.ibmApiKey || "";
+        document.getElementById("ibm-endpoint").value = current.apiKeys.ibmEndpoint || "";
+        document.getElementById("ibm-project-id").value = current.apiKeys.ibmProjectId || "";
+        document.getElementById("ibm-key-link").href = vendors[vendor].apiKeyUrl || "#";
+      } else if (vendor === "generic") {
+        document.getElementById("generic-yaml-section").style.display = "";
+        document.getElementById("generic-yaml-api-key").value = current.apiKeys.genericYamlApiKey || "";
+      } else if (vendor.startsWith("generic")) {
+        document.getElementById("generic-section").style.display = "";
+        document.getElementById("generic-api-key").value = current.apiKeys[vendor + "ApiKey"] || "";
+        document.getElementById("generic-endpoint").value = current.apiKeys[vendor + "Endpoint"] || "";
+      } else {
+        document.getElementById("api-key-section").style.display = "";
+        apiKeyIn.value = current.apiKeys[vendor] || "";
+        apiKeyLink.href = vendors[vendor].apiKeyUrl || "#";
+      }
+    }
+    // Phase 2: bundled model lists only (Phase 3 adds live fetch).
+    async function populateModels(vendor, savedModel) {
+      let models = (vendors[vendor] && vendors[vendor].models) || [];
+      modelSel.innerHTML = "";
+      const empty = document.createElement("option");
+      empty.value = ""; empty.textContent = models.length ? "Select a model…" : "(enter credentials / no models)";
+      modelSel.appendChild(empty);
+      [...models].sort((a,b) => a.localeCompare(b)).forEach((m) => {
+        const opt = document.createElement("option");
+        opt.value = m; opt.textContent = m;
+        modelSel.appendChild(opt);
+      });
+      modelSel.value = savedModel && models.includes(savedModel) ? savedModel : "";
+    }
+
+    function persistCurrentVendorCredentials(vendor) {
+      if (vendor === "amazon") {
+        current.apiKeys.amazonAccessKey = document.getElementById("amazon-access-key").value;
+        current.apiKeys.amazonSecretKey = document.getElementById("amazon-secret-key").value;
+        current.apiKeys.amazonRegion = document.getElementById("amazon-region").value || "us-east-1";
+      } else if (vendor === "microsoft") {
+        current.apiKeys.microsoftApiKey = document.getElementById("microsoft-api-key").value;
+        current.apiKeys.microsoftEndpoint = document.getElementById("microsoft-endpoint").value;
+      } else if (vendor === "ibm") {
+        current.apiKeys.ibmApiKey = document.getElementById("ibm-api-key").value;
+        current.apiKeys.ibmEndpoint = document.getElementById("ibm-endpoint").value;
+        current.apiKeys.ibmProjectId = document.getElementById("ibm-project-id").value;
+      } else if (vendor === "generic") {
+        current.apiKeys.genericYamlApiKey = document.getElementById("generic-yaml-api-key").value;
+      } else if (vendor.startsWith("generic")) {
+        current.apiKeys[vendor + "ApiKey"] = document.getElementById("generic-api-key").value;
+        current.apiKeys[vendor + "Endpoint"] = document.getElementById("generic-endpoint").value;
+      } else {
+        current.apiKeys[vendor] = apiKeyIn.value;
+      }
+    }
+
+    ipcRenderer.invoke("settings-get-data").then(async ({ settings, VENDORS }) => {
+      vendors = VENDORS;
+      current = settings;
+      if (!current.apiKeys) current.apiKeys = {};
+      if (!current.defaultModels) current.defaultModels = {};
+
+      themeSel.value = current.theme || "light";
+      currencyInput.value = current.defaultCurrency || "USD";
       if (themeSel.value === "dark") document.body.classList.add("dark");
 
+      // Vendor dropdown (sorted by label).
+      for (const [key, v] of Object.entries(vendors).sort((a, b) => a[1].label.localeCompare(b[1].label))) {
+        const opt = document.createElement("option");
+        opt.value = key; opt.textContent = v.label;
+        vendorSel.appendChild(opt);
+      }
+      vendorSel.value = current.vendor || "openai";
+      if (!vendors[vendorSel.value]) vendorSel.value = Object.keys(vendors)[0];
+      vendorSel.dataset.prev = vendorSel.value;
+      updateVendorUI(vendorSel.value);
+      await populateModels(vendorSel.value, current.defaultModels[vendorSel.value] || current.model);
+
+      // Fonts.
       const fonts = detectFonts();
-      fillFontSelect(ledgerFontSel, fonts, settings.ledgerFont);
-      fillFontSelect(printFontSel, fonts, settings.printFont);
-      fillSizeSelect(ledgerFontSizeSel, settings.ledgerFontSize, 13);
-      fillSizeSelect(printFontSizeSel, settings.printFontSize, 12);
+      fillFontSelect(ledgerFontSel, fonts, current.ledgerFont);
+      fillFontSelect(printFontSel, fonts, current.printFont);
+      fillSizeSelect(ledgerFontSizeSel, current.ledgerFontSize, 13);
+      fillSizeSelect(printFontSizeSel, current.printFontSize, 12);
     });
 
     themeSel.addEventListener("change", () => {
       document.body.classList.toggle("dark", themeSel.value === "dark");
     });
 
+    vendorSel.addEventListener("change", async () => {
+      const prev = vendorSel.dataset.prev;
+      current.defaultModels[prev] = modelSel.value;
+      persistCurrentVendorCredentials(prev);
+      updateVendorUI(vendorSel.value);
+      vendorSel.dataset.prev = vendorSel.value;
+      await populateModels(vendorSel.value, current.defaultModels[vendorSel.value]);
+    });
+    modelSel.addEventListener("change", () => {
+      current.defaultModels[vendorSel.value] = modelSel.value;
+    });
+    apiKeyIn.addEventListener("input", () => { current.apiKeys[vendorSel.value] = apiKeyIn.value; });
+
+    apiKeyLink.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (apiKeyLink.href && apiKeyLink.href !== "#") ipcRenderer.invoke("open-external", apiKeyLink.href);
+    });
+    ["microsoft-key-link","amazon-key-link","ibm-key-link"].forEach((id) => {
+      document.getElementById(id).addEventListener("click", (e) => {
+        e.preventDefault();
+        const href = document.getElementById(id).href;
+        if (href && href !== "#") ipcRenderer.invoke("open-external", href);
+      });
+    });
+
     document.getElementById("save-btn").addEventListener("click", () => {
+      persistCurrentVendorCredentials(vendorSel.value);
+      current.defaultModels[vendorSel.value] = modelSel.value;
       ipcRenderer.invoke("settings-save", {
         theme: themeSel.value,
         defaultCurrency: (currencyInput.value || "USD").toUpperCase().trim(),
+        vendor: vendorSel.value,
+        model: modelSel.value,
+        apiKeys: current.apiKeys,
+        defaultModels: current.defaultModels,
         ledgerFont: ledgerFontSel.value,
         ledgerFontSize: Number(ledgerFontSizeSel.value),
         printFont: printFontSel.value,
