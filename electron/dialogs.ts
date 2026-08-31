@@ -10,6 +10,7 @@ import { app, BrowserWindow, ipcMain, Menu, shell, type MenuItemConstructorOptio
 import { join } from "node:path";
 import { loadSettings, saveSettings, type Settings } from "./settings.js";
 import { loadVendors } from "./ai/vendors.js";
+import { fetchModels, getModelsForVendor } from "./ai/models.js";
 
 // License validation lives in plain CJS at the app root (shared with the dialog HTML).
 const appRoot = app.getAppPath();
@@ -160,6 +161,13 @@ ipcMain.handle("settings-get", () => loadSettings());
 
 // Settings + the AI vendor catalog, for the settings dialog's LLM section.
 ipcMain.handle("settings-get-data", () => ({ settings: loadSettings(), VENDORS: loadVendors() }));
+
+// Live model-list fetching for the settings LLM section (falls back to static lists).
+ipcMain.handle("get-models-for-vendor", (_e, vendor: string) => getModelsForVendor(vendor));
+ipcMain.handle(
+  "fetch-models",
+  (_e, opts: { vendor: string; apiKey?: string; baseURL?: string }) => fetchModels(opts)
+);
 
 // Programmatic settings patch used by the renderer (window bounds, column widths,
 // etc.). Unlike "settings-save" this has no UI side effects (no window close) and

@@ -229,9 +229,29 @@
         apiKeyLink.href = vendors[vendor].apiKeyUrl || "#";
       }
     }
-    // Phase 2: bundled model lists only (Phase 3 adds live fetch).
+    // Fetch live models from the provider when credentials are present, falling
+    // back to the bundled static list. Mirrors the NeuroPanther behaviour.
     async function populateModels(vendor, savedModel) {
-      let models = (vendors[vendor] && vendors[vendor].models) || [];
+      modelSel.innerHTML = "<option disabled>Loading…</option>";
+      let models = null;
+      try {
+        if (vendor === "ollama") {
+          models = await ipcRenderer.invoke("get-models-for-vendor", "ollama");
+        } else if (vendor === "microsoft") {
+          if (current.apiKeys.microsoftApiKey && current.apiKeys.microsoftEndpoint)
+            models = await ipcRenderer.invoke("get-models-for-vendor", "microsoft");
+        } else if (vendor === "amazon" || vendor === "ibm" || vendor === "generic") {
+          models = await ipcRenderer.invoke("get-models-for-vendor", vendor);
+        } else if (vendor.startsWith("generic")) {
+          const key = current.apiKeys[vendor + "ApiKey"];
+          const endpoint = current.apiKeys[vendor + "Endpoint"];
+          if (key && endpoint) models = await ipcRenderer.invoke("fetch-models", { vendor, apiKey: key, baseURL: endpoint });
+        } else {
+          const key = current.apiKeys[vendor];
+          if (key) models = await ipcRenderer.invoke("fetch-models", { vendor, apiKey: key });
+        }
+      } catch { /* fall through to static list */ }
+      if (!models || models.length === 0) models = (vendors[vendor] && vendors[vendor].models) || [];
       modelSel.innerHTML = "";
       const empty = document.createElement("option");
       empty.value = ""; empty.textContent = models.length ? "Select a model…" : "(enter credentials / no models)";
@@ -311,7 +331,25 @@
     modelSel.addEventListener("change", () => {
       current.defaultModels[vendorSel.value] = modelSel.value;
     });
-    apiKeyIn.addEventListener("input", () => { current.apiKeys[vendorSel.value] = apiKeyIn.value; });
+
+    // Debounced re-fetch of models when credentials change.
+    let refetchTimer;
+    function scheduleRefetch() {
+      clearTimeout(refetchTimer);
+      refetchTimer = setTimeout(() => populateModels(vendorSel.value, current.defaultModels[vendorSel.value]), 800);
+    }
+    apiKeyIn.addEventListener("input", () => { current.apiKeys[vendorSel.value] = apiKeyIn.value; scheduleRefetch(); });
+    document.getElementById("microsoft-api-key").addEventListener("input", () => { current.apiKeys.microsoftApiKey = document.getElementById("microsoft-api-key").value; scheduleRefetch(); });
+    document.getElementById("microsoft-endpoint").addEventListener("input", () => { current.apiKeys.microsoftEndpoint = document.getElementById("microsoft-endpoint").value; scheduleRefetch(); });
+    document.getElementById("ibm-api-key").addEventListener("input", () => { current.apiKeys.ibmApiKey = document.getElementById("ibm-api-key").value; });
+    document.getElementById("ibm-endpoint").addEventListener("input", () => { current.apiKeys.ibmEndpoint = document.getElementById("ibm-endpoint").value; });
+    document.getElementById("ibm-project-id").addEventListener("input", () => { current.apiKeys.ibmProjectId = document.getElementById("ibm-project-id").value; });
+    document.getElementById("amazon-access-key").addEventListener("input", () => { current.apiKeys.amazonAccessKey = document.getElementById("amazon-access-key").value; });
+    document.getElementById("amazon-secret-key").addEventListener("input", () => { current.apiKeys.amazonSecretKey = document.getElementById("amazon-secret-key").value; });
+    document.getElementById("amazon-region").addEventListener("input", () => { current.apiKeys.amazonRegion = document.getElementById("amazon-region").value; });
+    document.getElementById("generic-api-key").addEventListener("input", () => { current.apiKeys[vendorSel.value + "ApiKey"] = document.getElementById("generic-api-key").value; scheduleRefetch(); });
+    document.getElementById("generic-endpoint").addEventListener("input", () => { current.apiKeys[vendorSel.value + "Endpoint"] = document.getElementById("generic-endpoint").value; scheduleRefetch(); });
+    document.getElementById("generic-yaml-api-key").addEventListener("input", () => { current.apiKeys.genericYamlApiKey = document.getElementById("generic-yaml-api-key").value; });
 
     apiKeyLink.addEventListener("click", (e) => {
       e.preventDefault();
