@@ -15,6 +15,26 @@ export function displaySign(type: AccountType): 1 | -1 {
   return type === "credit_card" || type === "loan" ? -1 : 1;
 }
 
+/** True for liability account types (credit card / loan), which carry interest. */
+export function isLiability(type: AccountType): boolean {
+  return type === "credit_card" || type === "loan";
+}
+
+/** Parse a percent string (e.g. "4.25") to basis points (425). Null if blank/invalid. */
+export function percentToBps(input: string): number | null {
+  const s = input.trim().replace(/%/g, "");
+  if (s === "") return null;
+  const value = Number(s);
+  if (!Number.isFinite(value)) return null;
+  return Math.round(value * 100);
+}
+
+/** Format basis points (425) as a percent string ("4.25"). Empty string for null. */
+export function bpsToPercent(bps: number | null | undefined): string {
+  if (bps == null) return "";
+  return String(bps / 100);
+}
+
 /** Format integer cents as a currency string, e.g. 123456 -> "$1,234.56". */
 export function formatCents(cents: number, currency = "USD", locale = "en-US"): string {
   return new Intl.NumberFormat(locale, {

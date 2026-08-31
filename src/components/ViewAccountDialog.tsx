@@ -1,5 +1,5 @@
 import type { Account } from "../shared/types";
-import { displaySign, formatCents } from "../core/money";
+import { bpsToPercent, displaySign, formatCents, isLiability } from "../core/money";
 
 interface Props {
   account: Account;
@@ -36,6 +36,12 @@ export function ViewAccountDialog({ account, onClose }: Props) {
         <Row label="Type" value={TYPE_LABELS[account.type]} />
         <Row label="Account ID" value={account.accountCode ?? ""} />
         <Row label="Currency" value={account.currency} />
+        {isLiability(account.type) && (
+          <Row
+            label="Annual interest rate"
+            value={account.interestRateBps != null ? `${bpsToPercent(account.interestRateBps)}%` : ""}
+          />
+        )}
         <Row label="Opening balance" value={openingDisplay} />
         <Row label="Opening balance date" value={account.openingBalanceDate ?? ""} />
         <div className="dialog-actions">

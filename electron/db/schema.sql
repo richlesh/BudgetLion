@@ -57,3 +57,26 @@ CREATE INDEX IF NOT EXISTS idx_tx_from   ON transactions(from_account_id, date);
 CREATE INDEX IF NOT EXISTS idx_tx_to     ON transactions(to_account_id, date);
 CREATE INDEX IF NOT EXISTS idx_tx_import ON transactions(import_id);
 CREATE INDEX IF NOT EXISTS idx_tx_date   ON transactions(date);
+
+-- Split line items for a transaction (Option 1: only present when a transaction
+-- is split; unsplit transactions store their single category/counterparty inline).
+-- amount_cents is SIGNED relative to the owning account (the transaction's from/to
+-- perspective); splits must sum to the transaction's signed effect on that account.
+-- Each split is EITHER a category leg (category_id) OR a transfer leg
+-- (transfer_account_id), never both.
+CREATE TABLE IF NOT EXISTS transaction_splits (
+  id                  TEXT PRIMARY KEY,
+  transaction_id      TEXT NOT NULL REFERENCES transactions(id),
+  amount_cents        INTEGER NOT NULL,               -- signed (owning-account perspective)
+  category_id         TEXT REFERENCES categories(id), -- category leg, OR
+  transfer_account_id TEXT REFERENCES accounts(id),   -- transfer leg (the other account)
+  memo                TEXT,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL,
+  deleted_at          TEXT,
+  -- Exactly one leg type per split.
+  CHECK ((category_id IS NULL) <> (transfer_account_id IS NULL))
+);
+
+CREATE INDEX IF NOT EXISTS idx_split_tx       ON transaction_splits(transaction_id);
+CREATE INDEX IF NOT EXISTS idx_split_transfer ON transaction_splits(transfer_account_id);

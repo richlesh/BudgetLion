@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { AgGridReact } from "ag-grid-react";
 import {
   AllCommunityModule,
@@ -102,6 +102,17 @@ export function LedgerGrid({
   columnWidths,
   onColumnWidthsChange,
 }: Props) {
+  // Keep the latest callbacks/data in refs so `columnDefs` can be built once and
+  // stay referentially stable. If columnDefs changed identity on every edit (e.g.
+  // because onSetCategoryOrTransfer depends on the ledger), AG Grid would re-apply
+  // the definitions and reset user column widths (flex columns snap back).
+  const onDeleteRef = useRef(onDelete);
+  const onSetChoiceRef = useRef(onSetCategoryOrTransfer);
+  const categoriesRef = useRef(categories);
+  const otherAccountsRef = useRef<Account[]>([]);
+  onDeleteRef.current = onDelete;
+  onSetChoiceRef.current = onSetCategoryOrTransfer;
+  categoriesRef.current = categories;
   // For liability accounts (credit card / loan) we flip the sign of displayed
   // amounts and balances so the ledger reads like a statement (charges positive,
   // payments negative). Stored data is unaffected; only display values change,
@@ -118,6 +129,7 @@ export function LedgerGrid({
     () => accounts.filter((a) => a.id !== account.id),
     [accounts, account.id]
   );
+  otherAccountsRef.current = otherAccounts;
 
   // Build the display payee for a row. Transfers ignore any stored payee and show
   // the counterparty account with direction relative to the account being viewed:
@@ -218,9 +230,9 @@ export function LedgerGrid({
         // Function form so we can capture the row id and commit the choice directly
         // (AG Grid's value plumbing can't round-trip our object choice reliably).
         cellEditorParams: (p: { data: GridRow }) => ({
-          categories,
-          accounts: otherAccounts,
-          onChoose: (choice: CategoryChoice) => onSetCategoryOrTransfer(p.data.id, choice),
+          categories: categoriesRef.current,
+          accounts: otherAccountsRef.current,
+          onChoose: (choice: CategoryChoice) => onSetChoiceRef.current(p.data.id, choice),
         }),
         cellEditorPopup: true,
       },
@@ -263,14 +275,16 @@ export function LedgerGrid({
               className="secondary icon-btn"
               title="Delete transaction"
               aria-label="Delete transaction"
-              onClick={() => onDelete(p.data.id)}
+              onClick={() => onDeleteRef.current(p.data.id)}
             >
               <TrashIcon />
             </button>
           ),
       },
     ],
-    [money, onDelete, categories, otherAccounts, onSetCategoryOrTransfer]
+    // Built once (stable): volatile callbacks/data are read via refs so edits
+    // don't recreate the column definitions and reset user column widths.
+    [money]
   );
 
   const onCellValueChanged = useCallback(
@@ -320,6 +334,12 @@ export function LedgerGrid({
     },
     [applySavedWidths]
   );
+
+  // Saved widths may arrive after the grid is ready (settings load asynchronously),
+  // so re-apply whenever they change and the grid exists.
+  useEffect(() => {
+    applySavedWidths();
+  }, [applySavedWidths]);
 
   const onColumnResized = useCallback(
     (e: ColumnResizedEvent) => {

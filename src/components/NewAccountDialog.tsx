@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { AccountType, NewAccountInput } from "../shared/types";
-import { displaySign, parseCents } from "../core/money";
+import { displaySign, isLiability, parseCents, percentToBps } from "../core/money";
 
 interface Props {
   onCancel: () => void;
@@ -24,6 +24,7 @@ export function NewAccountDialog({ onCancel, onCreate }: Props) {
   const [accountCode, setAccountCode] = useState("");
   const [opening, setOpening] = useState("0.00");
   const [openingDate, setOpeningDate] = useState(today());
+  const [interestRate, setInterestRate] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   function submit() {
@@ -43,6 +44,8 @@ export function NewAccountDialog({ onCancel, onCreate }: Props) {
       accountCode: accountCode.trim() || null,
       openingBalanceCents: cents,
       openingBalanceDate: openingDate || null,
+      // Interest rate applies only to liability accounts; stored in basis points.
+      interestRateBps: isLiability(type) ? percentToBps(interestRate) : null,
     });
   }
 
@@ -64,6 +67,16 @@ export function NewAccountDialog({ onCancel, onCreate }: Props) {
             ))}
           </select>
         </div>
+        {isLiability(type) && (
+          <div className="field">
+            <label>Annual interest rate (%)</label>
+            <input
+              value={interestRate}
+              onChange={(e) => setInterestRate(e.target.value)}
+              placeholder="e.g. 4.25"
+            />
+          </div>
+        )}
         <div className="field">
           <label>Account ID (optional)</label>
           <input

@@ -61,6 +61,31 @@ export interface Transaction {
   deletedAt: string | null;
 }
 
+/**
+ * A split line item of a transaction. `amountCents` is SIGNED relative to the
+ * owning account (the transaction's from/to perspective). Each split is EITHER a
+ * category leg (categoryId set) OR a transfer leg (transferAccountId set).
+ */
+export interface TransactionSplit {
+  id: string;
+  transactionId: string;
+  amountCents: number; // signed
+  categoryId: string | null;
+  transferAccountId: string | null;
+  memo: string | null;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
+/** Input for one split leg when creating/updating a split transaction. */
+export interface NewSplitInput {
+  amountCents: number; // signed (owning-account perspective)
+  categoryId?: string | null;
+  transferAccountId?: string | null;
+  memo?: string | null;
+}
+
 /** Input shape for creating an account (server fills id/timestamps). */
 export interface NewAccountInput {
   name: string;
@@ -83,6 +108,7 @@ export interface UpdateAccountInput {
   accountCode?: string | null;
   openingBalanceCents?: number;
   openingBalanceDate?: string | null;
+  interestRateBps?: number | null;
 }
 
 /** Input shape for creating a transaction. */
@@ -96,6 +122,12 @@ export interface NewTransactionInput {
   categoryId?: string | null;
   cleared?: ClearedState;
   importId?: string | null;
+  /**
+   * Optional split legs. When provided with 2+ legs, the transaction is stored as
+   * a split: inline categoryId/from-to counterparty are cleared and these legs are
+   * written. Legs must sum to the transaction's signed effect on the owning account.
+   */
+  splits?: NewSplitInput[] | null;
 }
 
 /** Partial update for a transaction (id required). */
@@ -109,6 +141,8 @@ export interface UpdateTransactionInput {
   toAccountId?: string | null;
   categoryId?: string | null;
   cleared?: ClearedState;
+  /** Replace the transaction's split legs. Empty array or null clears splits. */
+  splits?: NewSplitInput[] | null;
 }
 
 /** Input shape for creating a category. */
@@ -137,6 +171,10 @@ export interface LedgerRow {
   signedAmountCents: number;
   /** Running balance of THIS account after this transaction, in cents. */
   runningBalanceCents: number;
+  /** True when this transaction has stored split legs (derived from split rows). */
+  isSplit?: boolean;
+  /** The transaction's split legs (empty for unsplit rows). */
+  splits?: TransactionSplit[];
 }
 
 // ---- Import / Export (M5 / M6) ----

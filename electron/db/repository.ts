@@ -12,6 +12,8 @@ import type {
   Transaction,
   UpdateTransactionInput,
   UpdateAccountInput,
+  TransactionSplit,
+  NewSplitInput,
 } from "../../src/shared/types.js";
 import { ClearedState } from "../../src/shared/types.js";
 import { getDb } from "./index.js";
@@ -153,6 +155,10 @@ export function updateAccount(input: UpdateAccountInput): void {
     fields.push("account_code = @account_code");
     params.account_code = input.accountCode;
   }
+  if (input.interestRateBps !== undefined) {
+    fields.push("interest_rate_bps = @interest_rate_bps");
+    params.interest_rate_bps = input.interestRateBps;
+  }
   if (input.openingBalanceCents !== undefined) {
     fields.push("opening_balance_cents = @opening_balance_cents");
     params.opening_balance_cents = input.openingBalanceCents;
@@ -191,9 +197,23 @@ export function allTransactions(): Transaction[] {
   return rows.map(toTransaction);
 }
 
+/** Non-deleted transactions by id (used to load split-transfer counterparties). */
+export function transactionsByIds(ids: string[]): Transaction[] {
+  if (ids.length === 0) return [];
+  const db = getDb();
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = db
+    .prepare(
+      `SELECT * FROM transactions WHERE deleted_at IS NULL AND id IN (${placeholders})`
+    )
+    .all(...ids) as TransactionRow[];
+  return rows.map(toTransaction);
+}
+
 export function createTransaction(input: NewTransactionInput): Transaction {
   const db = getDb();
   const ts = now();
+  const isSplit = !!(input.splits && input.splits.length >= 2);
   const row: TransactionRow = {
     id: randomUUID(),
     date: input.date,
@@ -202,21 +222,35 @@ export function createTransaction(input: NewTransactionInput): Transaction {
     amount_cents: input.amountCents,
     from_account_id: input.fromAccountId ?? null,
     to_account_id: input.toAccountId ?? null,
-    category_id: input.categoryId ?? null,
+    // Split transactions carry no single inline category; the legs hold the detail.
+    category_id: isSplit ? null : input.categoryId ?? null,
     cleared: input.cleared ?? ClearedState.Uncleared,
     import_id: input.importId ?? null,
     created_at: ts,
     updated_at: ts,
     deleted_at: null,
   };
-  db.prepare(
+  const insertTx = db.prepare(
     `INSERT INTO transactions
        (id, date, payee, memo, amount_cents, from_account_id, to_account_id,
         category_id, cleared, import_id, created_at, updated_at, deleted_at)
      VALUES
        (@id, @date, @payee, @memo, @amount_cents, @from_account_id, @to_account_id,
         @category_id, @cleared, @import_id, @created_at, @updated_at, @deleted_at)`
-  ).run(row);
+  );
+  const run = db.transaction(() => {
+    insertTx.run(row);
+    if (isSplit) {
+      writeSplits(
+        db,
+        row.id,
+        input.splits as NewSplitInput[],
+        owningSignedTotal(row.from_account_id, row.to_account_id, row.amount_cents),
+        ts
+      );
+    }
+  });
+  run();
   return toTransaction(row);
 }
 
@@ -242,19 +276,187 @@ export function updateTransaction(input: UpdateTransactionInput): void {
       params[col] = input[key];
     }
   }
+  const ts = params.updated_at as string;
+  const wantsSplits = input.splits !== undefined;
+  const splitLegs = input.splits ?? [];
+  const makeSplit = wantsSplits && splitLegs.length >= 2;
+  // When converting to a split, clear the inline single category.
+  if (makeSplit && input.categoryId === undefined) {
+    fields.push("category_id = @category_id");
+    params.category_id = null;
+  }
   fields.push("updated_at = @updated_at");
 
-  db.prepare(`UPDATE transactions SET ${fields.join(", ")} WHERE id = @id`).run(params);
+  const run = db.transaction(() => {
+    db.prepare(`UPDATE transactions SET ${fields.join(", ")} WHERE id = @id`).run(params);
+    if (wantsSplits) {
+      if (makeSplit) {
+        // Read back the effective from/to/amount to compute the owning signed total.
+        const cur = db
+          .prepare("SELECT from_account_id, to_account_id, amount_cents FROM transactions WHERE id = ?")
+          .get(input.id) as {
+          from_account_id: string | null;
+          to_account_id: string | null;
+          amount_cents: number;
+        };
+        writeSplits(
+          db,
+          input.id,
+          splitLegs,
+          owningSignedTotal(cur.from_account_id, cur.to_account_id, cur.amount_cents),
+          ts
+        );
+      } else {
+        // Fewer than 2 legs => not a split: clear any existing split rows.
+        db.prepare(
+          "UPDATE transaction_splits SET deleted_at = ?, updated_at = ? WHERE transaction_id = ? AND deleted_at IS NULL"
+        ).run(ts, ts, input.id);
+      }
+    }
+  });
+  run();
 }
 
 /** Soft delete so the deletion can sync. */
 export function deleteTransaction(id: string): void {
   const db = getDb();
-  db.prepare("UPDATE transactions SET deleted_at = ?, updated_at = ? WHERE id = ?").run(
-    now(),
-    now(),
-    id
+  const ts = now();
+  const run = db.transaction(() => {
+    db.prepare("UPDATE transactions SET deleted_at = ?, updated_at = ? WHERE id = ?").run(ts, ts, id);
+    db.prepare(
+      "UPDATE transaction_splits SET deleted_at = ?, updated_at = ? WHERE transaction_id = ? AND deleted_at IS NULL"
+    ).run(ts, ts, id);
+  });
+  run();
+}
+
+// ---- Transaction splits ----
+
+interface SplitRow {
+  id: string;
+  transaction_id: string;
+  amount_cents: number;
+  category_id: string | null;
+  transfer_account_id: string | null;
+  memo: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+function toSplit(r: SplitRow): TransactionSplit {
+  return {
+    id: r.id,
+    transactionId: r.transaction_id,
+    amountCents: r.amount_cents,
+    categoryId: r.category_id,
+    transferAccountId: r.transfer_account_id,
+    memo: r.memo,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    deletedAt: r.deleted_at,
+  };
+}
+
+/** The transaction's signed effect on its OWNING account (from/to perspective). */
+function owningSignedTotal(fromAccountId: string | null, toAccountId: string | null, amountCents: number): number {
+  // A split transaction has a single owning side (from XOR to). Prefer 'to' if set.
+  if (toAccountId) return amountCents;
+  if (fromAccountId) return -amountCents;
+  return 0;
+}
+
+/**
+ * Replace a transaction's split legs. Soft-deletes existing splits and inserts the
+ * new ones. Enforces the invariant that split amounts sum to the transaction's
+ * signed effect on its owning account. Called within the create/update flow.
+ */
+function writeSplits(
+  db: ReturnType<typeof getDb>,
+  txId: string,
+  splits: NewSplitInput[],
+  owningSigned: number,
+  ts: string
+): void {
+  const sum = splits.reduce((s, leg) => s + leg.amountCents, 0);
+  if (sum !== owningSigned) {
+    throw new Error(
+      `Split legs (${sum}) must sum to the transaction amount (${owningSigned}).`
+    );
+  }
+  for (const leg of splits) {
+    const hasCat = leg.categoryId != null;
+    const hasXfer = leg.transferAccountId != null;
+    if (hasCat === hasXfer) {
+      throw new Error("Each split must be exactly one of a category or a transfer account.");
+    }
+  }
+  // Soft-delete any current splits, then insert the new set.
+  db.prepare(
+    "UPDATE transaction_splits SET deleted_at = ?, updated_at = ? WHERE transaction_id = ? AND deleted_at IS NULL"
+  ).run(ts, ts, txId);
+  const ins = db.prepare(
+    `INSERT INTO transaction_splits
+       (id, transaction_id, amount_cents, category_id, transfer_account_id, memo,
+        created_at, updated_at, deleted_at)
+     VALUES
+       (@id, @transaction_id, @amount_cents, @category_id, @transfer_account_id, @memo,
+        @created_at, @updated_at, @deleted_at)`
   );
+  for (const leg of splits) {
+    ins.run({
+      id: randomUUID(),
+      transaction_id: txId,
+      amount_cents: leg.amountCents,
+      category_id: leg.categoryId ?? null,
+      transfer_account_id: leg.transferAccountId ?? null,
+      memo: leg.memo ?? null,
+      created_at: ts,
+      updated_at: ts,
+      deleted_at: null,
+    });
+  }
+}
+
+/** Non-deleted splits for a single transaction. */
+export function splitsForTransaction(txId: string): TransactionSplit[] {
+  const db = getDb();
+  const rows = db
+    .prepare("SELECT * FROM transaction_splits WHERE transaction_id = ? AND deleted_at IS NULL")
+    .all(txId) as SplitRow[];
+  return rows.map(toSplit);
+}
+
+/** Map of transactionId -> non-deleted splits, for a set of transaction ids. */
+export function splitsForTransactions(txIds: string[]): Map<string, TransactionSplit[]> {
+  const out = new Map<string, TransactionSplit[]>();
+  if (txIds.length === 0) return out;
+  const db = getDb();
+  const placeholders = txIds.map(() => "?").join(",");
+  const rows = db
+    .prepare(
+      `SELECT * FROM transaction_splits
+        WHERE deleted_at IS NULL AND transaction_id IN (${placeholders})`
+    )
+    .all(...txIds) as SplitRow[];
+  for (const r of rows) {
+    const list = out.get(r.transaction_id) ?? [];
+    list.push(toSplit(r));
+    out.set(r.transaction_id, list);
+  }
+  return out;
+}
+
+/** Transaction ids that have a non-deleted transfer-leg split pointing at an account. */
+export function transactionIdsWithTransferSplitTo(accountId: string): string[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT transaction_id AS id FROM transaction_splits
+        WHERE deleted_at IS NULL AND transfer_account_id = ?`
+    )
+    .all(accountId) as Array<{ id: string }>;
+  return rows.map((r) => r.id);
 }
 
 /** importIds already present for an account (for import dedupe). */
