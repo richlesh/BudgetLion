@@ -73,14 +73,12 @@ app.whenReady().then(() => {
   registerIpcHandlers();
   showSplash();
   createWindow();
-
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
 });
 
+// Closing the main window quits the app on all platforms (macOS included),
+// rather than the macOS convention of staying resident with no windows.
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+  app.quit();
 });
 
 app.on("will-quit", () => {

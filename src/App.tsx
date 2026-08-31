@@ -9,12 +9,14 @@ import type {
   NewAccountInput,
   NewTransactionInput,
   UpdateAccountInput,
+  NewSplitInput,
 } from "./shared/types";
 import { displaySign, formatCents } from "./core/money";
 import { ledgerToHtml } from "./core/export/html";
 import { LedgerGrid } from "./components/LedgerGrid";
 import type { CategoryChoice } from "./components/CategoryAccountEditor";
 import { NewAccountDialog } from "./components/NewAccountDialog";
+import { SplitEditorDialog } from "./components/SplitEditorDialog";
 import { NewTransactionDialog } from "./components/NewTransactionDialog";
 import { CategoriesDialog } from "./components/CategoriesDialog";
 import { ConfirmDialog } from "./components/ConfirmDialog";
@@ -47,6 +49,12 @@ export function App() {
   );
   const [viewAccount, setViewAccount] = useState<Account | null>(null);
   const [editAccount, setEditAccount] = useState<Account | null>(null);
+  // Split editor: transaction id + its signed total on the selected account + seed legs.
+  const [splitEditor, setSplitEditor] = useState<{
+    txId: string;
+    signedTotalCents: number;
+    initialSplits: NewSplitInput[];
+  } | null>(null);
 
   const selected = useMemo(
     () => accounts.find((a) => a.id === selectedId) ?? null,
@@ -270,6 +278,37 @@ export function App() {
       const row = ledger.find((r) => r.transaction?.id === id);
       const t = row?.transaction;
       if (!t) return;
+      // "Split…" opens the split editor, seeded from the transaction's current state.
+      if (choice.kind === "split") {
+        const signedTotalCents = row!.signedAmountCents; // stored sign (owning account)
+        let initialSplits: NewSplitInput[];
+        if (row!.isSplit && row!.splits && row!.splits.length > 0) {
+          initialSplits = row!.splits.map((s) => ({
+            amountCents: s.amountCents,
+            categoryId: s.categoryId,
+            transferAccountId: s.transferAccountId,
+            memo: s.memo,
+          }));
+        } else {
+          // Seed from the single category/transfer as one leg (editor adds a blank second leg).
+          const otherId =
+            t.fromAccountId && t.toAccountId
+              ? t.fromAccountId === selected.id
+                ? t.toAccountId
+                : t.fromAccountId
+              : null;
+          initialSplits = [
+            {
+              amountCents: signedTotalCents,
+              categoryId: otherId ? null : t.categoryId,
+              transferAccountId: otherId,
+              memo: null,
+            },
+          ];
+        }
+        setSplitEditor({ txId: id, signedTotalCents, initialSplits });
+        return;
+      }
       // Which side is the viewed account on? Keep that; change the other side.
       const accountIsFrom = t.fromAccountId === selected.id;
       if (choice.kind === "transfer") {
@@ -292,6 +331,18 @@ export function App() {
       await refreshAccounts();
     },
     [selected, ledger, refreshLedger, refreshAccounts]
+  );
+
+  // Persist split legs from the split editor.
+  const saveSplit = useCallback(
+    async (splits: NewSplitInput[]) => {
+      if (!selected || !splitEditor) return;
+      await window.ledger.updateTransaction({ id: splitEditor.txId, splits });
+      setSplitEditor(null);
+      await refreshLedger(selected.id);
+      await refreshAccounts();
+    },
+    [selected, splitEditor, refreshLedger, refreshAccounts]
   );
 
   // Stage a delete: the grid's trash button asks for confirmation first.
@@ -483,6 +534,17 @@ export function App() {
           account={editAccount}
           onCancel={() => setEditAccount(null)}
           onSave={saveAccount}
+        />
+      )}
+      {splitEditor && selected && (
+        <SplitEditorDialog
+          account={selected}
+          accounts={accounts}
+          categories={categories}
+          signedTotalCents={splitEditor.signedTotalCents}
+          initialSplits={splitEditor.initialSplits}
+          onCancel={() => setSplitEditor(null)}
+          onSave={saveSplit}
         />
       )}
     </div>

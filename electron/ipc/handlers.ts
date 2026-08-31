@@ -34,9 +34,10 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC.getAllBalances, (): AccountBalance[] => {
     const accounts = repo.listAccounts();
     const txns = repo.allTransactions();
+    const splitsByTx = repo.splitsForTransactions(txns.map((t) => t.id));
     return accounts.map((a) => ({
       accountId: a.id,
-      balanceCents: currentBalance(a, txns),
+      balanceCents: currentBalance(a, txns, splitsByTx),
     }));
   });
 
@@ -49,8 +50,16 @@ export function registerIpcHandlers(): void {
     const accounts = repo.listAccounts();
     const account = accounts.find((a) => a.id === accountId);
     if (!account) throw new Error(`Account not found: ${accountId}`);
-    const txns = repo.transactionsForAccount(accountId);
-    return buildLedger(account, txns);
+    // Transactions where this account is the owning side, PLUS transactions whose
+    // transfer-leg splits reference this account (e.g. the loan side of a split
+    // loan payment owned by checking).
+    const owned = repo.transactionsForAccount(accountId);
+    const counterpartyIds = repo.transactionIdsWithTransferSplitTo(accountId);
+    const ownedIds = new Set(owned.map((t) => t.id));
+    const extra = repo.transactionsByIds(counterpartyIds.filter((id) => !ownedIds.has(id)));
+    const txns = [...owned, ...extra];
+    const splitsByTx = repo.splitsForTransactions(txns.map((t) => t.id));
+    return buildLedger(account, txns, splitsByTx);
   });
 
   ipcMain.handle(IPC.createTransaction, (_e, input: NewTransactionInput) => {

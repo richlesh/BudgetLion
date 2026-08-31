@@ -53,6 +53,8 @@ interface GridRow {
   runningBalanceCents: number;
   isTransfer: boolean;
   isOpening: boolean;
+  isSplit: boolean;
+  splitTooltip: string;
 }
 
 const NO_CATEGORY = "—";
@@ -154,10 +156,14 @@ export function LedgerGrid({
     return m;
   }, [categories]);
 
-  // Category-column display value: for a transfer (double-sided) show the OTHER
-  // account; otherwise show the income/expense category.
+  // Category-column display value:
+  //   split       -> "Split"
+  //   transfer    -> the OTHER account
+  //   otherwise   -> the income/expense category
   const categoryFor = useCallback(
-    (t: Transaction): string => {
+    (r: LedgerRow): string => {
+      if (r.isSplit) return "Split";
+      const t = r.transaction!;
       const isTransfer = !!(t.fromAccountId && t.toAccountId);
       if (isTransfer) {
         const otherId = t.fromAccountId === account.id ? t.toAccountId : t.fromAccountId;
@@ -166,6 +172,22 @@ export function LedgerGrid({
       return t.categoryId ? nameById.get(t.categoryId) ?? NO_CATEGORY : NO_CATEGORY;
     },
     [account.id, accountNameById, nameById]
+  );
+
+  // Tooltip text listing a split's legs, e.g. "Interest $80.00, → Loan $420.00".
+  const splitTooltipFor = useCallback(
+    (r: LedgerRow): string => {
+      if (!r.isSplit || !r.splits) return "";
+      return r.splits
+        .map((s) => {
+          const label = s.categoryId
+            ? nameById.get(s.categoryId) ?? "Category"
+            : `→ ${(s.transferAccountId && accountNameById.get(s.transferAccountId)) || "account"}`;
+          return `${label} ${formatCents(Math.abs(s.amountCents), account.currency)}`;
+        })
+        .join(", ");
+    },
+    [nameById, accountNameById, account.currency]
   );
 
   const rowData: GridRow[] = useMemo(
@@ -178,10 +200,12 @@ export function LedgerGrid({
             payee: "Opening balance",
             memo: "",
             categoryName: "",
-            signedAmountCents: r.signedAmountCents * sign,
-            runningBalanceCents: r.runningBalanceCents * sign,
+          signedAmountCents: r.signedAmountCents * sign,
+          runningBalanceCents: r.runningBalanceCents * sign,
             isTransfer: false,
             isOpening: true,
+            isSplit: false,
+            splitTooltip: "",
           };
         }
         const t = r.transaction!;
@@ -190,14 +214,16 @@ export function LedgerGrid({
           date: t.date,
           payee: payeeFor(t),
           memo: t.memo ?? "",
-          categoryName: categoryFor(t),
+          categoryName: categoryFor(r),
           signedAmountCents: r.signedAmountCents * sign,
           runningBalanceCents: r.runningBalanceCents * sign,
           isTransfer: !!(t.fromAccountId && t.toAccountId),
           isOpening: false,
+          isSplit: !!r.isSplit,
+          splitTooltip: splitTooltipFor(r),
         };
       }),
-    [rows, categoryFor, sign, payeeFor, account.openingBalanceDate, account.createdAt]
+    [rows, categoryFor, splitTooltipFor, sign, payeeFor, account.openingBalanceDate, account.createdAt]
   );
 
   const money = useCallback(
@@ -225,6 +251,8 @@ export function LedgerGrid({
         headerName: "Category",
         editable: isTxRow,
         width: 150,
+        // Hovering a split row's Category cell lists the legs.
+        tooltipValueGetter: (p) => (p.data?.isSplit ? p.data.splitTooltip : undefined),
         // Custom editor: categories on top, a divider, then accounts (transfers).
         cellEditor: CategoryAccountEditor,
         // Function form so we can capture the row id and commit the choice directly
@@ -366,6 +394,7 @@ export function LedgerGrid({
         onGridReady={onGridReady}
         onColumnResized={onColumnResized}
         getRowId={(p) => p.data.id}
+        enableBrowserTooltips
         stopEditingWhenCellsLoseFocus
       />
     </div>

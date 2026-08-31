@@ -15,7 +15,8 @@ import type { Account, Category } from "../shared/types";
 export type CategoryChoice =
   | { kind: "none" }
   | { kind: "category"; categoryId: string; label: string }
-  | { kind: "transfer"; accountId: string; label: string };
+  | { kind: "transfer"; accountId: string; label: string }
+  | { kind: "split" };
 
 interface EditorParams {
   categories: Category[];
@@ -42,6 +43,7 @@ export const CategoryAccountEditor = forwardRef(function CategoryAccountEditor(
   const [value, setValue] = useState<string>("none");
 
   const decode = (v: string): CategoryChoice => {
+    if (v === "split") return { kind: "split" };
     if (v.startsWith("cat:")) {
       const id = v.slice(4);
       const label = categories.find((c) => c.id === id)?.name ?? "";
@@ -77,6 +79,7 @@ export const CategoryAccountEditor = forwardRef(function CategoryAccountEditor(
       autoFocus
       onChange={(e) => onChange(e.target.value)}
     >
+      <option value="split">Split…</option>
       <option value="none">— Uncategorized —</option>
       <optgroup label="Categories">
         {categories.map((c) => (
