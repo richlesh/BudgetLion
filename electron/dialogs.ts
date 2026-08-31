@@ -136,8 +136,8 @@ let settingsWin: BrowserWindow | null = null;
 function openSettings(): void {
   if (settingsWin && !settingsWin.isDestroyed()) return settingsWin.focus();
   settingsWin = new BrowserWindow({
-    width: 420,
-    height: 640,
+    width: 720,
+    height: 480,
     resizable: true,
     parent: mainWinRef ?? undefined,
     modal: true,

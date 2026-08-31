@@ -22,6 +22,8 @@
       margin-top: 8px; padding-top: 10px; border-top: 1px solid #ddd;
     }
     body.dark .section-title { color: #777; border-top-color: #3a3a3c; }
+    .columns { display: flex; gap: 24px; align-items: flex-start; }
+    .col { flex: 1; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
     .field { display: flex; flex-direction: column; gap: 4px; }
     .row-fields { display: flex; gap: 12px; }
     label { font-size: 14px; color: #666; }
@@ -51,79 +53,86 @@
 <body>
   <h1>Settings</h1>
 
-  <div class="field">
-    <label for="theme">Theme</label>
-    <select id="theme">
-      <option value="light">Light</option>
-      <option value="dark">Dark</option>
-    </select>
-  </div>
-  <div class="field">
-    <label for="currency">Default currency (ISO 4217)</label>
-    <input id="currency" type="text" maxlength="3" placeholder="USD" spellcheck="false" style="text-transform:uppercase;">
-  </div>
+  <div class="columns">
+    <!-- Left column: general + fonts -->
+    <div class="col">
+      <div class="field">
+        <label for="theme">Theme</label>
+        <select id="theme">
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="currency">Default currency (ISO 4217)</label>
+        <input id="currency" type="text" maxlength="3" placeholder="USD" spellcheck="false" style="text-transform:uppercase;">
+      </div>
 
-  <!-- AI / LLM -->
-  <div class="section-title">AI Assistant</div>
-  <div class="field">
-    <label>Vendor</label>
-    <select id="vendor"></select>
-  </div>
-  <div class="field">
-    <label>Model</label>
-    <select id="model"></select>
-  </div>
+      <!-- Fonts -->
+      <div class="section-title">Fonts</div>
+      <div class="row-fields">
+        <div class="field" style="flex:2"><label>Ledger Font</label><select id="ledger-font"></select></div>
+        <div class="field" style="flex:1"><label>Size</label><select id="ledger-font-size"></select></div>
+      </div>
+      <div class="row-fields">
+        <div class="field" style="flex:2"><label>Print / PDF Font</label><select id="print-font"></select></div>
+        <div class="field" style="flex:1"><label>Size</label><select id="print-font-size"></select></div>
+      </div>
+    </div>
 
-  <!-- Standard single API-key vendors -->
-  <div class="field" id="api-key-section">
-    <label>API Key</label>
-    <input id="apiKey" type="password" placeholder="Enter API key…">
-    <a id="api-key-link" class="api-key-link" href="#" target="_blank">Get API key…</a>
-  </div>
+    <!-- Right column: AI Assistant -->
+    <div class="col">
+      <div class="section-title" style="margin-top:0;padding-top:0;border-top:none;">AI Assistant</div>
+      <div class="field">
+        <label>Vendor</label>
+        <select id="vendor"></select>
+      </div>
+      <div class="field">
+        <label>Model</label>
+        <select id="model"></select>
+      </div>
 
-  <!-- Microsoft / Azure -->
-  <div id="microsoft-section" style="display:none;">
-    <div class="field"><label>API Key</label><input id="microsoft-api-key" type="password" placeholder="Enter Azure OpenAI API key…"></div>
-    <div class="field" style="margin-top:8px;"><label>Endpoint URL</label><input id="microsoft-endpoint" type="text" placeholder="https://your-resource.openai.azure.com"></div>
-    <a id="microsoft-key-link" class="api-key-link" href="#" target="_blank">Get Azure OpenAI credentials…</a>
-  </div>
+      <!-- Standard single API-key vendors -->
+      <div class="field" id="api-key-section">
+        <label>API Key</label>
+        <input id="apiKey" type="password" placeholder="Enter API key…">
+        <a id="api-key-link" class="api-key-link" href="#" target="_blank">Get API key…</a>
+      </div>
 
-  <!-- Amazon -->
-  <div id="amazon-section" style="display:none;">
-    <div class="field"><label>AWS Access Key ID</label><input id="amazon-access-key" type="password" placeholder="Enter AWS Access Key ID…"></div>
-    <div class="field" style="margin-top:8px;"><label>AWS Secret Access Key</label><input id="amazon-secret-key" type="password" placeholder="Enter AWS Secret Access Key…"></div>
-    <div class="field" style="margin-top:8px;"><label>AWS Region</label><input id="amazon-region" type="text" placeholder="us-east-1"></div>
-    <a id="amazon-key-link" class="api-key-link" href="#" target="_blank">Get AWS credentials…</a>
-  </div>
+      <!-- Microsoft / Azure -->
+      <div id="microsoft-section" style="display:none;">
+        <div class="field"><label>API Key</label><input id="microsoft-api-key" type="password" placeholder="Enter Azure OpenAI API key…"></div>
+        <div class="field" style="margin-top:8px;"><label>Endpoint URL</label><input id="microsoft-endpoint" type="text" placeholder="https://your-resource.openai.azure.com"></div>
+        <a id="microsoft-key-link" class="api-key-link" href="#" target="_blank">Get Azure OpenAI credentials…</a>
+      </div>
 
-  <!-- IBM -->
-  <div id="ibm-section" style="display:none;">
-    <div class="field"><label>IBM Cloud API Key</label><input id="ibm-api-key" type="password" placeholder="Enter IBM Cloud API key…"></div>
-    <div class="field" style="margin-top:8px;"><label>Endpoint URL</label><input id="ibm-endpoint" type="text" placeholder="https://us-south.ml.cloud.ibm.com"></div>
-    <div class="field" style="margin-top:8px;"><label>Project ID</label><input id="ibm-project-id" type="text" placeholder="Enter project ID…"></div>
-    <a id="ibm-key-link" class="api-key-link" href="#" target="_blank">Get IBM Cloud API key…</a>
-  </div>
+      <!-- Amazon -->
+      <div id="amazon-section" style="display:none;">
+        <div class="field"><label>AWS Access Key ID</label><input id="amazon-access-key" type="password" placeholder="Enter AWS Access Key ID…"></div>
+        <div class="field" style="margin-top:8px;"><label>AWS Secret Access Key</label><input id="amazon-secret-key" type="password" placeholder="Enter AWS Secret Access Key…"></div>
+        <div class="field" style="margin-top:8px;"><label>AWS Region</label><input id="amazon-region" type="text" placeholder="us-east-1"></div>
+        <a id="amazon-key-link" class="api-key-link" href="#" target="_blank">Get AWS credentials…</a>
+      </div>
 
-  <!-- Generic (OpenAI-compatible) -->
-  <div id="generic-section" style="display:none;">
-    <div class="field"><label>API Key</label><input id="generic-api-key" type="password" placeholder="Enter API key…"></div>
-    <div class="field" style="margin-top:8px;"><label>Endpoint URL</label><input id="generic-endpoint" type="text" placeholder="https://api.example.com/v1"></div>
-  </div>
+      <!-- IBM -->
+      <div id="ibm-section" style="display:none;">
+        <div class="field"><label>IBM Cloud API Key</label><input id="ibm-api-key" type="password" placeholder="Enter IBM Cloud API key…"></div>
+        <div class="field" style="margin-top:8px;"><label>Endpoint URL</label><input id="ibm-endpoint" type="text" placeholder="https://us-south.ml.cloud.ibm.com"></div>
+        <div class="field" style="margin-top:8px;"><label>Project ID</label><input id="ibm-project-id" type="text" placeholder="Enter project ID…"></div>
+        <a id="ibm-key-link" class="api-key-link" href="#" target="_blank">Get IBM Cloud API key…</a>
+      </div>
 
-  <!-- Generic (YAML) -->
-  <div id="generic-yaml-section" style="display:none;">
-    <div class="field"><label>API Key / Token</label><input id="generic-yaml-api-key" type="password" placeholder="Enter API key or token…"></div>
-  </div>
+      <!-- Generic (OpenAI-compatible) -->
+      <div id="generic-section" style="display:none;">
+        <div class="field"><label>API Key</label><input id="generic-api-key" type="password" placeholder="Enter API key…"></div>
+        <div class="field" style="margin-top:8px;"><label>Endpoint URL</label><input id="generic-endpoint" type="text" placeholder="https://api.example.com/v1"></div>
+      </div>
 
-  <!-- Fonts -->
-  <div class="section-title">Fonts</div>
-  <div class="row-fields">
-    <div class="field" style="flex:2"><label>Ledger Font</label><select id="ledger-font"></select></div>
-    <div class="field" style="flex:1"><label>Size</label><select id="ledger-font-size"></select></div>
-  </div>
-  <div class="row-fields">
-    <div class="field" style="flex:2"><label>Print / PDF Font</label><select id="print-font"></select></div>
-    <div class="field" style="flex:1"><label>Size</label><select id="print-font-size"></select></div>
+      <!-- Generic (YAML) -->
+      <div id="generic-yaml-section" style="display:none;">
+        <div class="field"><label>API Key / Token</label><input id="generic-yaml-api-key" type="password" placeholder="Enter API key or token…"></div>
+      </div>
+    </div>
   </div>
 
   <div class="row">
