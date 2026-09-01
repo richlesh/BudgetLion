@@ -162,7 +162,7 @@ export function costBasisFromLots(lots: InvestmentTransaction[]): number {
   let shares = 0; // micro-units
   let basis = 0; // cents
   for (const l of ordered) {
-    if (l.action === "buy" || l.action === "reinvest" || l.action === "grant") {
+    if (l.action === "buy" || l.action === "reinvest" || l.action === "grant" || l.action === "add") {
       // Cost of acquired shares = shares*price + fees. When fees were expensed to
       // a category (feeTxnId set, Option A), they are NOT capitalized into basis.
       const capitalizedFees = l.feeTxnId ? 0 : l.feesCents;
@@ -225,6 +225,7 @@ export function effectiveQuantityMicro(asset: Asset, lots: InvestmentTransaction
  *   sell     -> +(gross - fees)
  *   div      -> +(cashDividend - fees)
  *   reinvest ->  0 (dividend immediately buys shares)
+ *   add      ->  0 (opening / gift / transfer-in: shares in, no cash or income)
  */
 export function tradeCashCents(
   action: InvestmentTransaction["action"],
@@ -241,6 +242,7 @@ export function tradeCashCents(
     case "div":
       return cashDividendCents - feesCents;
     case "reinvest":
+    case "add":
       return 0;
   }
 }

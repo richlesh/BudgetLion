@@ -1400,7 +1400,9 @@ export function recordTrade(input: NewTradeInput): InvestmentTransaction {
             ? "Dividend"
             : input.action === "grant"
               ? "Grant"
-              : "Reinvest";
+              : input.action === "add"
+                ? "Add shares"
+                : "Reinvest";
 
     let cashTxnId: string | null = null;
     let incomeTxnId: string | null = null;

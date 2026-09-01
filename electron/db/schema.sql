@@ -177,8 +177,8 @@ CREATE TABLE IF NOT EXISTS investment_transactions (
   asset_id       TEXT NOT NULL REFERENCES assets(id),
   account_id     TEXT NOT NULL REFERENCES accounts(id),
   date           TEXT NOT NULL,                 -- ISO 8601 date
-  action         TEXT NOT NULL                  -- 'buy'|'sell'|'div'|'reinvest'|'grant'
-                   CHECK (action IN ('buy','sell','div','reinvest','grant')),
+  action         TEXT NOT NULL                  -- 'buy'|'sell'|'div'|'reinvest'|'grant'|'add'
+                   CHECK (action IN ('buy','sell','div','reinvest','grant','add')),
   quantity_micro INTEGER NOT NULL DEFAULT 0,    -- shares x1e6, signed (buy/reinvest +, sell -)
   price_micros   INTEGER NOT NULL DEFAULT 0,    -- per-share micro-cents (0 for cash div)
   fees_cents     INTEGER NOT NULL DEFAULT 0,    -- commission/fees in cents (>=0)

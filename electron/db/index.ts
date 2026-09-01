@@ -111,7 +111,7 @@ function runMigrations(instance: Database.Database): void {
       )
       .get() as { sql: string } | undefined
   )?.sql;
-  if (invSql && !invSql.includes("'grant'")) {
+  if (invSql && (!invSql.includes("'grant'") || !invSql.includes("'add'"))) {
     instance.pragma("foreign_keys = OFF");
     const rebuild = instance.transaction(() => {
       instance.exec(`
@@ -120,7 +120,7 @@ function runMigrations(instance: Database.Database): void {
           asset_id       TEXT NOT NULL REFERENCES assets(id),
           account_id     TEXT NOT NULL REFERENCES accounts(id),
           date           TEXT NOT NULL,
-          action         TEXT NOT NULL CHECK (action IN ('buy','sell','div','reinvest','grant')),
+          action         TEXT NOT NULL CHECK (action IN ('buy','sell','div','reinvest','grant','add')),
           quantity_micro INTEGER NOT NULL DEFAULT 0,
           price_micros   INTEGER NOT NULL DEFAULT 0,
           fees_cents     INTEGER NOT NULL DEFAULT 0,

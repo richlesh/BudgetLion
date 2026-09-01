@@ -213,7 +213,7 @@ export interface AssetHolding {
 }
 
 /** Kind of investment transaction (Option A lots). */
-export type InvestmentAction = "buy" | "sell" | "div" | "reinvest" | "grant";
+export type InvestmentAction = "buy" | "sell" | "div" | "reinvest" | "grant" | "add";
 
 /**
  * An investment transaction (lot). Changes an asset's share count and/or moves

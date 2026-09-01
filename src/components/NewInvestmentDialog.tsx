@@ -27,6 +27,7 @@ const ACTIONS: { value: InvestmentAction; label: string }[] = [
   { value: "div", label: "Dividend (cash)" },
   { value: "reinvest", label: "Reinvest dividend" },
   { value: "grant", label: "Grant (salary / RSU)" },
+  { value: "add", label: "Add shares (opening / gift / transfer-in)" },
 ];
 
 /**
@@ -53,6 +54,7 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
   const [cashDiv, setCashDiv] = useState("0.00");
   const [categoryId, setCategoryId] = useState<string>("");
   const [feeCategoryId, setFeeCategoryId] = useState<string>("");
+  const [memo, setMemo] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -70,7 +72,8 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
 
   const creatingNew = assetId === "";
   const isCashDiv = action === "div";
-  const needsShares = action !== "div"; // buy/sell/reinvest/grant move shares
+  const needsShares = action !== "div"; // buy/sell/reinvest/grant/add move shares
+  const isAdd = action === "add"; // opening / gift / transfer-in: no cash or income
   // Grant, cash dividend, and reinvested dividend are income and can be categorized.
   const isIncome = action === "grant" || action === "div" || action === "reinvest";
 
@@ -129,7 +132,9 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
       ? `Cash in: ${formatCents(cashCents, account.currency)}`
       : cashCents < 0
         ? `Cash out: ${formatCents(-cashCents, account.currency)}`
-        : "No net cash change";
+        : isAdd
+          ? "No cash change (shares added directly)"
+          : "No net cash change";
 
   function submit() {
     setError(null);
@@ -145,7 +150,9 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
         setError("Enter a positive number of shares.");
         return;
       }
-      if (!(effectivePriceCents >= 0) || effectiveGrossCents <= 0) {
+      // For 'add' (opening/gift/transfer-in) the cost basis is OPTIONAL; other
+      // actions require a valid price/amount.
+      if (!isAdd && (!(effectivePriceCents >= 0) || effectiveGrossCents <= 0)) {
         setError("Enter a valid price per share or amount.");
         return;
       }
@@ -162,7 +169,7 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
       date,
       action,
       feesCents,
-      memo: null,
+      memo: memo.trim() || null,
       categoryId: isIncome ? categoryId || null : null,
       feeCategoryId: feeCategoryId || null,
       ...(creatingNew
@@ -243,7 +250,13 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
               <input value={shares} onChange={(e) => setShares(e.target.value)} />
             </div>
             <div className="field">
-              <label>{action === "grant" ? "Grant price per share" : "Price per share"}</label>
+              <label>
+                {action === "grant"
+                  ? "Grant price per share"
+                  : isAdd
+                    ? "Cost basis per share (optional)"
+                    : "Price per share"}
+              </label>
               <input
                 value={priceDisplay}
                 onChange={(e) => {
@@ -253,7 +266,7 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
               />
             </div>
             <div className="field">
-              <label>Amount (shares × price)</label>
+              <label>{isAdd ? "Total cost basis (optional)" : "Amount (shares × price)"}</label>
               <input
                 value={amountDisplay}
                 onChange={(e) => {
@@ -302,6 +315,17 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
             ))}
           </select>
         </div>
+
+        {isAdd && (
+          <div className="field">
+            <label>Reason / source (memo)</label>
+            <input
+              value={memo}
+              placeholder="e.g. Opening holdings, Gift from…, Transfer from…"
+              onChange={(e) => setMemo(e.target.value)}
+            />
+          </div>
+        )}
 
         <div className="field">
           <label>Cash amount</label>
