@@ -4,6 +4,7 @@
 import Database from "better-sqlite3";
 import { app } from "electron";
 import { readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
 let db: Database.Database | null = null;
@@ -56,6 +57,7 @@ export function getDb(): Database.Database {
   instance.exec(schema);
 
   runMigrations(instance);
+  seedDefaultCategories(instance);
 
   db = instance;
   return db;
@@ -258,6 +260,97 @@ function runMigrations(instance: Database.Database): void {
       instance.pragma("foreign_keys = ON");
     }
   }
+}
+
+/**
+ * Seed a helpful default category tree on a BRAND-NEW database (only when the
+ * categories table is completely empty). Never runs again after that, so it can't
+ * fight user edits/deletions or re-add removed categories. Parents are created
+ * first, then their children reference them.
+ */
+function seedDefaultCategories(instance: Database.Database): void {
+  const count = (
+    instance.prepare("SELECT COUNT(*) AS n FROM categories").get() as { n: number }
+  ).n;
+  if (count > 0) return; // existing DB — leave categories alone
+
+  const ts = new Date().toISOString();
+  const insert = instance.prepare(
+    `INSERT INTO categories (id, name, parent_id, applicability, created_at, updated_at, deleted_at)
+     VALUES (@id, @name, @parent_id, @applicability, @created_at, @updated_at, NULL)`
+  );
+
+  type Applic = "income" | "expense" | "both";
+  const addTop = (name: string, applicability: Applic): string => {
+    const id = randomUUID();
+    insert.run({ id, name, parent_id: null, applicability, created_at: ts, updated_at: ts });
+    return id;
+  };
+  const addChild = (parentId: string, name: string, applicability: Applic): void => {
+    insert.run({
+      id: randomUUID(),
+      name,
+      parent_id: parentId,
+      applicability,
+      created_at: ts,
+      updated_at: ts,
+    });
+  };
+
+  // Default tree (parent applicability + child applicabilities as specified).
+  const defaults: Array<{
+    name: string;
+    applicability: Applic;
+    children?: Array<{ name: string; applicability: Applic }>;
+  }> = [
+    {
+      name: "Fee",
+      applicability: "expense",
+      children: [
+        { name: "Brokerage", applicability: "expense" },
+        { name: "Bank", applicability: "expense" },
+        { name: "Late", applicability: "expense" },
+      ],
+    },
+    {
+      name: "Insurance",
+      applicability: "expense",
+      children: [
+        { name: "Auto", applicability: "expense" },
+        { name: "Life", applicability: "expense" },
+        { name: "Home", applicability: "expense" },
+      ],
+    },
+    { name: "Mortgage", applicability: "expense" },
+    { name: "Salary", applicability: "income" },
+    {
+      name: "Taxes",
+      applicability: "expense",
+      children: [
+        { name: "Federal", applicability: "expense" },
+        { name: "State", applicability: "expense" },
+      ],
+    },
+    {
+      name: "Utilities",
+      applicability: "expense",
+      children: [
+        { name: "Electric", applicability: "expense" },
+        { name: "Gas", applicability: "expense" },
+        { name: "Water", applicability: "expense" },
+        { name: "Phone", applicability: "expense" },
+        { name: "Digital", applicability: "expense" },
+      ],
+    },
+  ];
+
+  const seed = instance.transaction(() => {
+    for (const top of defaults) {
+      const parentId = addTop(top.name, top.applicability);
+      for (const child of top.children ?? []) addChild(parentId, child.name, child.applicability);
+    }
+  });
+  seed();
 }
 
 export function closeDb(): void {
