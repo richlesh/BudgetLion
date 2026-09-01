@@ -663,3 +663,75 @@ button.danger {
   font-size: 11px;
   color: var(--muted);
 }
+
+/* ---- Holdings / positions panel (investment accounts) ---- */
+.holdings-panel {
+  margin: 12px 0;
+  padding: 12px 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.holdings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.holdings-head h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.holdings-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.holdings-table th,
+.holdings-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.holdings-table th {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.holdings-table td.num,
+.holdings-table th.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.holdings-table tfoot td {
+  font-weight: 700;
+  border-top: 2px solid var(--border);
+  border-bottom: none;
+}
+
+.holdings-status {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Gain/loss (and ledger) amount colors. */
+.amount-pos {
+  color: #15803d;
+}
+.amount-neg {
+  color: #dc2626;
+}
+body.dark .amount-pos {
+  color: #4ade80;
+}
+body.dark .amount-neg {
+  color: #f87171;
+}

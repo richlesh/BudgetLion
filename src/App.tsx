@@ -24,6 +24,7 @@ import { NewAccountDialog } from "./components/NewAccountDialog";
 import { SplitEditorDialog } from "./components/SplitEditorDialog";
 import { NewTransactionDialog } from "./components/NewTransactionDialog";
 import { NewInvestmentDialog } from "./components/NewInvestmentDialog";
+import { HoldingsPanel } from "./components/HoldingsPanel";
 import { CategoriesDialog } from "./components/CategoriesDialog";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { DedupeDialog } from "./components/DedupeDialog";
@@ -50,6 +51,7 @@ export function App() {
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
   const [showAccountDialog, setShowAccountDialog] = useState(false);
   const [showTxDialog, setShowTxDialog] = useState(false);
+  const [holdingsReloadKey, setHoldingsReloadKey] = useState(0);
   const [showCategoriesDialog, setShowCategoriesDialog] = useState(false);
   // Usage counts per category id (only non-zero). Categories with no usage can be
   // deleted from the Categories editor. Loaded when the editor opens.
@@ -523,6 +525,7 @@ export function App() {
       setShowTxDialog(false);
       if (selectedId) await refreshLedger(selectedId);
       await refreshAccounts(); // cash balance + holdings change
+      setHoldingsReloadKey((k) => k + 1); // refresh the holdings panel
     },
     [selectedId, refreshLedger, refreshAccounts]
   );
@@ -954,6 +957,9 @@ export function App() {
               </button>
               <button onClick={() => setShowTxDialog(true)}>+ New Transaction</button>
             </div>
+            {selected.type === "investment" && (
+              <HoldingsPanel account={selected} reloadKey={holdingsReloadKey} />
+            )}
             {showCharts && (
               <ChartsPanel
                 account={selected}

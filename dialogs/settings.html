@@ -78,6 +78,17 @@
         <div class="field" style="flex:2"><label>Print / PDF Font</label><select id="print-font"></select></div>
         <div class="field" style="flex:1"><label>Size</label><select id="print-font-size"></select></div>
       </div>
+
+      <!-- Investments -->
+      <div class="section-title">Investments</div>
+      <div class="field" style="flex-direction:row; align-items:center; gap:8px;">
+        <input id="price-fetch-enabled" type="checkbox" style="width:auto;">
+        <label for="price-fetch-enabled" style="margin:0;">Fetch security prices online (Stooq)</label>
+      </div>
+      <div style="font-size:12px; color:#999;">
+        Off by default. When enabled, ticker symbols for your holdings are sent to
+        the price provider to look up quotes. Mutual funds may need manual prices.
+      </div>
     </div>
 
     <!-- Right column: AI Assistant -->
@@ -303,6 +314,7 @@
 
       themeSel.value = current.theme || "light";
       currencyInput.value = current.defaultCurrency || "USD";
+      document.getElementById("price-fetch-enabled").checked = !!current.priceFetchEnabled;
       if (themeSel.value === "dark") document.body.classList.add("dark");
 
       // Vendor dropdown (sorted by label).
@@ -386,6 +398,8 @@
         ledgerFontSize: Number(ledgerFontSizeSel.value),
         printFont: printFontSel.value,
         printFontSize: Number(printFontSizeSel.value),
+        priceFetchEnabled: document.getElementById("price-fetch-enabled").checked,
+        priceSource: "stooq",
       });
     });
 
