@@ -97,8 +97,13 @@ function runMigrations(instance: Database.Database): void {
       .get() as { sql: string } | undefined
   )?.sql;
   if (accountsSql && !accountsSql.includes("'investment'")) {
+    // SQLite requires the FK-rebuild dance in a specific order: PRAGMA foreign_keys
+    // is a NO-OP inside a transaction, so it must be toggled OUTSIDE. See
+    // https://sqlite.org/lang_altertable.html ("making other kinds of schema changes").
+    // The new table keeps the name `accounts`, so child FKs remain valid after the
+    // drop+rename; foreign_key_check verifies integrity before we re-enable FKs.
+    instance.pragma("foreign_keys = OFF");
     const rebuild = instance.transaction(() => {
-      instance.exec("PRAGMA foreign_keys = OFF");
       instance.exec(`
         CREATE TABLE accounts_new (
           id                    TEXT PRIMARY KEY,
@@ -129,9 +134,19 @@ function runMigrations(instance: Database.Database): void {
       `);
       instance.exec("DROP TABLE accounts");
       instance.exec("ALTER TABLE accounts_new RENAME TO accounts");
-      instance.exec("PRAGMA foreign_keys = ON");
     });
-    rebuild();
+    try {
+      rebuild();
+      // Verify no FK violations were introduced before turning enforcement back on.
+      const violations = instance.pragma("foreign_key_check") as unknown[];
+      if (violations.length > 0) {
+        throw new Error(
+          `accounts migration left ${violations.length} foreign-key violation(s)`
+        );
+      }
+    } finally {
+      instance.pragma("foreign_keys = ON");
+    }
   }
 }
 
