@@ -119,6 +119,13 @@ export function SearchResults({ data, criteria, dark, onClose, onReload, onToast
       const accountIsFrom = tx.fromAccountId === account.id;
       try {
         if (choice.kind === "transfer") {
+          const target = data.accounts.find((a) => a.id === choice.accountId);
+          const row = rowsForAccount(account).find((r) => r.transaction?.id === id);
+          const wasPlainUncategorized =
+            !row?.isSplit && !tx.categoryId && !(tx.fromAccountId && tx.toAccountId);
+          const outflow = accountIsFrom || (row?.signedAmountCents ?? 0) < 0;
+          const autoLoanSplit = target?.type === "loan" && wasPlainUncategorized && outflow;
+
           await window.ledger.updateTransaction({
             id,
             categoryId: null,
@@ -126,21 +133,33 @@ export function SearchResults({ data, criteria, dark, onClose, onReload, onToast
             toAccountId: accountIsFrom ? choice.accountId : account.id,
             splits: [],
           });
-        } else {
-          await window.ledger.updateTransaction({
-            id,
-            categoryId: choice.kind === "category" ? choice.categoryId : null,
-            fromAccountId: accountIsFrom ? account.id : null,
-            toAccountId: accountIsFrom ? null : account.id,
-            splits: [],
-          });
+          onReload();
+
+          if (autoLoanSplit) {
+            // The transaction is now a transfer to the loan; open the split editor
+            // with the auto principal/interest split. Refetch its signed total.
+            const updated = (await window.ledger.getLedger(account.id)).find(
+              (r) => r.transaction?.id === id
+            );
+            if (updated?.transaction) {
+              onEditSplit(updated.transaction, account, false, undefined, updated.signedAmountCents);
+            }
+          }
+          return;
         }
+        await window.ledger.updateTransaction({
+          id,
+          categoryId: choice.kind === "category" ? choice.categoryId : null,
+          fromAccountId: accountIsFrom ? account.id : null,
+          toAccountId: accountIsFrom ? null : account.id,
+          splits: [],
+        });
         onReload();
       } catch (e) {
         onToast(e instanceof Error ? e.message : "Change failed.");
       }
     },
-    [data.transactions, onReload, onToast, rowsForAccount, onEditSplit]
+    [data.transactions, data.accounts, onReload, onToast, rowsForAccount, onEditSplit]
   );
 
   const deleteFor = useCallback(

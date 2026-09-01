@@ -170,7 +170,7 @@ export function SplitEditorDialog({
   }
 
   return (
-    <div className="dialog-backdrop" onClick={onCancel}>
+    <div className="dialog-backdrop dialog-backdrop-top" onClick={onCancel}>
       <div className="dialog" style={{ width: 520 }} onClick={(e) => e.stopPropagation()}>
         <h3>{readOnly ? "Split transaction (view only)" : "Split transaction"}</h3>
         <div className="account-type">

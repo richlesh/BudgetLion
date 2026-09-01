@@ -641,42 +641,6 @@ export function App() {
     [selected, refreshLedger, refreshAccounts]
   );
 
-  // Apply a category/none/transfer change to a transaction. Always clears any
-  // existing split legs (splits:[]) so a former split becomes a single entry.
-  const applyCategoryChange = useCallback(
-    async (id: string, choice: CategoryChoice) => {
-      if (!selected) return;
-      const row = ledger.find((r) => r.transaction?.id === id);
-      const t = row?.transaction;
-      if (!t) return;
-      // Which side is the viewed account on? Keep that; change the other side.
-      const accountIsFrom = t.fromAccountId === selected.id;
-      if (choice.kind === "transfer") {
-        await window.ledger.updateTransaction({
-          id,
-          categoryId: null,
-          fromAccountId: accountIsFrom ? selected.id : choice.accountId,
-          toAccountId: accountIsFrom ? choice.accountId : selected.id,
-          // Discard any split legs when switching to a plain transfer.
-          splits: [],
-        });
-      } else {
-        // Category or none: clear the counterparty side so it's single-entry.
-        await window.ledger.updateTransaction({
-          id,
-          categoryId: choice.kind === "category" ? choice.categoryId : null,
-          fromAccountId: accountIsFrom ? selected.id : null,
-          toAccountId: accountIsFrom ? null : selected.id,
-          // Discard any split legs when switching to a plain category/none.
-          splits: [],
-        });
-      }
-      await refreshLedger(selected.id);
-      await refreshAccounts();
-    },
-    [selected, ledger, refreshLedger, refreshAccounts]
-  );
-
   // Open the split editor for a transaction viewed from `account`, seeding the
   // legs from existing splits, or (for a loan paydown transfer) an auto-computed
   // principal/interest split, else a single seed leg. `onSaved` refreshes the
@@ -750,6 +714,74 @@ export function App() {
       });
     },
     [accounts, refreshCategories]
+  );
+
+  // Apply a category/none/transfer change to a transaction. Always clears any
+  // existing split legs (splits:[]) so a former split becomes a single entry.
+  const applyCategoryChange = useCallback(
+    async (id: string, choice: CategoryChoice) => {
+      if (!selected) return;
+      const row = ledger.find((r) => r.transaction?.id === id);
+      const t = row?.transaction;
+      if (!t) return;
+      // Which side is the viewed account on? Keep that; change the other side.
+      const accountIsFrom = t.fromAccountId === selected.id;
+      if (choice.kind === "transfer") {
+        const target = accounts.find((a) => a.id === choice.accountId);
+        // When an UNCATEGORIZED, non-split outflow is pointed at a LOAN account,
+        // treat it as a loan payment: apply the transfer, then open the split
+        // editor pre-seeded with the auto principal/interest split.
+        const wasPlainUncategorized =
+          !row!.isSplit && !t.categoryId && !(t.fromAccountId && t.toAccountId);
+        const outflow = accountIsFrom || row!.signedAmountCents < 0;
+        const autoLoanSplit =
+          target?.type === "loan" && wasPlainUncategorized && outflow;
+
+        await window.ledger.updateTransaction({
+          id,
+          categoryId: null,
+          fromAccountId: accountIsFrom ? selected.id : choice.accountId,
+          toAccountId: accountIsFrom ? choice.accountId : selected.id,
+          // Discard any split legs when switching to a plain transfer.
+          splits: [],
+        });
+        await refreshLedger(selected.id);
+        await refreshAccounts();
+
+        if (autoLoanSplit) {
+          // Re-fetch the updated transaction (now a transfer) and open the split
+          // editor with the auto-computed principal/interest legs.
+          const rows = await window.ledger.getLedger(selected.id);
+          const updated = rows.find((r) => r.transaction?.id === id);
+          if (updated?.transaction) {
+            await openSplitEditor(
+              updated.transaction,
+              selected,
+              false,
+              undefined,
+              updated.signedAmountCents,
+              async () => {
+                await refreshLedger(selected.id);
+                await refreshAccounts();
+              }
+            );
+          }
+        }
+        return;
+      }
+      // Category or none: clear the counterparty side so it's single-entry.
+      await window.ledger.updateTransaction({
+        id,
+        categoryId: choice.kind === "category" ? choice.categoryId : null,
+        fromAccountId: accountIsFrom ? selected.id : null,
+        toAccountId: accountIsFrom ? null : selected.id,
+        // Discard any split legs when switching to a plain category/none.
+        splits: [],
+      });
+      await refreshLedger(selected.id);
+      await refreshAccounts();
+    },
+    [selected, ledger, accounts, refreshLedger, refreshAccounts, openSplitEditor]
   );
 
   // The Category column can set a category, clear it, or convert the row into a

@@ -196,6 +196,13 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: center;
+  z-index: 1000;
+}
+
+/* Dialogs that must sit ABOVE another open dialog (e.g. the split editor opened
+   from the Search results view). */
+.dialog-backdrop-top {
+  z-index: 1100;
 }
 
 .dialog {
