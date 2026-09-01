@@ -728,14 +728,13 @@ export function App() {
       const accountIsFrom = t.fromAccountId === selected.id;
       if (choice.kind === "transfer") {
         const target = accounts.find((a) => a.id === choice.accountId);
-        // When an UNCATEGORIZED, non-split outflow is pointed at a LOAN account,
-        // treat it as a loan payment: apply the transfer, then open the split
-        // editor pre-seeded with the auto principal/interest split.
-        const wasPlainUncategorized =
-          !row!.isSplit && !t.categoryId && !(t.fromAccountId && t.toAccountId);
+        // When a NON-SPLIT outflow is pointed at a LOAN account, treat it as a
+        // loan payment: apply the transfer, then open the split editor pre-seeded
+        // with the auto principal/interest split. Fires from any prior category
+        // state (uncategorized or categorized) — only an existing split is exempt.
+        const notSplit = !row!.isSplit;
         const outflow = accountIsFrom || row!.signedAmountCents < 0;
-        const autoLoanSplit =
-          target?.type === "loan" && wasPlainUncategorized && outflow;
+        const autoLoanSplit = target?.type === "loan" && notSplit && outflow;
 
         await window.ledger.updateTransaction({
           id,

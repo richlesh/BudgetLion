@@ -121,10 +121,11 @@ export function SearchResults({ data, criteria, dark, onClose, onReload, onToast
         if (choice.kind === "transfer") {
           const target = data.accounts.find((a) => a.id === choice.accountId);
           const row = rowsForAccount(account).find((r) => r.transaction?.id === id);
-          const wasPlainUncategorized =
-            !row?.isSplit && !tx.categoryId && !(tx.fromAccountId && tx.toAccountId);
+          // Fire the loan auto-split for any NON-SPLIT outflow changed to a loan
+          // transfer (uncategorized or categorized); only existing splits are exempt.
+          const notSplit = !row?.isSplit;
           const outflow = accountIsFrom || (row?.signedAmountCents ?? 0) < 0;
-          const autoLoanSplit = target?.type === "loan" && wasPlainUncategorized && outflow;
+          const autoLoanSplit = target?.type === "loan" && notSplit && outflow;
 
           await window.ledger.updateTransaction({
             id,
