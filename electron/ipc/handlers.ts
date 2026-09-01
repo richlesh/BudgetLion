@@ -5,20 +5,26 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { IPC } from "../../src/shared/ipc.js";
-import type { DataBundle } from "../../src/shared/ipc.js";
+import type { AccountProjection, DataBundle } from "../../src/shared/ipc.js";
 import type {
   AccountBalance,
+  AggregateData,
   NewAccountInput,
   NewCategoryInput,
+  NewRecurringRuleInput,
   NewTransactionInput,
   ParsedRow,
+  UpdateCategoryInput,
+  UpdateRecurringRuleInput,
   UpdateTransactionInput,
   UpdateAccountInput,
 } from "../../src/shared/types.js";
 import { buildLedger, currentBalance } from "../../src/core/balances.js";
 import { validateTransaction } from "../../src/core/validation.js";
 import { rowToTransaction } from "../../src/core/import/index.js";
+import { balanceForecast, projectLedger, addMonthsISO } from "../../src/core/recurring.js";
 import * as repo from "../db/repository.js";
+import { arePairSimilar, isAiAvailable } from "../ai/similarity.js";
 
 export function registerIpcHandlers(): void {
   ipcMain.handle(IPC.listAccounts, () => repo.listAccounts());
@@ -45,6 +51,11 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC.createCategory, (_e, input: NewCategoryInput) =>
     repo.createCategory(input)
   );
+  ipcMain.handle(IPC.updateCategory, (_e, input: UpdateCategoryInput) =>
+    repo.updateCategory(input)
+  );
+  ipcMain.handle(IPC.deleteCategory, (_e, id: string) => repo.deleteCategory(id));
+  ipcMain.handle(IPC.getCategoryUsage, () => repo.categoryUsageCounts());
 
   ipcMain.handle(IPC.getLedger, (_e, accountId: string) => {
     const accounts = repo.listAccounts();
@@ -75,6 +86,44 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC.deleteTransaction, (_e, id: string) => {
     repo.deleteTransaction(id);
   });
+
+  // ---- Charts (M3) ----
+
+  ipcMain.handle(IPC.getAggregateData, (): AggregateData => {
+    return {
+      accounts: repo.listAccounts(),
+      categories: repo.listCategories(),
+      transactions: repo.allTransactions(),
+      splits: repo.allSplits(),
+    };
+  });
+
+  // ---- Recurring rules + projection (M4) ----
+
+  ipcMain.handle(IPC.listRecurringRules, () => repo.listRecurringRules());
+  ipcMain.handle(IPC.createRecurringRule, (_e, input: NewRecurringRuleInput) =>
+    repo.createRecurringRule(input)
+  );
+  ipcMain.handle(IPC.updateRecurringRule, (_e, input: UpdateRecurringRuleInput) =>
+    repo.updateRecurringRule(input)
+  );
+  ipcMain.handle(IPC.deleteRecurringRule, (_e, id: string) => repo.deleteRecurringRule(id));
+
+  ipcMain.handle(
+    IPC.getProjection,
+    (_e, accountId: string, horizonMonths: number): AccountProjection => {
+      const account = repo.listAccounts().find((a) => a.id === accountId);
+      if (!account) throw new Error(`Account not found: ${accountId}`);
+      const actuals = repo.transactionsForAccount(accountId);
+      const rules = repo.listRecurringRules();
+      const today = new Date().toISOString().slice(0, 10);
+      const horizonEnd = addMonthsISO(today, horizonMonths);
+      return {
+        rows: projectLedger(account, actuals, rules, today, horizonEnd),
+        forecast: balanceForecast(account, actuals, rules, today, horizonMonths),
+      };
+    }
+  );
 
   // ---- Import (M5) ----
 
@@ -181,6 +230,20 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC.getData, () => repo.exportData());
 
   ipcMain.handle(IPC.importData, (_e, data: DataBundle) => repo.importData(data));
+
+  // ---- AI: payee similarity for de-duplication ----
+  ipcMain.handle(
+    IPC.arePairSimilar,
+    (
+      _e,
+      aPayee: string | null,
+      aMemo: string | null,
+      bPayee: string | null,
+      bMemo: string | null,
+      useAI?: boolean
+    ) => arePairSimilar(aPayee, aMemo, bPayee, bMemo, useAI ?? true)
+  );
+  ipcMain.handle(IPC.isAiAvailable, () => isAiAvailable());
 }
 
 /** Render standalone HTML to a PDF buffer using an offscreen window. */

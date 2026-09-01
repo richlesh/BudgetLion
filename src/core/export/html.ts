@@ -2,6 +2,7 @@
 
 import type { Account, Category, LedgerRow } from "../../shared/types";
 import { formatCents } from "../money";
+import { categoryDisplayName } from "../categories";
 
 function esc(s: string): string {
   return s
@@ -17,7 +18,7 @@ export function ledgerToHtml(
   categories: Category[],
   fontOptions?: { font?: string; sizePx?: number }
 ): string {
-  const catName = new Map(categories.map((c) => [c.id, c.name]));
+  const catName = new Map(categories.map((c) => [c.id, categoryDisplayName(c, categories)]));
   const generated = new Date().toLocaleString();
   // Print/PDF font: chosen family (falls back to system) + base size.
   const bodyFont = fontOptions?.font

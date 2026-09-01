@@ -53,6 +53,14 @@ function runMigrations(instance: Database.Database): void {
   if (!hasAccountCode) {
     instance.exec("ALTER TABLE accounts ADD COLUMN account_code TEXT");
   }
+
+  // categories.applicability: 'income' | 'expense' | 'both' (default 'both').
+  const catCols = instance
+    .prepare("PRAGMA table_info(categories)")
+    .all() as Array<{ name: string }>;
+  if (!catCols.some((c) => c.name === "applicability")) {
+    instance.exec("ALTER TABLE categories ADD COLUMN applicability TEXT NOT NULL DEFAULT 'both'");
+  }
 }
 
 export function closeDb(): void {

@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { Account, Category, NewTransactionInput } from "../shared/types";
 import { parseCents } from "../core/money";
 import { validateTransaction } from "../core/validation";
+import { categoriesForDirection, categoryOptions } from "../core/categories";
 
 interface Props {
   account: Account; // the account whose ledger we're editing
@@ -32,6 +33,16 @@ export function NewTransactionDialog({ account, accounts, categories, onCancel, 
   const [error, setError] = useState<string | null>(null);
 
   const otherAccounts = accounts.filter((a) => a.id !== account.id);
+
+  // Only show categories valid for the chosen direction (out=expense, in=income),
+  // rendered with full Parent:Child display names.
+  const categoryChoices = useMemo(
+    () =>
+      categoryOptions(
+        categoriesForDirection(categories, direction === "out" ? "expense" : "income")
+      ),
+    [categories, direction]
+  );
   // A transfer is when the user picks another tracked account as the counterparty.
   // Transfers don't take a payee: it's auto-generated from the other account on display.
   const isTransfer = transferId !== "";
@@ -87,7 +98,18 @@ export function NewTransactionDialog({ account, accounts, categories, onCancel, 
           <label>Direction</label>
           <select
             value={direction}
-            onChange={(e) => setDirection(e.target.value as "out" | "in")}
+            onChange={(e) => {
+              const dir = e.target.value as "out" | "in";
+              setDirection(dir);
+              // Drop a selected category that isn't valid for the new direction.
+              if (categoryId) {
+                const stillValid = categoriesForDirection(
+                  categories,
+                  dir === "out" ? "expense" : "income"
+                ).some((c) => c.id === categoryId);
+                if (!stillValid) setCategoryId("");
+              }
+            }}
           >
             <option value="out">Money out (payment / expense)</option>
             <option value="in">Money in (deposit / income)</option>
@@ -109,9 +131,9 @@ export function NewTransactionDialog({ account, accounts, categories, onCancel, 
             <label>Category (optional)</label>
             <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
               <option value="">— Uncategorized —</option>
-              {categories.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
+              {categoryChoices.map((o) => (
+                <option key={o.category.id} value={o.category.id}>
+                  {o.display}
                 </option>
               ))}
             </select>

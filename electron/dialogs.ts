@@ -208,6 +208,10 @@ export function buildMenu(mainWin: BrowserWindow): void {
           accelerator: "CmdOrCtrl+N",
           click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-new-transaction"),
         },
+        {
+          label: "De-Duplicate Transactions",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-dedupe"),
+        },
         { type: "separator" },
         {
           label: "Import…",
@@ -242,6 +246,17 @@ export function buildMenu(mainWin: BrowserWindow): void {
     {
       label: "View",
       submenu: [
+        {
+          label: "Toggle Charts",
+          accelerator: "CmdOrCtrl+Shift+C",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-toggle-charts"),
+        },
+        {
+          label: "Recurring Rules…",
+          accelerator: "CmdOrCtrl+R",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-recurring"),
+        },
+        { type: "separator" },
         { role: "reload" },
         {
           label: "Toggle Developer Tools",

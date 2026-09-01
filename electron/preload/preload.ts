@@ -7,8 +7,11 @@ import type { DataBundle } from "../../src/shared/ipc.js";
 import type {
   NewAccountInput,
   NewCategoryInput,
+  NewRecurringRuleInput,
   NewTransactionInput,
   ParsedRow,
+  UpdateCategoryInput,
+  UpdateRecurringRuleInput,
   UpdateTransactionInput,
   UpdateAccountInput,
 } from "../../src/shared/types.js";
@@ -20,6 +23,9 @@ const api: LedgerApi = {
   getAllBalances: () => ipcRenderer.invoke(IPC.getAllBalances),
   listCategories: () => ipcRenderer.invoke(IPC.listCategories),
   createCategory: (input: NewCategoryInput) => ipcRenderer.invoke(IPC.createCategory, input),
+  updateCategory: (input: UpdateCategoryInput) => ipcRenderer.invoke(IPC.updateCategory, input),
+  deleteCategory: (id: string) => ipcRenderer.invoke(IPC.deleteCategory, id),
+  getCategoryUsage: () => ipcRenderer.invoke(IPC.getCategoryUsage),
   getLedger: (accountId: string) => ipcRenderer.invoke(IPC.getLedger, accountId),
   createTransaction: (input: NewTransactionInput) =>
     ipcRenderer.invoke(IPC.createTransaction, input),
@@ -32,10 +38,33 @@ const api: LedgerApi = {
   commitImport: (accountId: string, rows: ParsedRow[]) =>
     ipcRenderer.invoke(IPC.commitImport, accountId, rows),
 
+  // Charts (M3)
+  getAggregateData: () => ipcRenderer.invoke(IPC.getAggregateData),
+
+  // Recurring rules + projection (M4)
+  listRecurringRules: () => ipcRenderer.invoke(IPC.listRecurringRules),
+  createRecurringRule: (input: NewRecurringRuleInput) =>
+    ipcRenderer.invoke(IPC.createRecurringRule, input),
+  updateRecurringRule: (input: UpdateRecurringRuleInput) =>
+    ipcRenderer.invoke(IPC.updateRecurringRule, input),
+  deleteRecurringRule: (id: string) => ipcRenderer.invoke(IPC.deleteRecurringRule, id),
+  getProjection: (accountId: string, horizonMonths: number) =>
+    ipcRenderer.invoke(IPC.getProjection, accountId, horizonMonths),
+
   // Accounts/Categories JSON data exchange
   openJsonFile: (): Promise<OpenedFile | null> => ipcRenderer.invoke(IPC.openJsonFile),
   getData: (): Promise<DataBundle> => ipcRenderer.invoke(IPC.getData),
   importData: (data: DataBundle) => ipcRenderer.invoke(IPC.importData, data),
+
+  // AI: pair (payee + memo) similarity for de-duplication.
+  arePairSimilar: (
+    aPayee: string | null,
+    aMemo: string | null,
+    bPayee: string | null,
+    bMemo: string | null,
+    useAI?: boolean
+  ) => ipcRenderer.invoke(IPC.arePairSimilar, aPayee, aMemo, bPayee, bMemo, useAI),
+  isAiAvailable: () => ipcRenderer.invoke(IPC.isAiAvailable),
 
   // Export (M6)
   saveTextFile: (defaultName: string, content: string, ext: string) =>
@@ -54,6 +83,9 @@ const api: LedgerApi = {
   onMenuNewTransaction: (cb: () => void) => {
     ipcRenderer.on("menu-new-transaction", () => cb());
   },
+  onMenuDedupe: (cb: () => void) => {
+    ipcRenderer.on("menu-dedupe", () => cb());
+  },
   onMenuImport: (cb: () => void) => {
     ipcRenderer.on("menu-import", () => cb());
   },
@@ -68,6 +100,12 @@ const api: LedgerApi = {
   },
   onMenuExportData: (cb: () => void) => {
     ipcRenderer.on("menu-export-data", () => cb());
+  },
+  onMenuToggleCharts: (cb: () => void) => {
+    ipcRenderer.on("menu-toggle-charts", () => cb());
+  },
+  onMenuRecurring: (cb: () => void) => {
+    ipcRenderer.on("menu-recurring", () => cb());
   },
 };
 

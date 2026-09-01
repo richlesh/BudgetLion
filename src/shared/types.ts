@@ -28,10 +28,14 @@ export interface Account {
   deletedAt: string | null; // soft delete
 }
 
+/** Whether a category applies to income, expense, or both directions. */
+export type CategoryApplicability = "income" | "expense" | "both";
+
 export interface Category {
   id: string; // UUID
   name: string;
   parentId: string | null;
+  applicability: CategoryApplicability;
   createdAt: string;
   updatedAt: string;
   deletedAt: string | null;
@@ -149,6 +153,15 @@ export interface UpdateTransactionInput {
 export interface NewCategoryInput {
   name: string;
   parentId?: string | null;
+  applicability?: CategoryApplicability;
+}
+
+/** Partial update for a category (id required). */
+export interface UpdateCategoryInput {
+  id: string;
+  name?: string;
+  parentId?: string | null;
+  applicability?: CategoryApplicability;
 }
 
 /** Current balance of an account, in cents. */
@@ -230,4 +243,108 @@ export interface ImportPreview {
   rows: ImportPreviewRow[];
   totalParsed: number;
   duplicateCount: number;
+}
+
+// ---- Charts / Aggregation (M3) ----
+
+/** Scope for chart aggregation: a specific account, or all accounts combined. */
+export type ChartScope = { kind: "account"; accountId: string } | { kind: "all" };
+
+/** Inclusive ISO date range (either bound may be null = unbounded). */
+export interface DateRange {
+  start: string | null; // YYYY-MM-DD
+  end: string | null; // YYYY-MM-DD
+}
+
+/** One slice of the spending-by-category pie. */
+export interface CategorySpend {
+  categoryId: string | null; // null = uncategorized
+  categoryName: string;
+  amountCents: number; // positive magnitude of spending
+}
+
+/** One bar of the spending-by-month chart. */
+export interface MonthSpend {
+  month: string; // YYYY-MM
+  spendingCents: number; // positive magnitude of outflow
+  incomeCents: number; // positive magnitude of inflow
+}
+
+/**
+ * Raw data needed by the charts panel. The renderer runs the (pure) aggregation
+ * so date-range/scope changes are instant without extra IPC round-trips.
+ */
+export interface AggregateData {
+  accounts: Account[];
+  categories: Category[];
+  transactions: Transaction[];
+  splits: TransactionSplit[];
+}
+
+// ---- Recurring rules & projection (M4) ----
+
+export type Frequency = "weekly" | "biweekly" | "monthly" | "yearly";
+export type EstimateMode = "fixed" | "average" | "last";
+
+export interface RecurringRule {
+  id: string;
+  name: string;
+  amountCents: number | null; // required for 'fixed'; ignored for average/last
+  estimateMode: EstimateMode;
+  fromAccountId: string | null;
+  toAccountId: string | null;
+  categoryId: string | null;
+  frequency: Frequency;
+  intervalCount: number; // every N periods (>=1)
+  startDate: string; // ISO date
+  endDate: string | null; // ISO date or null = indefinite
+  dayOfMonth: number | null; // for monthly/yearly anchoring (1-31)
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
+export interface NewRecurringRuleInput {
+  name: string;
+  amountCents?: number | null;
+  estimateMode?: EstimateMode;
+  fromAccountId?: string | null;
+  toAccountId?: string | null;
+  categoryId?: string | null;
+  frequency: Frequency;
+  intervalCount?: number;
+  startDate: string;
+  endDate?: string | null;
+  dayOfMonth?: number | null;
+}
+
+export interface UpdateRecurringRuleInput extends Partial<NewRecurringRuleInput> {
+  id: string;
+}
+
+/** A single projected (not-yet-real) occurrence produced by a recurring rule. */
+export interface ProjectedOccurrence {
+  ruleId: string;
+  ruleName: string;
+  date: string; // ISO date
+  /** Signed effect on the projected account, in cents (inflow +, outflow -). */
+  signedAmountCents: number;
+  fromAccountId: string | null;
+  toAccountId: string | null;
+  categoryId: string | null;
+  /** For loan rules: principal/interest split of a payment (magnitudes). */
+  principalCents?: number;
+  interestCents?: number;
+}
+
+/** A projected ledger row for an account: occurrence + running projected balance. */
+export interface ProjectionRow {
+  occurrence: ProjectedOccurrence;
+  runningBalanceCents: number;
+}
+
+/** A point on the balance-forecast chart. */
+export interface ForecastPoint {
+  date: string; // YYYY-MM-DD
+  balanceCents: number;
 }

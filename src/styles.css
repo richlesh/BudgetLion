@@ -36,6 +36,21 @@ body,
   height: 100vh;
 }
 
+/* Draggable divider between the accounts sidebar and the ledger panel. */
+.app-divider {
+  cursor: col-resize;
+  background: var(--border);
+  width: 6px;
+  height: 100%;
+  user-select: none;
+  touch-action: none;
+}
+
+.app-divider:hover,
+.app-divider:active {
+  background: var(--accent);
+}
+
 .sidebar {
   background: var(--panel);
   border-right: 1px solid var(--border);
@@ -244,6 +259,157 @@ button:disabled {
   z-index: 1000;
 }
 
+button.active-toggle {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.charts-panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* Allow the panel to shrink below its content's intrinsic width. */
+  min-width: 0;
+}
+
+.charts-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.chart-ctl {
+  display: flex;
+  flex-direction: column;
+  font-size: 11px;
+  color: var(--muted);
+  gap: 2px;
+}
+
+.chart-ctl select,
+.chart-ctl input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+.charts-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 12px;
+  /* Grid tracks default to min-width:auto; allow them to shrink. */
+  min-width: 0;
+}
+
+.chart-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--bg);
+  /* Let the card (and the ECharts canvas / table inside) shrink with the window. */
+  min-width: 0;
+  overflow: hidden;
+}
+
+.chart-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  padding-top: 6px;
+}
+
+/* Modeless category editor: floating panel, no backdrop, app stays interactive. */
+.modeless-panel {
+  position: fixed;
+  top: 64px;
+  right: 20px;
+  width: 510px;
+  max-height: calc(100vh - 96px);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  z-index: 900;
+  overflow: hidden;
+}
+
+.modeless-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modeless-body {
+  padding: 12px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px;
+}
+
+.cat-row {
+  display: grid;
+  grid-template-columns: 1fr 90px 84px 28px;
+  gap: 6px;
+  align-items: center;
+}
+
+.cat-row .cat-name {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Inline edit field shown when double-clicking a category name. */
+.cat-row .cat-name-input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 3px 6px;
+  font-size: 13px;
+}
+
+.cat-row select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 4px 4px;
+  font-size: 11px;
+}
+
 .icon-btn {
   display: inline-flex;
   align-items: center;
@@ -289,4 +455,91 @@ button.danger {
 .context-menu-item:hover {
   background: var(--accent);
   color: white;
+}
+
+/* Forecast ledger: draggable column resize handles. */
+.fc-th-label {
+  display: inline-block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+  vertical-align: bottom;
+}
+
+.fc-col-resizer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  user-select: none;
+  touch-action: none;
+}
+
+/* Thin 50% gray line centered in the handle marking the resize area. */
+.fc-col-resizer::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  right: 2px;
+  width: 1px;
+  background: rgba(128, 128, 128, 0.5);
+}
+
+.fc-col-resizer:hover::after,
+.fc-col-resizer:active::after {
+  background: var(--accent);
+}
+
+/* Categories editor: per-row delete (trash) button, far right of the row.
+   Sizing/appearance come from .icon-btn (same as the ledger); this only
+   right-aligns it within its grid column. */
+.cat-del-btn {
+  justify-self: end;
+}
+
+/* Keeps the trash column aligned for used (non-deletable) categories. */
+.cat-del-spacer {
+  display: inline-block;
+  width: 100%;
+}
+
+/* Ledger inline category/account editor rendered as an open list box, so the
+   options are tall and easy to click instead of a tiny native dropdown. */
+.cat-acct-editor {
+  min-width: 220px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  font-size: 13px;
+  padding: 2px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+}
+
+.cat-acct-editor option {
+  padding: 3px 6px;
+  border-radius: 4px;
+}
+
+/* Light-blue highlight following the cursor, showing what a click will select. */
+.cat-acct-editor option:hover:not(:disabled) {
+  background: #cfe6ff !important;
+  color: #10233a !important;
+}
+
+/* The current selection stands out a bit more than a plain hover. */
+.cat-acct-editor option:checked {
+  background: #aed4ff;
+  color: #10233a;
+}
+
+.cat-acct-editor optgroup {
+  font-size: 11px;
+  color: var(--muted);
 }

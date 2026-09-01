@@ -14,6 +14,10 @@ export interface Settings {
   // UI persistence
   windowBounds?: { width: number; height: number; x?: number; y?: number };
   ledgerColumnWidths?: Record<string, number>;
+  // Forecast (projection) ledger column widths (colKey -> px).
+  forecastColumnWidths?: Record<string, number>;
+  // Width (px) of the accounts sidebar (draggable divider).
+  sidebarWidth?: number;
   // Fonts (empty string = system default)
   ledgerFont?: string;
   ledgerFontSize?: number;

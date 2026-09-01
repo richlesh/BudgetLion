@@ -3,6 +3,7 @@
 // so they are not handled here.
 
 import type { Account, Category, LedgerRow } from "../../shared/types";
+import { categoryDisplayName } from "../categories";
 
 function csvEscape(value: string): string {
   if (/[",\r\n]/.test(value)) {
@@ -49,7 +50,7 @@ export function ledgerToCsv(
   categories: Category[],
   accounts: Account[] = []
 ): string {
-  const catName = new Map(categories.map((c) => [c.id, c.name]));
+  const catName = new Map(categories.map((c) => [c.id, categoryDisplayName(c, categories)]));
   const codeById = new Map(
     accounts.filter((a) => a.accountCode).map((a) => [a.id, a.accountCode as string])
   );
@@ -94,7 +95,7 @@ export function ledgerToQif(
   categories: Category[],
   accounts: Account[] = []
 ): string {
-  const catName = new Map(categories.map((c) => [c.id, c.name]));
+  const catName = new Map(categories.map((c) => [c.id, categoryDisplayName(c, categories)]));
   const codeById = new Map(
     accounts.filter((a) => a.accountCode).map((a) => [a.id, a.accountCode as string])
   );

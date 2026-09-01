@@ -8,12 +8,16 @@ import type {
   Category,
   NewAccountInput,
   NewCategoryInput,
+  UpdateCategoryInput,
   NewTransactionInput,
   Transaction,
   UpdateTransactionInput,
   UpdateAccountInput,
   TransactionSplit,
   NewSplitInput,
+  RecurringRule,
+  NewRecurringRuleInput,
+  UpdateRecurringRuleInput,
 } from "../../src/shared/types.js";
 import { ClearedState } from "../../src/shared/types.js";
 import { getDb } from "./index.js";
@@ -427,6 +431,15 @@ export function splitsForTransaction(txId: string): TransactionSplit[] {
   return rows.map(toSplit);
 }
 
+/** ALL non-deleted splits across every transaction (used by chart aggregation). */
+export function allSplits(): TransactionSplit[] {
+  const db = getDb();
+  const rows = db
+    .prepare("SELECT * FROM transaction_splits WHERE deleted_at IS NULL")
+    .all() as SplitRow[];
+  return rows.map(toSplit);
+}
+
 /** Map of transactionId -> non-deleted splits, for a set of transaction ids. */
 export function splitsForTransactions(txIds: string[]): Map<string, TransactionSplit[]> {
   const out = new Map<string, TransactionSplit[]>();
@@ -520,6 +533,7 @@ interface CategoryRow {
   id: string;
   name: string;
   parent_id: string | null;
+  applicability: string;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -530,6 +544,7 @@ function toCategory(r: CategoryRow): Category {
     id: r.id,
     name: r.name,
     parentId: r.parent_id,
+    applicability: (r.applicability as Category["applicability"]) ?? "both",
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     deletedAt: r.deleted_at,
@@ -551,22 +566,106 @@ export function createCategory(input: NewCategoryInput): Category {
     id: randomUUID(),
     name: input.name,
     parent_id: input.parentId ?? null,
+    applicability: input.applicability ?? "both",
     created_at: ts,
     updated_at: ts,
     deleted_at: null,
   };
   db.prepare(
-    `INSERT INTO categories (id, name, parent_id, created_at, updated_at, deleted_at)
-     VALUES (@id, @name, @parent_id, @created_at, @updated_at, @deleted_at)`
+    `INSERT INTO categories (id, name, parent_id, applicability, created_at, updated_at, deleted_at)
+     VALUES (@id, @name, @parent_id, @applicability, @created_at, @updated_at, @deleted_at)`
   ).run(row);
   return toCategory(row);
+}
+
+export function updateCategory(input: UpdateCategoryInput): void {
+  const db = getDb();
+  const fields: string[] = [];
+  const params: Record<string, unknown> = { id: input.id, updated_at: now() };
+  const map: Array<[keyof UpdateCategoryInput, string]> = [
+    ["name", "name"],
+    ["parentId", "parent_id"],
+    ["applicability", "applicability"],
+  ];
+  for (const [key, col] of map) {
+    if (input[key] !== undefined) {
+      fields.push(`${col} = @${col}`);
+      params[col] = input[key];
+    }
+  }
+  fields.push("updated_at = @updated_at");
+  db.prepare(`UPDATE categories SET ${fields.join(", ")} WHERE id = @id`).run(params);
+}
+
+/**
+ * Usage count per category id, counting only references that would prevent a safe
+ * delete: non-deleted transactions, non-deleted transaction splits, non-deleted
+ * recurring rules, and non-deleted child categories (deleting a parent would
+ * orphan its children). Categories with a count of 0 are safe to delete.
+ * Returns a map of categoryId -> count (only non-zero entries are included).
+ */
+export function categoryUsageCounts(): Record<string, number> {
+  const db = getDb();
+  const counts: Record<string, number> = {};
+  const add = (id: string | null, n: number) => {
+    if (!id || n <= 0) return;
+    counts[id] = (counts[id] ?? 0) + n;
+  };
+
+  const tally = (sql: string) => {
+    const rows = db.prepare(sql).all() as Array<{ category_id: string | null; n: number }>;
+    for (const r of rows) add(r.category_id, r.n);
+  };
+
+  tally(
+    `SELECT category_id, COUNT(*) AS n FROM transactions
+       WHERE deleted_at IS NULL AND category_id IS NOT NULL GROUP BY category_id`
+  );
+  tally(
+    `SELECT category_id, COUNT(*) AS n FROM transaction_splits
+       WHERE deleted_at IS NULL AND category_id IS NOT NULL GROUP BY category_id`
+  );
+  tally(
+    `SELECT category_id, COUNT(*) AS n FROM recurring_rules
+       WHERE deleted_at IS NULL AND category_id IS NOT NULL GROUP BY category_id`
+  );
+  // Child categories: a non-deleted category whose parent_id points at the target.
+  tally(
+    `SELECT parent_id AS category_id, COUNT(*) AS n FROM categories
+       WHERE deleted_at IS NULL AND parent_id IS NOT NULL GROUP BY parent_id`
+  );
+
+  return counts;
+}
+
+/**
+ * Soft-delete a category. Throws if the category is still referenced anywhere
+ * that would break referential integrity (see {@link categoryUsageCounts}), so a
+ * used category can never be deleted even if the UI somehow allowed it.
+ */
+export function deleteCategory(id: string): void {
+  const usage = categoryUsageCounts();
+  if ((usage[id] ?? 0) > 0) {
+    throw new Error("Cannot delete a category that is in use.");
+  }
+  const db = getDb();
+  const ts = now();
+  db.prepare("UPDATE categories SET deleted_at = ?, updated_at = ? WHERE id = ?").run(ts, ts, id);
 }
 
 // ---- Bulk import/export of accounts + categories (JSON data exchange) ----
 
 /** All non-deleted accounts and categories, for JSON export. */
-export function exportData(): { accounts: Account[]; categories: Category[] } {
-  return { accounts: listAccounts(), categories: listCategories() };
+export function exportData(): {
+  accounts: Account[];
+  categories: Category[];
+  recurringRules: RecurringRule[];
+} {
+  return {
+    accounts: listAccounts(),
+    categories: listCategories(),
+    recurringRules: listRecurringRules(),
+  };
 }
 
 /**
@@ -576,11 +675,13 @@ export function exportData(): { accounts: Account[]; categories: Category[] } {
 export function importData(data: {
   accounts?: Account[];
   categories?: Category[];
-}): { accounts: number; categories: number } {
+  recurringRules?: RecurringRule[];
+}): { accounts: number; categories: number; recurringRules: number } {
   const db = getDb();
   const ts = now();
   let accounts = 0;
   let categories = 0;
+  let recurringRules = 0;
 
   const upsertAccount = db.prepare(
     `INSERT INTO accounts
@@ -602,10 +703,30 @@ export function importData(data: {
   );
 
   const upsertCategory = db.prepare(
-    `INSERT INTO categories (id, name, parent_id, created_at, updated_at, deleted_at)
-     VALUES (@id, @name, @parent_id, @created_at, @updated_at, @deleted_at)
+    `INSERT INTO categories (id, name, parent_id, applicability, created_at, updated_at, deleted_at)
+     VALUES (@id, @name, @parent_id, @applicability, @created_at, @updated_at, @deleted_at)
      ON CONFLICT(id) DO UPDATE SET
        name = excluded.name, parent_id = excluded.parent_id,
+       applicability = excluded.applicability,
+       updated_at = excluded.updated_at, deleted_at = excluded.deleted_at`
+  );
+
+  const upsertRule = db.prepare(
+    `INSERT INTO recurring_rules
+       (id, name, amount_cents, estimate_mode, from_account_id, to_account_id, category_id,
+        frequency, interval_count, start_date, end_date, day_of_month,
+        created_at, updated_at, deleted_at)
+     VALUES
+       (@id, @name, @amount_cents, @estimate_mode, @from_account_id, @to_account_id, @category_id,
+        @frequency, @interval_count, @start_date, @end_date, @day_of_month,
+        @created_at, @updated_at, @deleted_at)
+     ON CONFLICT(id) DO UPDATE SET
+       name = excluded.name, amount_cents = excluded.amount_cents,
+       estimate_mode = excluded.estimate_mode,
+       from_account_id = excluded.from_account_id, to_account_id = excluded.to_account_id,
+       category_id = excluded.category_id, frequency = excluded.frequency,
+       interval_count = excluded.interval_count, start_date = excluded.start_date,
+       end_date = excluded.end_date, day_of_month = excluded.day_of_month,
        updated_at = excluded.updated_at, deleted_at = excluded.deleted_at`
   );
 
@@ -633,13 +754,152 @@ export function importData(data: {
         id: c.id || randomUUID(),
         name: c.name,
         parent_id: c.parentId ?? null,
+        applicability: c.applicability ?? "both",
         created_at: c.createdAt ?? ts,
         updated_at: ts,
         deleted_at: c.deletedAt ?? null,
       });
       categories++;
     }
+    // Recurring rules last: they reference accounts and categories by id.
+    for (const r of data.recurringRules ?? []) {
+      upsertRule.run({
+        id: r.id || randomUUID(),
+        name: r.name,
+        amount_cents: r.amountCents ?? null,
+        estimate_mode: r.estimateMode ?? "fixed",
+        from_account_id: r.fromAccountId ?? null,
+        to_account_id: r.toAccountId ?? null,
+        category_id: r.categoryId ?? null,
+        frequency: r.frequency,
+        interval_count: r.intervalCount ?? 1,
+        start_date: r.startDate,
+        end_date: r.endDate ?? null,
+        day_of_month: r.dayOfMonth ?? null,
+        created_at: r.createdAt ?? ts,
+        updated_at: ts,
+        deleted_at: r.deletedAt ?? null,
+      });
+      recurringRules++;
+    }
   });
   tx();
-  return { accounts, categories };
+  return { accounts, categories, recurringRules };
+}
+
+// ---- Recurring rules (M4) ----
+
+interface RuleRow {
+  id: string;
+  name: string;
+  amount_cents: number | null;
+  estimate_mode: string;
+  from_account_id: string | null;
+  to_account_id: string | null;
+  category_id: string | null;
+  frequency: string;
+  interval_count: number;
+  start_date: string;
+  end_date: string | null;
+  day_of_month: number | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+function toRule(r: RuleRow): RecurringRule {
+  return {
+    id: r.id,
+    name: r.name,
+    amountCents: r.amount_cents,
+    estimateMode: r.estimate_mode as RecurringRule["estimateMode"],
+    fromAccountId: r.from_account_id,
+    toAccountId: r.to_account_id,
+    categoryId: r.category_id,
+    frequency: r.frequency as RecurringRule["frequency"],
+    intervalCount: r.interval_count,
+    startDate: r.start_date,
+    endDate: r.end_date,
+    dayOfMonth: r.day_of_month,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    deletedAt: r.deleted_at,
+  };
+}
+
+export function listRecurringRules(): RecurringRule[] {
+  const db = getDb();
+  const rows = db
+    .prepare("SELECT * FROM recurring_rules WHERE deleted_at IS NULL ORDER BY name COLLATE NOCASE")
+    .all() as RuleRow[];
+  return rows.map(toRule);
+}
+
+export function createRecurringRule(input: NewRecurringRuleInput): RecurringRule {
+  const db = getDb();
+  const ts = now();
+  const row: RuleRow = {
+    id: randomUUID(),
+    name: input.name,
+    amount_cents: input.amountCents ?? null,
+    estimate_mode: input.estimateMode ?? "fixed",
+    from_account_id: input.fromAccountId ?? null,
+    to_account_id: input.toAccountId ?? null,
+    category_id: input.categoryId ?? null,
+    frequency: input.frequency,
+    interval_count: input.intervalCount ?? 1,
+    start_date: input.startDate,
+    end_date: input.endDate ?? null,
+    day_of_month: input.dayOfMonth ?? null,
+    created_at: ts,
+    updated_at: ts,
+    deleted_at: null,
+  };
+  db.prepare(
+    `INSERT INTO recurring_rules
+       (id, name, amount_cents, estimate_mode, from_account_id, to_account_id,
+        category_id, frequency, interval_count, start_date, end_date, day_of_month,
+        created_at, updated_at, deleted_at)
+     VALUES
+       (@id, @name, @amount_cents, @estimate_mode, @from_account_id, @to_account_id,
+        @category_id, @frequency, @interval_count, @start_date, @end_date, @day_of_month,
+        @created_at, @updated_at, @deleted_at)`
+  ).run(row);
+  return toRule(row);
+}
+
+export function updateRecurringRule(input: UpdateRecurringRuleInput): void {
+  const db = getDb();
+  const fields: string[] = [];
+  const params: Record<string, unknown> = { id: input.id, updated_at: now() };
+  const map: Array<[keyof UpdateRecurringRuleInput, string]> = [
+    ["name", "name"],
+    ["amountCents", "amount_cents"],
+    ["estimateMode", "estimate_mode"],
+    ["fromAccountId", "from_account_id"],
+    ["toAccountId", "to_account_id"],
+    ["categoryId", "category_id"],
+    ["frequency", "frequency"],
+    ["intervalCount", "interval_count"],
+    ["startDate", "start_date"],
+    ["endDate", "end_date"],
+    ["dayOfMonth", "day_of_month"],
+  ];
+  for (const [key, col] of map) {
+    if (input[key] !== undefined) {
+      fields.push(`${col} = @${col}`);
+      params[col] = input[key];
+    }
+  }
+  fields.push("updated_at = @updated_at");
+  db.prepare(`UPDATE recurring_rules SET ${fields.join(", ")} WHERE id = @id`).run(params);
+}
+
+export function deleteRecurringRule(id: string): void {
+  const db = getDb();
+  db.prepare("UPDATE recurring_rules SET deleted_at = ?, updated_at = ? WHERE id = ?").run(
+    now(),
+    now(),
+    id
+  );
 }

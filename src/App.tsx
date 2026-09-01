@@ -7,9 +7,13 @@ import type {
   Category,
   LedgerRow,
   NewAccountInput,
+  NewCategoryInput,
+  NewRecurringRuleInput,
+  RecurringRule,
   NewTransactionInput,
   UpdateAccountInput,
   NewSplitInput,
+  Transaction,
 } from "./shared/types";
 import { displaySign, formatCents } from "./core/money";
 import { ledgerToHtml } from "./core/export/html";
@@ -20,9 +24,15 @@ import { SplitEditorDialog } from "./components/SplitEditorDialog";
 import { NewTransactionDialog } from "./components/NewTransactionDialog";
 import { CategoriesDialog } from "./components/CategoriesDialog";
 import { ConfirmDialog } from "./components/ConfirmDialog";
+import { DedupeDialog } from "./components/DedupeDialog";
+import { resolveDuplicatePairs, type DuplicatePair } from "./core/dedupe";
 import { ImportDialog } from "./components/ImportDialog";
 import { ExportDialog } from "./components/ExportDialog";
+import { ChartsPanel } from "./components/ChartsPanel";
+import { ProjectionPanel } from "./components/ProjectionPanel";
+import { RecurringRulesDialog } from "./components/RecurringRulesDialog";
 import { ContextMenu } from "./components/ContextMenu";
+import type { ContextMenuItem } from "./components/ContextMenu";
 import { ViewAccountDialog } from "./components/ViewAccountDialog";
 import { EditAccountDialog } from "./components/EditAccountDialog";
 
@@ -35,16 +45,41 @@ export function App() {
   const [showAccountDialog, setShowAccountDialog] = useState(false);
   const [showTxDialog, setShowTxDialog] = useState(false);
   const [showCategoriesDialog, setShowCategoriesDialog] = useState(false);
+  // Usage counts per category id (only non-zero). Categories with no usage can be
+  // deleted from the Categories editor. Loaded when the editor opens.
+  const [categoryUsage, setCategoryUsage] = useState<Record<string, number>>({});
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [showExportDialog, setShowExportDialog] = useState(false);
+  const [showCharts, setShowCharts] = useState(false);
+  const [showProjection, setShowProjection] = useState(false);
+  const [showRecurring, setShowRecurring] = useState(false);
+  const [recurringSeed, setRecurringSeed] = useState<Partial<NewRecurringRuleInput> | null>(null);
+  // Right-click context menu over a ledger cell.
+  const [ledgerMenu, setLedgerMenu] = useState<{
+    x: number;
+    y: number;
+    items: ContextMenuItem[];
+  } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [dark, setDark] = useState(false);
   // Persisted ledger column widths (colId -> px), loaded from settings.
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
+  // Persisted forecast (projection) ledger column widths (colKey -> px).
+  const [forecastColumnWidths, setForecastColumnWidths] = useState<Record<string, number>>({});
+  // Width (px) of the accounts sidebar, adjustable via the draggable divider.
+  const [sidebarWidth, setSidebarWidth] = useState<number>(260);
   // Print/PDF font options, kept in a ref for the once-registered print handler.
   const printFontRef = useRef<{ font?: string; size?: number }>({});
   // Transaction id staged for deletion, pending user confirmation.
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  // De-duplication review: confirmed duplicate pairs + the current index, plus a
+  // "scanning…" flag while the (possibly AI-backed) similarity check runs.
+  const [dedupePairs, setDedupePairs] = useState<DuplicatePair[]>([]);
+  const [dedupeIndex, setDedupeIndex] = useState(0);
+  const [dedupeScanning, setDedupeScanning] = useState(false);
+  // When AI is available and responding, we first ask the user whether to use it
+  // for this de-dupe pass. Null = no prompt showing.
+  const [dedupeAskAI, setDedupeAskAI] = useState(false);
   // Right-click account context menu + view/edit account dialogs.
   const [accountMenu, setAccountMenu] = useState<{ x: number; y: number; account: Account } | null>(
     null
@@ -56,6 +91,14 @@ export function App() {
     txId: string;
     signedTotalCents: number;
     initialSplits: NewSplitInput[];
+    readOnly: boolean;
+    fromAccountName?: string;
+  } | null>(null);
+  // A pending category/transfer change on a SPLIT row, awaiting confirmation
+  // (applying it discards the split legs).
+  const [pendingSplitChange, setPendingSplitChange] = useState<{
+    id: string;
+    choice: CategoryChoice;
   } | null>(null);
 
   const selected = useMemo(
@@ -86,6 +129,85 @@ export function App() {
   const refreshLedger = useCallback(async (accountId: string) => {
     setLedger(await window.ledger.getLedger(accountId));
   }, []);
+
+  // Scan the selected account for duplicate transactions and open the review
+  // dialog on the first confirmed pair. `useAI` chooses AI-backed payee matching
+  // vs. the deterministic exact/null fallback.
+  const startDedupeScan = useCallback(async (useAI: boolean) => {
+    const acct = selectedRef.current;
+    if (!acct) return;
+    setDedupeScanning(true);
+    try {
+      const rows = await window.ledger.getLedger(acct.id);
+      const txns = rows
+        .filter((r) => r.kind === "transaction" && r.transaction)
+        .map((r) => r.transaction!);
+      const pairs = await resolveDuplicatePairs(txns, (a, b) =>
+        window.ledger.arePairSimilar(
+          a.payee ?? null,
+          a.memo ?? null,
+          b.payee ?? null,
+          b.memo ?? null,
+          useAI
+        )
+      );
+      if (pairs.length === 0) {
+        setToast("No duplicate transactions found.");
+        return;
+      }
+      setDedupePairs(pairs);
+      setDedupeIndex(0);
+    } finally {
+      setDedupeScanning(false);
+    }
+  }, []);
+
+  // Entry point from the File menu: if AI is configured AND currently responding,
+  // ask the user whether to use it; otherwise scan straight away with the
+  // deterministic fallback (no prompt).
+  const runDedupe = useCallback(async () => {
+    const acct = selectedRef.current;
+    if (!acct) return;
+    setDedupeScanning(true);
+    let available = false;
+    try {
+      available = await window.ledger.isAiAvailable();
+    } finally {
+      setDedupeScanning(false);
+    }
+    if (available) {
+      setDedupeAskAI(true); // show the "Use AI?" prompt; scan starts on choice
+    } else {
+      void startDedupeScan(false);
+    }
+  }, [startDedupeScan]);
+
+  // Delete the chosen duplicate, refresh, and advance to the next pair.
+  const handleDedupeDelete = useCallback(
+    async (id: string) => {
+      await window.ledger.deleteTransaction(id);
+      await refreshAccounts();
+      if (selectedRef.current) await refreshLedger(selectedRef.current.id);
+      setDedupeIndex((i) => i + 1);
+    },
+    [refreshAccounts, refreshLedger]
+  );
+
+  const handleDedupeSkip = useCallback(() => setDedupeIndex((i) => i + 1), []);
+
+  const closeDedupe = useCallback(() => {
+    setDedupePairs([]);
+    setDedupeIndex(0);
+  }, []);
+
+  // When every duplicate pair has been reviewed, end the pass with a summary.
+  useEffect(() => {
+    if (dedupePairs.length > 0 && dedupeIndex >= dedupePairs.length) {
+      setToast("Finished reviewing duplicates.");
+      setDedupePairs([]);
+      setDedupeIndex(0);
+    }
+  }, [dedupeIndex, dedupePairs.length]);
 
   // Refs hold the latest values so the once-registered menu listeners can read them.
   const selectedRef = useRef<Account | null>(null);
@@ -119,7 +241,7 @@ export function App() {
       const ok = await window.ledger.saveTextFile("budgetlion-accounts-categories", json, "json");
       if (ok) {
         setToast(
-          `Exported ${bundle.accounts.length} account(s) and ${bundle.categories.length} category(ies).`
+          `Exported ${bundle.accounts.length} account(s), ${bundle.categories.length} category(ies), and ${bundle.recurringRules?.length ?? 0} recurring rule(s).`
         );
       }
     } catch (e) {
@@ -135,17 +257,19 @@ export function App() {
       const parsed = JSON.parse(opened.text) as {
         accounts?: Account[];
         categories?: Category[];
+        recurringRules?: RecurringRule[];
       };
       const bundle = {
         accounts: parsed.accounts ?? [],
         categories: parsed.categories ?? [],
+        recurringRules: parsed.recurringRules ?? [],
       };
       const counts = await window.ledger.importData(bundle);
       await refreshAccounts();
       await refreshCategories();
       if (selectedRef.current) await refreshLedger(selectedRef.current.id);
       setToast(
-        `Imported ${counts.accounts} account(s) and ${counts.categories} category(ies).`
+        `Imported ${counts.accounts} account(s), ${counts.categories} category(ies), and ${counts.recurringRules} recurring rule(s).`
       );
     } catch (e) {
       setToast(`Import failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -175,6 +299,10 @@ export function App() {
       document.body.classList.toggle("dark", isDark);
       setDark(isDark);
       if (s.ledgerColumnWidths) setColumnWidths(s.ledgerColumnWidths);
+      if (s.forecastColumnWidths) setForecastColumnWidths(s.forecastColumnWidths);
+      if (typeof s.sidebarWidth === "number" && s.sidebarWidth > 0) {
+        setSidebarWidth(s.sidebarWidth);
+      }
       applyFontSettings(s);
     });
     window.ledger.onSettingsChanged((s) => {
@@ -186,6 +314,9 @@ export function App() {
     window.ledger.onMenuNewTransaction(() => {
       if (selectedRef.current) setShowTxDialog(true);
     });
+    window.ledger.onMenuDedupe(() => {
+      if (selectedRef.current) void runDedupe();
+    });
     window.ledger.onMenuImport(() => {
       if (selectedRef.current) setShowImportDialog(true);
     });
@@ -193,6 +324,11 @@ export function App() {
       if (selectedRef.current) setShowExportDialog(true);
     });
     window.ledger.onMenuPrint(() => doPrint());
+    window.ledger.onMenuToggleCharts(() => setShowCharts((v) => !v));
+    window.ledger.onMenuRecurring(() => {
+      setRecurringSeed(null);
+      setShowRecurring(true);
+    });
     window.ledger.onMenuImportData(() => void doImportData());
     window.ledger.onMenuExportData(() => void doExportData());
   }, [refreshAccounts, refreshCategories, doPrint, doImportData, doExportData]);
@@ -202,6 +338,55 @@ export function App() {
     setColumnWidths(widths);
     void window.ledger.saveSettings({ ledgerColumnWidths: widths });
   }, []);
+
+  // Persist forecast ledger column widths to settings.
+  const handleForecastColumnWidthsChange = useCallback((widths: Record<string, number>) => {
+    setForecastColumnWidths(widths);
+    void window.ledger.saveSettings({ forecastColumnWidths: widths });
+  }, []);
+
+  // Draggable divider between the accounts sidebar and the ledger panel.
+  const SIDEBAR_MIN = 160;
+  const SIDEBAR_MAX = 640;
+  const sidebarDrag = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const onSidebarDragMove = useCallback((e: MouseEvent) => {
+    const d = sidebarDrag.current;
+    if (!d) return;
+    const next = Math.min(
+      SIDEBAR_MAX,
+      Math.max(SIDEBAR_MIN, d.startWidth + (e.clientX - d.startX))
+    );
+    setSidebarWidth(next);
+  }, []);
+
+  const onSidebarDragEnd = useCallback(() => {
+    sidebarDrag.current = null;
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    window.removeEventListener("mousemove", onSidebarDragMove);
+    window.removeEventListener("mouseup", onSidebarDragEnd);
+    // Persist the final width.
+    setSidebarWidth((w) => {
+      void window.ledger.saveSettings({ sidebarWidth: w });
+      return w;
+    });
+  }, [onSidebarDragMove]);
+
+  const startSidebarDrag = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      sidebarDrag.current = { startX: e.clientX, startWidth: sidebarWidth };
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+      window.addEventListener("mousemove", onSidebarDragMove);
+      window.addEventListener("mouseup", onSidebarDragEnd);
+    },
+    [sidebarWidth, onSidebarDragMove, onSidebarDragEnd]
+  );
+
+  // Clean up drag listeners if the app unmounts mid-drag.
+  useEffect(() => onSidebarDragEnd, [onSidebarDragEnd]);
 
   useEffect(() => {
     if (selectedId) void refreshLedger(selectedId);
@@ -229,12 +414,46 @@ export function App() {
   );
 
   const addCategory = useCallback(
-    async (name: string) => {
-      await window.ledger.createCategory({ name });
+    async (input: NewCategoryInput) => {
+      await window.ledger.createCategory(input);
       await refreshCategories();
     },
     [refreshCategories]
   );
+
+  const updateCategoryFields = useCallback(
+    async (id: string, patch: Partial<NewCategoryInput>) => {
+      await window.ledger.updateCategory({ id, ...patch });
+      await refreshCategories();
+      // Categories affect ledger category display, so refresh the current ledger too.
+      if (selectedId) await refreshLedger(selectedId);
+    },
+    [refreshCategories, refreshLedger, selectedId]
+  );
+
+  const refreshCategoryUsage = useCallback(async () => {
+    setCategoryUsage(await window.ledger.getCategoryUsage());
+  }, []);
+
+  const deleteCategory = useCallback(
+    async (id: string) => {
+      try {
+        await window.ledger.deleteCategory(id);
+        await refreshCategories();
+        await refreshCategoryUsage();
+        if (selectedId) await refreshLedger(selectedId);
+      } catch (e) {
+        setToast(e instanceof Error ? e.message : "Could not delete category.");
+      }
+    },
+    [refreshCategories, refreshCategoryUsage, refreshLedger, selectedId]
+  );
+
+  // Refresh usage counts each time the Categories editor opens so the trash
+  // buttons reflect the current state.
+  useEffect(() => {
+    if (showCategoriesDialog) void refreshCategoryUsage();
+  }, [showCategoriesDialog, refreshCategoryUsage]);
 
   // Persist edits from the Edit Account dialog.
   const saveAccount = useCallback(
@@ -290,6 +509,42 @@ export function App() {
     [selected, refreshLedger, refreshAccounts]
   );
 
+  // Apply a category/none/transfer change to a transaction. Always clears any
+  // existing split legs (splits:[]) so a former split becomes a single entry.
+  const applyCategoryChange = useCallback(
+    async (id: string, choice: CategoryChoice) => {
+      if (!selected) return;
+      const row = ledger.find((r) => r.transaction?.id === id);
+      const t = row?.transaction;
+      if (!t) return;
+      // Which side is the viewed account on? Keep that; change the other side.
+      const accountIsFrom = t.fromAccountId === selected.id;
+      if (choice.kind === "transfer") {
+        await window.ledger.updateTransaction({
+          id,
+          categoryId: null,
+          fromAccountId: accountIsFrom ? selected.id : choice.accountId,
+          toAccountId: accountIsFrom ? choice.accountId : selected.id,
+          // Discard any split legs when switching to a plain transfer.
+          splits: [],
+        });
+      } else {
+        // Category or none: clear the counterparty side so it's single-entry.
+        await window.ledger.updateTransaction({
+          id,
+          categoryId: choice.kind === "category" ? choice.categoryId : null,
+          fromAccountId: accountIsFrom ? selected.id : null,
+          toAccountId: accountIsFrom ? null : selected.id,
+          // Discard any split legs when switching to a plain category/none.
+          splits: [],
+        });
+      }
+      await refreshLedger(selected.id);
+      await refreshAccounts();
+    },
+    [selected, ledger, refreshLedger, refreshAccounts]
+  );
+
   // The Category column can set a category, clear it, or convert the row into a
   // transfer (choosing another account). We preserve the viewed account's side of
   // the entry (determined by the current from/to) and set/clear the other side.
@@ -302,6 +557,21 @@ export function App() {
       // "Split…" opens the split editor, seeded from the transaction's current state.
       if (choice.kind === "split") {
         const signedTotalCents = row!.signedAmountCents; // stored sign (owning account)
+        // The current account owns the transaction only if it's the transaction's
+        // from/to side. Otherwise it's a transfer-leg counterparty (the TO side),
+        // where splits are view-only — they must be edited from the FROM side.
+        const isOwner = t.fromAccountId === selected.id || t.toAccountId === selected.id;
+        // On the TO side, the money comes FROM the split's owning account: the
+        // transaction's from/to side that isn't the current account.
+        const ownerFromId =
+          t.fromAccountId && t.fromAccountId !== selected.id
+            ? t.fromAccountId
+            : t.toAccountId && t.toAccountId !== selected.id
+              ? t.toAccountId
+              : null;
+        const fromAccountName = ownerFromId
+          ? accounts.find((a) => a.id === ownerFromId)?.name
+          : undefined;
         let initialSplits: NewSplitInput[];
         if (row!.isSplit && row!.splits && row!.splits.length > 0) {
           initialSplits = row!.splits.map((s) => ({
@@ -327,41 +597,53 @@ export function App() {
             },
           ];
         }
-        setSplitEditor({ txId: id, signedTotalCents, initialSplits });
+        setSplitEditor({
+          txId: id,
+          signedTotalCents,
+          initialSplits,
+          readOnly: !isOwner,
+          fromAccountName,
+        });
         return;
       }
-      // Which side is the viewed account on? Keep that; change the other side.
-      const accountIsFrom = t.fromAccountId === selected.id;
-      if (choice.kind === "transfer") {
-        await window.ledger.updateTransaction({
-          id,
-          categoryId: null,
-          fromAccountId: accountIsFrom ? selected.id : choice.accountId,
-          toAccountId: accountIsFrom ? choice.accountId : selected.id,
-        });
-      } else {
-        // Category or none: clear the counterparty side so it's single-entry.
-        await window.ledger.updateTransaction({
-          id,
-          categoryId: choice.kind === "category" ? choice.categoryId : null,
-          fromAccountId: accountIsFrom ? selected.id : null,
-          toAccountId: accountIsFrom ? null : selected.id,
-        });
+      // Changing a SPLIT transaction to a plain category/transfer discards its
+      // split legs. Confirm first; the actual change (and split removal) happens
+      // in applyCategoryChange after the user clicks "Change".
+      if (row!.isSplit) {
+        setPendingSplitChange({ id, choice });
+        return;
       }
-      await refreshLedger(selected.id);
-      await refreshAccounts();
+      await applyCategoryChange(id, choice);
     },
-    [selected, ledger, refreshLedger, refreshAccounts]
+    [selected, ledger, accounts, applyCategoryChange]
   );
 
   // Persist split legs from the split editor.
   const saveSplit = useCallback(
     async (splits: NewSplitInput[]) => {
       if (!selected || !splitEditor) return;
-      await window.ledger.updateTransaction({ id: splitEditor.txId, splits });
-      setSplitEditor(null);
-      await refreshLedger(selected.id);
-      await refreshAccounts();
+      try {
+        // A split is owned by a single account (the one being viewed); its
+        // counterparties live in transfer legs. Normalize the transaction's
+        // from/to to just the owning side so the leg sum matches the stored
+        // owning-signed total (avoids "splits don't sum" when converting a
+        // transfer, which had both from and to set, into a split).
+        const signedTotal = splitEditor.signedTotalCents;
+        const owningFrom = signedTotal < 0 ? selected.id : null;
+        const owningTo = signedTotal < 0 ? null : selected.id;
+        await window.ledger.updateTransaction({
+          id: splitEditor.txId,
+          amountCents: Math.abs(signedTotal),
+          fromAccountId: owningFrom,
+          toAccountId: owningTo,
+          splits,
+        });
+        setSplitEditor(null);
+        await refreshLedger(selected.id);
+        await refreshAccounts();
+      } catch (e) {
+        setToast(e instanceof Error ? e.message : "Could not save split.");
+      }
     },
     [selected, splitEditor, refreshLedger, refreshAccounts]
   );
@@ -370,6 +652,65 @@ export function App() {
   const handleDelete = useCallback((id: string) => {
     setPendingDeleteId(id);
   }, []);
+
+  // Build a recurring-rule seed from a transaction (used by "Add to Recurring").
+  const seedFromTransaction = useCallback(
+    (t: Transaction): Partial<NewRecurringRuleInput> => ({
+      name: t.payee?.trim() || "Recurring",
+      amountCents: t.amountCents,
+      estimateMode: "fixed",
+      fromAccountId: t.fromAccountId,
+      toAccountId: t.toAccountId,
+      categoryId: t.categoryId,
+      frequency: "monthly",
+      intervalCount: 1,
+      startDate: t.date,
+      // Anchor monthly rules to the transaction's day-of-month.
+      dayOfMonth: Number(t.date.slice(8, 10)) || null,
+    }),
+    []
+  );
+
+  // Right-click on a ledger cell: offer Copy <field> and Add to Recurring.
+  const handleCellContext = useCallback(
+    (info: {
+      x: number;
+      y: number;
+      field: string;
+      headerName: string;
+      displayValue: string;
+      transactionId: string;
+      isOpening: boolean;
+    }) => {
+      const items: ContextMenuItem[] = [];
+      if (info.displayValue) {
+        items.push({
+          label: `Copy ${info.headerName || "field"}`,
+          onClick: () => {
+            void navigator.clipboard.writeText(info.displayValue);
+            setToast(`Copied ${info.headerName || "field"}.`);
+          },
+        });
+      }
+      // "Add to Recurring" applies to real transactions only (not the opening row).
+      if (!info.isOpening) {
+        const row = ledger.find((r) => r.transaction?.id === info.transactionId);
+        const t = row?.transaction;
+        if (t) {
+          items.push({
+            label: "Add to Recurring…",
+            onClick: () => {
+              setRecurringSeed(seedFromTransaction(t));
+              setShowRecurring(true);
+            },
+          });
+        }
+      }
+      if (items.length === 0) return;
+      setLedgerMenu({ x: info.x, y: info.y, items });
+    },
+    [ledger, seedFromTransaction]
+  );
 
   const confirmDelete = useCallback(async () => {
     if (!selected || !pendingDeleteId) return;
@@ -393,7 +734,10 @@ export function App() {
   }, [pendingDeleteId, ledger, selected]);
 
   return (
-    <div className="app">
+    <div
+      className="app"
+      style={{ gridTemplateColumns: `${sidebarWidth}px 6px 1fr` }}
+    >
       <aside className="sidebar">
         <h1>BudgetLion</h1>
         {accounts.map((a) => {
@@ -434,11 +778,32 @@ export function App() {
         </div>
       </aside>
 
+      <div
+        className="app-divider"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize accounts panel"
+        title="Drag to resize the accounts panel"
+        onMouseDown={startSidebarDrag}
+      />
+
       <main className="main">
         {selected ? (
           <>
             <div className="toolbar">
               <h2>{selected.name}</h2>
+              <button
+                className={"secondary" + (showCharts ? " active-toggle" : "")}
+                onClick={() => setShowCharts((v) => !v)}
+              >
+                Charts
+              </button>
+              <button
+                className={"secondary" + (showProjection ? " active-toggle" : "")}
+                onClick={() => setShowProjection((v) => !v)}
+              >
+                Forecast
+              </button>
               <button className="secondary" onClick={() => setShowImportDialog(true)}>
                 Import…
               </button>
@@ -450,6 +815,23 @@ export function App() {
               </button>
               <button onClick={() => setShowTxDialog(true)}>+ New Transaction</button>
             </div>
+            {showCharts && (
+              <ChartsPanel
+                account={selected}
+                dark={dark}
+                onClose={() => setShowCharts(false)}
+                onToast={setToast}
+              />
+            )}
+            {showProjection && (
+              <ProjectionPanel
+                account={selected}
+                dark={dark}
+                onClose={() => setShowProjection(false)}
+                initialColumnWidths={forecastColumnWidths}
+                onColumnWidthsChange={handleForecastColumnWidthsChange}
+              />
+            )}
             {ledger.length === 0 ? (
               <div className="empty">No transactions yet. Add one to get started.</div>
             ) : (
@@ -463,6 +845,7 @@ export function App() {
                 onEditOpening={handleEditOpening}
                 onSetCategoryOrTransfer={handleSetCategoryOrTransfer}
                 onDelete={handleDelete}
+                onCellContext={handleCellContext}
                 columnWidths={columnWidths}
                 onColumnWidthsChange={handleColumnWidthsChange}
               />
@@ -491,8 +874,11 @@ export function App() {
       {showCategoriesDialog && (
         <CategoriesDialog
           categories={categories}
-          onCancel={() => setShowCategoriesDialog(false)}
+          usedCategoryIds={new Set(Object.keys(categoryUsage))}
+          onClose={() => setShowCategoriesDialog(false)}
           onAdd={addCategory}
+          onUpdate={updateCategoryFields}
+          onDelete={deleteCategory}
         />
       )}
       {pendingDeleteId && (
@@ -565,10 +951,82 @@ export function App() {
           categories={categories}
           signedTotalCents={splitEditor.signedTotalCents}
           initialSplits={splitEditor.initialSplits}
+          readOnly={splitEditor.readOnly}
+          currentAccountId={selected.id}
+          fromAccountName={splitEditor.fromAccountName}
           onCancel={() => setSplitEditor(null)}
           onSave={saveSplit}
         />
       )}
+      {pendingSplitChange && (
+        <ConfirmDialog
+          title="Change category?"
+          message="This transaction is split. Changing it to a single category or transfer will delete its split legs. Continue?"
+          confirmLabel="Change"
+          cancelLabel="Cancel"
+          onConfirm={() => {
+            const pending = pendingSplitChange;
+            setPendingSplitChange(null);
+            void applyCategoryChange(pending.id, pending.choice);
+          }}
+          onCancel={() => setPendingSplitChange(null)}
+        />
+      )}
+      {showRecurring && (
+        <RecurringRulesDialog
+          accounts={accounts}
+          categories={categories}
+          initialSeed={recurringSeed}
+          onClose={() => {
+            setShowRecurring(false);
+            setRecurringSeed(null);
+          }}
+          onChanged={() => setToast("Recurring rules updated.")}
+        />
+      )}
+      {ledgerMenu && (
+        <ContextMenu
+          x={ledgerMenu.x}
+          y={ledgerMenu.y}
+          items={ledgerMenu.items}
+          onClose={() => setLedgerMenu(null)}
+        />
+      )}
+      {dedupeScanning && <Toast message="Scanning for duplicates…" onDone={() => {}} />}
+      {dedupeAskAI && (
+        <ConfirmDialog
+          title="Use AI for de-duplication?"
+          message="An AI provider is configured and responding. Use it to judge whether payee names refer to the same payee? Choosing “No” uses basic exact-match comparison."
+          confirmLabel="Yes, use AI"
+          cancelLabel="No, basic match"
+          destructive={false}
+          onConfirm={() => {
+            setDedupeAskAI(false);
+            void startDedupeScan(true);
+          }}
+          onCancel={() => {
+            setDedupeAskAI(false);
+            void startDedupeScan(false);
+          }}
+        />
+      )}
+      {dedupePairs.length > 0 &&
+        dedupeIndex < dedupePairs.length &&
+        (() => {
+          const pair = dedupePairs[dedupeIndex];
+          return (
+            <DedupeDialog
+              a={pair.a}
+              b={pair.b}
+              currency={selected?.currency ?? "USD"}
+              accounts={accounts}
+              progressLabel={`${dedupeIndex + 1} of ${dedupePairs.length}`}
+              onDelete={(id) => void handleDedupeDelete(id)}
+              onSkip={handleDedupeSkip}
+              onClose={closeDedupe}
+            />
+          );
+        })()}
     </div>
   );
 }

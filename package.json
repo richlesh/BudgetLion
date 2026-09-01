@@ -111,6 +111,8 @@
     "ag-grid-community": "^33.0.2",
     "ag-grid-react": "^33.0.2",
     "better-sqlite3": "^11.7.0",
+    "echarts": "^5.5.1",
+    "echarts-for-react": "^3.0.2",
     "papaparse": "^5.4.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

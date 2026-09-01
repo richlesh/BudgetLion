@@ -3,6 +3,8 @@ import { AgGridReact } from "ag-grid-react";
 import {
   AllCommunityModule,
   ModuleRegistry,
+  type CellContextMenuEvent,
+  type CellDoubleClickedEvent,
   type CellValueChangedEvent,
   type ColDef,
   type ColumnResizedEvent,
@@ -10,9 +12,11 @@ import {
   type ValueFormatterParams,
   type ValueParserParams,
 } from "ag-grid-community";
-import type { Account, Category, LedgerRow, Transaction } from "../shared/types";
+import type { Account, Category, LedgerRow } from "../shared/types";
 import { displaySign, formatCents, parseCents } from "../core/money";
+import { categoryDisplayName } from "../core/categories";
 import { CategoryAccountEditor, type CategoryChoice } from "./CategoryAccountEditor";
+import { TrashIcon } from "./TrashIcon";
 
 // Register all community modules. v33 is tree-shakeable, so this pulls in the
 // client-side row model, cell editors (text/date/select), and cell styling that
@@ -37,6 +41,17 @@ interface Props {
   // transfer by choosing another account. Handled distinctly from plain edits.
   onSetCategoryOrTransfer: (id: string, choice: CategoryChoice) => void;
   onDelete: (id: string) => void;
+  // Right-click on a cell: report position, the column's header + displayed value,
+  // and the row id so the container can show Copy / Add-to-Recurring actions.
+  onCellContext?: (info: {
+    x: number;
+    y: number;
+    field: string;
+    headerName: string;
+    displayValue: string;
+    transactionId: string;
+    isOpening: boolean;
+  }) => void;
   // Persisted ledger column widths (colId -> px) and a callback to save changes.
   columnWidths?: Record<string, number>;
   onColumnWidthsChange?: (widths: Record<string, number>) => void;
@@ -54,6 +69,9 @@ interface GridRow {
   isTransfer: boolean;
   isOpening: boolean;
   isSplit: boolean;
+  // True when this is a split the current account does NOT own (it appears here
+  // only as a transfer-leg counterparty — the "TO side"). Such rows are view-only.
+  isForeignSplit: boolean;
   splitTooltip: string;
 }
 
@@ -61,30 +79,6 @@ const NO_CATEGORY = "—";
 
 // Sentinel id for the synthetic, read-only opening-balance row pinned to the top.
 const OPENING_ROW_ID = "__opening__";
-
-// Inline trash-can icon (no external icon dependency). Inherits color via
-// currentColor and sizes to the surrounding font/button.
-function TrashIcon() {
-  return (
-    <svg
-      width="15"
-      height="15"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M3 6h18" />
-      <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
-      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-      <path d="M10 11v6" />
-      <path d="M14 11v6" />
-    </svg>
-  );
-}
 
 // Editable guard: true for real transaction rows (i.e. not the opening row).
 function isTxRow(p: { data?: { isOpening?: boolean } }): boolean {
@@ -101,6 +95,7 @@ export function LedgerGrid({
   onEditOpening,
   onSetCategoryOrTransfer,
   onDelete,
+  onCellContext,
   columnWidths,
   onColumnWidthsChange,
 }: Props) {
@@ -110,10 +105,12 @@ export function LedgerGrid({
   // the definitions and reset user column widths (flex columns snap back).
   const onDeleteRef = useRef(onDelete);
   const onSetChoiceRef = useRef(onSetCategoryOrTransfer);
+  const onCellContextRef = useRef(onCellContext);
   const categoriesRef = useRef(categories);
   const otherAccountsRef = useRef<Account[]>([]);
   onDeleteRef.current = onDelete;
   onSetChoiceRef.current = onSetCategoryOrTransfer;
+  onCellContextRef.current = onCellContext;
   categoriesRef.current = categories;
   // For liability accounts (credit card / loan) we flip the sign of displayed
   // amounts and balances so the ledger reads like a statement (charges positive,
@@ -133,26 +130,77 @@ export function LedgerGrid({
   );
   otherAccountsRef.current = otherAccounts;
 
+  // Lookup of ledger rows by transaction id, so the category editor can open with
+  // the row's current selection preselected. Kept in a ref because
+  // cellEditorParams is a stable function that reads current data at edit time.
+  const rowByIdRef = useRef<Map<string, LedgerRow>>(new Map());
+  rowByIdRef.current = useMemo(() => {
+    const m = new Map<string, LedgerRow>();
+    for (const r of rows) if (r.transaction) m.set(r.transaction.id, r);
+    return m;
+  }, [rows]);
+
+  // Encode a ledger row's current category/transfer selection for the editor:
+  //   split -> "split"; transfer -> "acct:<other>"; category -> "cat:<id>"; else "none".
+  const initialEditorValue = useCallback(
+    (rowId: string): string => {
+      const r = rowByIdRef.current.get(rowId);
+      const t = r?.transaction;
+      if (!t) return "none";
+      if (r?.isSplit) return "split";
+      const isTransfer = !!(t.fromAccountId && t.toAccountId);
+      if (isTransfer) {
+        const otherId = t.fromAccountId === account.id ? t.toAccountId : t.fromAccountId;
+        return otherId ? `acct:${otherId}` : "none";
+      }
+      return t.categoryId ? `cat:${t.categoryId}` : "none";
+    },
+    [account.id]
+  );
+
   // Build the display payee for a row. Transfers ignore any stored payee and show
   // the counterparty account with direction relative to the account being viewed:
   //   money leaving this account  -> "To <other account>"
   //   money entering this account -> "From <other account>"
   const payeeFor = useCallback(
-    (t: Transaction): string => {
+    (r: LedgerRow): string => {
+      const t = r.transaction!;
       const isTransfer = !!(t.fromAccountId && t.toAccountId);
-      if (!isTransfer) return t.payee ?? "";
-      if (t.fromAccountId === account.id) {
-        const other = t.toAccountId ? accountNameById.get(t.toAccountId) : undefined;
-        return `To ${other ?? "account"}`;
+      if (isTransfer) {
+        if (t.fromAccountId === account.id) {
+          const other = t.toAccountId ? accountNameById.get(t.toAccountId) : undefined;
+          return `To ${other ?? "account"}`;
+        }
+        const other = t.fromAccountId ? accountNameById.get(t.fromAccountId) : undefined;
+        return `From ${other ?? "account"}`;
       }
-      const other = t.fromAccountId ? accountNameById.get(t.fromAccountId) : undefined;
-      return `From ${other ?? "account"}`;
+      // TO side of a split: the current account is a transfer-leg counterparty
+      // (not the transaction's owner). Like a plain transfer, show the owning
+      // account the money came FROM instead of the stored payee.
+      const isForeignSplit =
+        r.isSplit && t.fromAccountId !== account.id && t.toAccountId !== account.id;
+      if (isForeignSplit) {
+        const ownerId = t.fromAccountId ?? t.toAccountId ?? null;
+        const other = ownerId ? accountNameById.get(ownerId) : undefined;
+        return `From ${other ?? "account"}`;
+      }
+      return t.payee ?? "";
     },
     [account.id, accountNameById]
   );
+
+  // Memo display: for a split, derive from the legs' memos (the transaction-level
+  // memo isn't meaningful for splits); otherwise use the transaction memo.
+  const memoFor = useCallback((r: LedgerRow): string => {
+    if (r.isSplit && r.splits && r.splits.length > 0) {
+      const legMemos = r.splits.map((s) => (s.memo ?? "").trim()).filter((m) => m.length > 0);
+      return legMemos.join(", ");
+    }
+    return r.transaction?.memo ?? "";
+  }, []);
   const nameById = useMemo(() => {
     const m = new Map<string, string>();
-    categories.forEach((c) => m.set(c.id, c.name));
+    categories.forEach((c) => m.set(c.id, categoryDisplayName(c, categories)));
     return m;
   }, [categories]);
 
@@ -174,7 +222,8 @@ export function LedgerGrid({
     [account.id, accountNameById, nameById]
   );
 
-  // Tooltip text listing a split's legs, e.g. "Interest $80.00, → Loan $420.00".
+  // Tooltip text listing a split's legs, one per line, e.g.
+  //   "Interest $80.00\n→ Loan $420.00".
   const splitTooltipFor = useCallback(
     (r: LedgerRow): string => {
       if (!r.isSplit || !r.splits) return "";
@@ -185,7 +234,7 @@ export function LedgerGrid({
             : `→ ${(s.transferAccountId && accountNameById.get(s.transferAccountId)) || "account"}`;
           return `${label} ${formatCents(Math.abs(s.amountCents), account.currency)}`;
         })
-        .join(", ");
+        .join("\n");
     },
     [nameById, accountNameById, account.currency]
   );
@@ -205,6 +254,7 @@ export function LedgerGrid({
             isTransfer: false,
             isOpening: true,
             isSplit: false,
+            isForeignSplit: false,
             splitTooltip: "",
           };
         }
@@ -212,18 +262,22 @@ export function LedgerGrid({
         return {
           id: t.id,
           date: t.date,
-          payee: payeeFor(t),
-          memo: t.memo ?? "",
+          payee: payeeFor(r),
+          memo: memoFor(r),
           categoryName: categoryFor(r),
           signedAmountCents: r.signedAmountCents * sign,
           runningBalanceCents: r.runningBalanceCents * sign,
           isTransfer: !!(t.fromAccountId && t.toAccountId),
           isOpening: false,
           isSplit: !!r.isSplit,
+          // A split the current account doesn't own (appears only via a transfer
+          // leg) is view-only — its amount/fields must be edited from the owner.
+          isForeignSplit:
+            !!r.isSplit && t.fromAccountId !== account.id && t.toAccountId !== account.id,
           splitTooltip: splitTooltipFor(r),
         };
       }),
-    [rows, categoryFor, splitTooltipFor, sign, payeeFor, account.openingBalanceDate, account.createdAt]
+    [rows, categoryFor, splitTooltipFor, sign, payeeFor, memoFor, account.openingBalanceDate, account.createdAt]
   );
 
   const money = useCallback(
@@ -239,17 +293,27 @@ export function LedgerGrid({
       {
         field: "payee",
         headerName: "Payee",
-        // Payee is auto-generated for transfers ("From/To <account>") and therefore
-        // not editable; it stays editable for ordinary transactions.
-        editable: (p) => isTxRow(p) && !p.data?.isTransfer,
+        // Payee is auto-generated for transfers ("From/To <account>") and derived
+        // for splits, so it's not editable in those cases; it stays editable for
+        // ordinary transactions.
+        editable: (p) => isTxRow(p) && !p.data?.isTransfer && !p.data?.isSplit,
         flex: 1,
         minWidth: 130,
       },
-      { field: "memo", headerName: "Memo", editable: isTxRow, flex: 1, minWidth: 130 },
+      {
+        field: "memo",
+        headerName: "Memo",
+        // A split's memo is derived from its legs, so it's read-only for splits.
+        editable: (p) => isTxRow(p) && !p.data?.isSplit,
+        flex: 1,
+        minWidth: 130,
+      },
       {
         field: "categoryName",
         headerName: "Category",
-        editable: isTxRow,
+        // Not editable for a split viewed on its TO side; double-clicking instead
+        // opens the read-only split viewer (see onCellDoubleClicked).
+        editable: (p) => isTxRow(p) && !p.data?.isForeignSplit,
         width: 150,
         // Hovering a split row's Category cell lists the legs.
         tooltipValueGetter: (p) => (p.data?.isSplit ? p.data.splitTooltip : undefined),
@@ -260,6 +324,13 @@ export function LedgerGrid({
         cellEditorParams: (p: { data: GridRow }) => ({
           categories: categoriesRef.current,
           accounts: otherAccountsRef.current,
+          // Preselect the row's current category/transfer/split in the list.
+          initialValue: initialEditorValue(p.data.id),
+          // Row direction from the account's perspective drives which categories
+          // are offered: inflow (+) => income, outflow (−) => expense.
+          direction: (p.data.signedAmountCents >= 0 ? "income" : "expense") as
+            | "income"
+            | "expense",
           onChoose: (choice: CategoryChoice) => onSetChoiceRef.current(p.data.id, choice),
         }),
         cellEditorPopup: true,
@@ -267,8 +338,9 @@ export function LedgerGrid({
       {
         field: "signedAmountCents",
         headerName: "Amount",
-        // Editable for transactions and for the opening-balance row.
-        editable: true,
+        // Editable for transactions and the opening-balance row, but NOT for a
+        // split viewed on its TO side (counterparty) — edit it from the owner.
+        editable: (p: { data?: GridRow }) => !p.data?.isForeignSplit,
         width: 130,
         type: "rightAligned",
         valueFormatter: money,
@@ -384,6 +456,42 @@ export function LedgerGrid({
     [onColumnWidthsChange]
   );
 
+  // Right-click on a cell: translate the AG Grid event into a container callback.
+  // The "value" fields are formatted for money columns so Copy yields what the
+  // user sees ("$1,200.00") rather than raw integer cents.
+  const onCellContextMenu = useCallback(
+    (e: CellContextMenuEvent<GridRow>) => {
+      const cb = onCellContextRef.current;
+      const me = e.event as MouseEvent | undefined;
+      if (!cb || !me || !e.data) return;
+      me.preventDefault();
+      const field = (e.colDef.field as string) ?? "";
+      const isMoney = field === "signedAmountCents" || field === "runningBalanceCents";
+      const displayValue = isMoney
+        ? formatCents(Number(e.value ?? 0), account.currency)
+        : String(e.value ?? "");
+      cb({
+        x: me.clientX,
+        y: me.clientY,
+        field,
+        headerName: (e.colDef.headerName as string) || field,
+        displayValue,
+        transactionId: e.data.id,
+        isOpening: !!e.data.isOpening,
+      });
+    },
+    [account.currency]
+  );
+
+  // Double-clicking the Category of a TO-side (foreign) split can't edit it (the
+  // cell is non-editable); open the read-only split viewer instead.
+  const onCellDoubleClicked = useCallback((e: CellDoubleClickedEvent<GridRow>) => {
+    if (!e.data) return;
+    if (e.colDef.field === "categoryName" && e.data.isForeignSplit) {
+      onSetChoiceRef.current(e.data.id, { kind: "split" });
+    }
+  }, []);
+
   return (
     <div className={"grid-wrap " + (dark ? "ag-theme-alpine-dark" : "ag-theme-alpine")}>
       <AgGridReact<GridRow>
@@ -391,6 +499,9 @@ export function LedgerGrid({
         rowData={rowData}
         columnDefs={columnDefs}
         onCellValueChanged={onCellValueChanged}
+        onCellContextMenu={onCellContextMenu}
+        onCellDoubleClicked={onCellDoubleClicked}
+        preventDefaultOnContextMenu
         onGridReady={onGridReady}
         onColumnResized={onColumnResized}
         getRowId={(p) => p.data.id}

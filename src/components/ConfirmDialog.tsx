@@ -3,6 +3,8 @@ interface Props {
   message: string;
   confirmLabel?: string;
   cancelLabel?: string;
+  /** Style the confirm button as destructive (red). Defaults to true. */
+  destructive?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -16,6 +18,7 @@ export function ConfirmDialog({
   message,
   confirmLabel = "Delete",
   cancelLabel = "Cancel",
+  destructive = true,
   onConfirm,
   onCancel,
 }: Props) {
@@ -28,7 +31,7 @@ export function ConfirmDialog({
           <button className="secondary" onClick={onCancel} autoFocus>
             {cancelLabel}
           </button>
-          <button className="danger" onClick={onConfirm}>
+          <button className={destructive ? "danger" : ""} onClick={onConfirm}>
             {confirmLabel}
           </button>
         </div>

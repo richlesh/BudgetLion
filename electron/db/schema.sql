@@ -26,12 +26,14 @@ CREATE TABLE IF NOT EXISTS accounts (
 );
 
 CREATE TABLE IF NOT EXISTS categories (
-  id         TEXT PRIMARY KEY,
-  name       TEXT NOT NULL,
-  parent_id  TEXT REFERENCES categories(id),
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  deleted_at TEXT
+  id            TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  parent_id     TEXT REFERENCES categories(id),
+  applicability TEXT NOT NULL DEFAULT 'both'  -- 'income' | 'expense' | 'both'
+                  CHECK (applicability IN ('income','expense','both')),
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,
+  deleted_at    TEXT
 );
 
 CREATE TABLE IF NOT EXISTS transactions (
@@ -80,3 +82,28 @@ CREATE TABLE IF NOT EXISTS transaction_splits (
 
 CREATE INDEX IF NOT EXISTS idx_split_tx       ON transaction_splits(transaction_id);
 CREATE INDEX IF NOT EXISTS idx_split_transfer ON transaction_splits(transfer_account_id);
+
+-- Recurring payment rules (M4). Occurrences are PROJECTED (computed), never stored.
+CREATE TABLE IF NOT EXISTS recurring_rules (
+  id              TEXT PRIMARY KEY,
+  name            TEXT NOT NULL,
+  amount_cents    INTEGER,                        -- required for 'fixed'; null for average/last
+  estimate_mode   TEXT NOT NULL DEFAULT 'fixed'   -- 'fixed' | 'average' | 'last'
+                    CHECK (estimate_mode IN ('fixed','average','last')),
+  from_account_id TEXT REFERENCES accounts(id),   -- money leaves here (nullable)
+  to_account_id   TEXT REFERENCES accounts(id),   -- money arrives here (nullable)
+  category_id     TEXT REFERENCES categories(id),
+  frequency       TEXT NOT NULL                   -- 'weekly'|'biweekly'|'monthly'|'yearly'
+                    CHECK (frequency IN ('weekly','biweekly','monthly','yearly')),
+  interval_count  INTEGER NOT NULL DEFAULT 1,     -- every N periods
+  start_date      TEXT NOT NULL,                  -- ISO date
+  end_date        TEXT,                           -- ISO date or null = indefinite
+  day_of_month    INTEGER,                        -- monthly/yearly anchor (1-31)
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL,
+  deleted_at      TEXT,
+  CHECK (from_account_id IS NOT NULL OR to_account_id IS NOT NULL)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rule_from ON recurring_rules(from_account_id);
+CREATE INDEX IF NOT EXISTS idx_rule_to   ON recurring_rules(to_account_id);
