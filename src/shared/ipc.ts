@@ -49,7 +49,7 @@ export interface AppSettings {
   printFontSize?: number;
   // Phase 2: automated price fetching (opt-in, off by default).
   priceFetchEnabled?: boolean;
-  priceSource?: "stooq";
+  priceSource?: "yahoo";
 }
 
 /** Result of attempting to fetch a price for one security symbol. */

@@ -1,11 +1,12 @@
 // Phase 2: automated price fetching for security assets. Main-process only.
 //
 // Opt-in and best-effort: only runs when settings.priceFetchEnabled is true. The
-// default source is Stooq (https://stooq.com), which exposes a no-key CSV quote
-// endpoint. Unresolved symbols (e.g. many mutual funds) fall back to manual entry
-// — the caller simply gets a `resolved: false` result and the UI keeps the last
-// known / manually entered valuation. Symbols are only sent to the provider when
-// the user has enabled fetching, since that transmits holdings to a third party.
+// source is Yahoo Finance's public chart endpoint (query1.finance.yahoo.com),
+// which returns JSON quotes without an API key and covers stocks, ETFs, and many
+// mutual funds. Unresolved symbols fall back to manual entry — the caller gets a
+// `resolved: false` result and the UI keeps the last known / manual valuation.
+// Symbols are only sent to the provider when the user has enabled fetching, since
+// that transmits holdings to a third party.
 
 import { recordValuation } from "../db/repository.js";
 import { loadSettings } from "../settings.js";
@@ -27,34 +28,49 @@ function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+interface YahooChartMeta {
+  symbol?: string;
+  regularMarketPrice?: number;
+  previousClose?: number;
+  chartPreviousClose?: number;
+  currency?: string;
+}
+
 /**
- * Fetch a single quote from Stooq's CSV endpoint. Stooq wants lowercase symbols,
- * and US tickers are suffixed with ".us" (e.g. AAPL -> aapl.us). Returns the last
- * price in cents, or null when the symbol can't be resolved (Stooq returns "N/D").
+ * Fetch the latest price (in cents) for a symbol from Yahoo Finance's chart
+ * endpoint. Returns null when the symbol can't be resolved (Yahoo returns a
+ * chart.error, e.g. "Not Found"). Throws on transport/HTTP errors so the caller
+ * records a per-symbol failure.
  */
-async function fetchStooqCents(symbol: string): Promise<number | null> {
-  const s = symbol.trim().toLowerCase();
-  // Add the .us suffix for bare tickers (no exchange suffix present).
-  const stooqSym = s.includes(".") ? s : `${s}.us`;
-  const url = `https://stooq.com/q/l/?s=${encodeURIComponent(stooqSym)}&f=sd2t2ohlcv&h&e=csv`;
-  const res = await fetch(url, { redirect: "follow" });
+async function fetchYahooCents(symbol: string): Promise<number | null> {
+  const sym = symbol.trim().toUpperCase();
+  const url =
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}` +
+    `?interval=1d&range=1d`;
+  // A browser-like UA avoids occasional bot rejections.
+  const res = await fetch(url, {
+    redirect: "follow",
+    headers: { "User-Agent": "Mozilla/5.0", Accept: "application/json" },
+  });
+  // Yahoo returns 404 for unknown symbols — treat that as "unresolved" (manual
+  // fallback), not a transport error, so the user sees a helpful message.
+  if (res.status === 404) return null;
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const text = await res.text();
-  // CSV: header line then a data line. Close is column index 6 (0-based).
-  const lines = text.trim().split(/\r?\n/);
-  if (lines.length < 2) return null;
-  const cols = lines[1].split(",");
-  const close = cols[6];
-  if (!close || close === "N/D") return null;
-  const dollars = Number(close);
-  if (!Number.isFinite(dollars)) return null;
-  return Math.round(dollars * 100); // cents
+  const data = (await res.json()) as {
+    chart?: { result?: Array<{ meta?: YahooChartMeta }> | null; error?: unknown };
+  };
+  if (data.chart?.error) return null; // unresolved symbol
+  const meta = data.chart?.result?.[0]?.meta;
+  const price =
+    meta?.regularMarketPrice ?? meta?.previousClose ?? meta?.chartPreviousClose;
+  if (price == null || !Number.isFinite(price)) return null;
+  return Math.round(price * 100); // cents
 }
 
 /**
  * Refresh prices for the given security symbols. Gated on settings; when disabled
  * every asset comes back `resolved: false` with an explanatory error and no
- * network call is made. On success, upserts a valuation (source 'stooq') for today.
+ * network call is made. On success, upserts a valuation (source 'yahoo') for today.
  */
 export async function refreshPrices(
   assets: Array<{ assetId: string; symbol: string }>
@@ -69,19 +85,12 @@ export async function refreshPrices(
     }));
   }
 
-  const source = settings.priceSource ?? "stooq";
   const asOfDate = today();
   const results: PriceFetchResult[] = [];
 
   for (const a of assets) {
     try {
-      let priceCents: number | null = null;
-      if (source === "stooq") {
-        priceCents = await fetchStooqCents(a.symbol);
-      } else {
-        throw new Error(`Unknown price source: ${source}`);
-      }
-
+      const priceCents = await fetchYahooCents(a.symbol);
       if (priceCents == null) {
         results.push({
           assetId: a.assetId,
@@ -91,13 +100,12 @@ export async function refreshPrices(
         });
         continue;
       }
-
       // Store as per-unit micro-cents (cents * 1e6), matching asset_valuations.
       recordValuation({
         assetId: a.assetId,
         asOfDate,
         valueMicros: priceCents * MICRO,
-        source: "stooq",
+        source: "yahoo",
       });
       results.push({
         assetId: a.assetId,

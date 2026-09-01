@@ -32,7 +32,7 @@ export interface Settings {
   defaultModels?: Record<string, string>;
   // Phase 2: automated price fetching (opt-in, off by default).
   priceFetchEnabled?: boolean;
-  priceSource?: "stooq";
+  priceSource?: "yahoo";
 }
 
 const SETTINGS_PATH = join(homedir(), ".budgetlion-settings.json");
