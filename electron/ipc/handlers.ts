@@ -25,6 +25,7 @@ import type {
   AssetHolding,
   NewTradeInput,
   SecurityHolding,
+  InvestmentImportRow,
 } from "../../src/shared/types.js";
 import { buildLedger, currentBalance } from "../../src/core/balances.js";
 import {
@@ -112,6 +113,9 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC.recordTrade, (_e, input: NewTradeInput) => repo.recordTrade(input));
   ipcMain.handle(IPC.deleteInvestmentTxn, (_e, id: string) => repo.deleteInvestmentTxn(id));
+  ipcMain.handle(IPC.commitInvestmentImport, (_e, accountId: string, rows: InvestmentImportRow[]) =>
+    repo.commitInvestmentImport(accountId, rows)
+  );
   ipcMain.handle(IPC.listInvestmentTxns, (_e, accountId: string) =>
     repo.investmentTxnsForAccount(accountId)
   );

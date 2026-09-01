@@ -34,6 +34,7 @@ import { SearchResults } from "./components/SearchResults";
 import type { SearchCriteria } from "./core/search";
 import type { AggregateData } from "./shared/types";
 import { ImportDialog } from "./components/ImportDialog";
+import { InvestmentImportDialog } from "./components/InvestmentImportDialog";
 import { ExportDialog } from "./components/ExportDialog";
 import { ChartsPanel } from "./components/ChartsPanel";
 import { ProjectionPanel } from "./components/ProjectionPanel";
@@ -60,6 +61,7 @@ export function App() {
   // deleted from the Categories editor. Loaded when the editor opens.
   const [categoryUsage, setCategoryUsage] = useState<Record<string, number>>({});
   const [showImportDialog, setShowImportDialog] = useState(false);
+  const [showInvestmentImport, setShowInvestmentImport] = useState(false);
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [showCharts, setShowCharts] = useState(false);
   const [showProjection, setShowProjection] = useState(false);
@@ -398,7 +400,10 @@ export function App() {
       if (selectedRef.current) void runDedupe();
     });
     window.ledger.onMenuImport(() => {
-      if (selectedRef.current) setShowImportDialog(true);
+      const acct = selectedRef.current;
+      if (!acct) return;
+      if (acct.type === "investment") setShowInvestmentImport(true);
+      else setShowImportDialog(true);
     });
     window.ledger.onMenuExport(() => {
       if (selectedRef.current) setShowExportDialog(true);
@@ -954,7 +959,14 @@ export function App() {
               >
                 Forecast
               </button>
-              <button className="secondary" onClick={() => setShowImportDialog(true)}>
+              <button
+                className="secondary"
+                onClick={() =>
+                  selected.type === "investment"
+                    ? setShowInvestmentImport(true)
+                    : setShowImportDialog(true)
+                }
+              >
                 Import…
               </button>
               <button className="secondary" onClick={() => setShowExportDialog(true)}>
@@ -1105,6 +1117,23 @@ export function App() {
               count === 0
                 ? "No new transactions imported (all were duplicates)."
                 : `Imported ${count} transaction(s) into ${selected.name}.`
+            );
+          }}
+        />
+      )}
+      {showInvestmentImport && selected && selected.type === "investment" && (
+        <InvestmentImportDialog
+          account={selected}
+          onCancel={() => setShowInvestmentImport(false)}
+          onDone={async (count) => {
+            setShowInvestmentImport(false);
+            if (selected) await refreshLedger(selected.id);
+            await refreshAccounts();
+            setHoldingsReloadKey((k) => k + 1);
+            setToast(
+              count === 0
+                ? "No trades imported."
+                : `Imported ${count} trade(s) into ${selected.name}.`
             );
           }}
         />

@@ -29,6 +29,7 @@ import type {
   InvestmentTransaction,
   NewTradeInput,
   SecurityHolding,
+  InvestmentImportRow,
 } from "./types";
 
 export interface AppSettings {
@@ -126,6 +127,8 @@ export interface LedgerApi {
   listInvestmentTxns(accountId: string): Promise<InvestmentTransaction[]>;
   /** Per-security holdings for an account: shares, cost basis, market value. */
   getSecurityHoldings(accountId: string): Promise<SecurityHolding[]>;
+  /** Import normalized investment-history rows as trades. Returns trade count. */
+  commitInvestmentImport(accountId: string, rows: InvestmentImportRow[]): Promise<number>;
 
   // Phase 2: automated price fetching (opt-in)
   /** Fetch prices for an account's security symbols (or all when omitted). */
@@ -244,6 +247,7 @@ export const IPC = {
   deleteInvestmentTxn: "invtx:delete",
   listInvestmentTxns: "invtx:list",
   getSecurityHoldings: "invtx:holdings",
+  commitInvestmentImport: "invtx:import",
   refreshPrices: "prices:refresh",
   listCategories: "categories:list",
   createCategory: "categories:create",

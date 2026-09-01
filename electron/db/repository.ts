@@ -26,6 +26,7 @@ import type {
   InvestmentTransaction,
   NewTradeInput,
   LedgerTradeInfo,
+  InvestmentImportRow,
 } from "../../src/shared/types.js";
 import { ClearedState } from "../../src/shared/types.js";
 import { MICRO } from "../../src/shared/types.js";
@@ -1494,5 +1495,54 @@ export function deleteInvestmentTxn(id: string): void {
       }
     }
   });
-  run();
 }
+
+/**
+ * Import normalized investment-history rows into an account as trades. Securities
+ * are matched to existing assets by (case-insensitive) name within the account,
+ * or created once per distinct name. Each row becomes a recordTrade(buy|sell).
+ * Returns the number of trades recorded. Runs as a single DB transaction.
+ */
+export function commitInvestmentImport(
+  accountId: string,
+  rows: InvestmentImportRow[]
+): number {
+  const db = getDb();
+  const run = db.transaction((): number => {
+    // Build a name -> assetId map from existing securities in this account.
+    const existing = listAssets(accountId).filter((a) => a.assetClass === "security");
+    const byName = new Map<string, string>();
+    for (const a of existing) byName.set(a.name.toLowerCase(), a.id);
+
+    let count = 0;
+    for (const r of rows) {
+      const key = r.securityName.toLowerCase();
+      let assetId = byName.get(key);
+      if (!assetId) {
+        const created = createAsset({
+          accountId,
+          name: r.securityName,
+          assetClass: "security",
+          // Use the (decoded) name as a provisional symbol; the user can edit it.
+          symbol: r.securityName,
+          quantityMicro: 0,
+        });
+        assetId = created.id;
+        byName.set(key, assetId);
+      }
+      recordTrade({
+        accountId,
+        assetId,
+        date: r.date,
+        action: r.action,
+        units: r.units,
+        pricePerUnitCents: r.pricePerUnitCents,
+        memo: r.rawType,
+      });
+      count++;
+    }
+    return count;
+  });
+  return run();
+}
+

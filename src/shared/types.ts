@@ -298,6 +298,20 @@ export interface SecurityHolding {
 }
 
 /**
+ * One normalized row from an investment-history CSV import, ready to become a
+ * recordTrade call. Prices/units are in human units; the repository converts.
+ */
+export interface InvestmentImportRow {
+  date: string; // ISO date
+  securityName: string;
+  action: InvestmentAction; // 'buy' | 'sell'
+  units: number; // positive share count
+  pricePerUnitCents: number; // per-share price in cents (may be fractional)
+  amountCents: number; // gross cash magnitude (cents)
+  rawType: string; // original transaction-type string
+}
+
+/**
  * Net worth of a single account. For cash-style accounts (checking/savings/
  * credit_card/loan) worth == balanceCents. For investment/asset accounts,
  * worth == cash balance (opening + transactions) + sum of holding values.
