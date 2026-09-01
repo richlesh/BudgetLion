@@ -29,6 +29,14 @@ jobs:
           node-version: 24
           cache: npm
 
+      - name: Use a modern node-gyp for native builds
+        # The node-gyp bundled with better-sqlite3 (v9) fails on current toolchains
+        # (Python 3.12 removed distutils). Install a current node-gyp and make npm
+        # use it for all native rebuilds.
+        run: |
+          npm install -g node-gyp@latest
+          npm config set node_gyp "$(npm root -g)/node-gyp/bin/node-gyp.js"
+
       - name: Install dependencies
         run: npm ci
 
