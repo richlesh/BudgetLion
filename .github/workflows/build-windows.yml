@@ -32,6 +32,13 @@ jobs:
           node-version: 24
           cache: npm
 
+      - name: Setup Python 3.11 for node-gyp
+        # node-gyp imports distutils, removed from Python's stdlib in 3.12+.
+        # Pin 3.11 (which still has distutils) for native builds.
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Use a modern node-gyp for native builds
         # The node-gyp bundled with better-sqlite3 (v9) can't detect current
         # Visual Studio versions (VS 18). Install a current node-gyp and make npm
