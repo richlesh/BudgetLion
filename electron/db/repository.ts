@@ -730,13 +730,6 @@ export function ensureInterestCategories(): {
   return { parentId: parent.id, expenseId: expense.id, incomeId: income.id };
 }
 
-/** Format integer cents as a plain "$1,234.56" string (for memos). */
-function fmtCents(cents: number): string {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(
-    cents / 100
-  );
-}
-
 /**
  * Compute an auto principal/interest split for a loan-payment transaction (a
  * transfer whose counterparty is a loan account). Interest is charged on the
@@ -745,8 +738,7 @@ function fmtCents(cents: number): string {
  * and returns split legs signed from the OWNING (paying) account's perspective:
  *   - interest leg  -> Interest:Expense category
  *   - principal leg -> transfer to the loan account
- * Both legs carry a memo describing the breakdown. Throws if the transaction is
- * not a transfer to a loan account.
+ * Leg memos are left blank. Throws if the transaction is not a transfer to a loan.
  */
 export function buildLoanPaymentSplit(txId: string): LoanPaymentSplitResult {
   const db = getDb();
@@ -783,20 +775,19 @@ export function buildLoanPaymentSplit(txId: string): LoanPaymentSplitResult {
   const { expenseId } = ensureInterestCategories();
 
   // The split is owned by the paying account, where this is an outflow: legs are
-  // NEGATIVE (money leaving) and sum to -payment.
-  const memo = `Principal ${fmtCents(principalCents)} / Interest ${fmtCents(interestCents)}`;
+  // NEGATIVE (money leaving) and sum to -payment. Leg memos are left blank.
   const splits: NewSplitInput[] = [
     // Principal -> transfer to the loan account.
     {
       amountCents: -principalCents,
       transferAccountId: loan.id,
-      memo,
+      memo: null,
     },
     // Interest -> Interest:Expense category.
     {
       amountCents: -interestCents,
       categoryId: expenseId,
-      memo,
+      memo: null,
     },
   ];
 
