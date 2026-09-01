@@ -96,6 +96,9 @@ function runMigrations(instance: Database.Database): void {
   if (invCols.length > 0 && !invCols.some((c) => c.name === "income_txn_id")) {
     instance.exec("ALTER TABLE investment_transactions ADD COLUMN income_txn_id TEXT");
   }
+  if (invCols.length > 0 && !invCols.some((c) => c.name === "fee_txn_id")) {
+    instance.exec("ALTER TABLE investment_transactions ADD COLUMN fee_txn_id TEXT");
+  }
 
   // Widen investment_transactions.action CHECK to allow 'grant'. Like the accounts
   // CHECK, SQLite can't ALTER a constraint, so rebuild the table only when the
@@ -124,6 +127,7 @@ function runMigrations(instance: Database.Database): void {
           cash_cents     INTEGER NOT NULL DEFAULT 0,
           cash_txn_id    TEXT REFERENCES transactions(id),
           income_txn_id  TEXT REFERENCES transactions(id),
+          fee_txn_id     TEXT REFERENCES transactions(id),
           memo           TEXT,
           created_at     TEXT NOT NULL,
           updated_at     TEXT NOT NULL,
@@ -133,11 +137,11 @@ function runMigrations(instance: Database.Database): void {
       instance.exec(`
         INSERT INTO investment_transactions_new
           (id, asset_id, account_id, date, action, quantity_micro, price_micros,
-           fees_cents, cash_cents, cash_txn_id, income_txn_id, memo,
+           fees_cents, cash_cents, cash_txn_id, income_txn_id, fee_txn_id, memo,
            created_at, updated_at, deleted_at)
         SELECT
            id, asset_id, account_id, date, action, quantity_micro, price_micros,
-           fees_cents, cash_cents, cash_txn_id, income_txn_id, memo,
+           fees_cents, cash_cents, cash_txn_id, income_txn_id, fee_txn_id, memo,
            created_at, updated_at, deleted_at
         FROM investment_transactions
       `);
@@ -185,13 +189,14 @@ function runMigrations(instance: Database.Database): void {
             SET deleted_at = @ts, updated_at = @ts
           WHERE deleted_at IS NULL
             -- has at least one linked leg id
-            AND (cash_txn_id IS NOT NULL OR income_txn_id IS NOT NULL)
+            AND (cash_txn_id IS NOT NULL OR income_txn_id IS NOT NULL OR fee_txn_id IS NOT NULL)
             -- and NO leg points to a live (non-deleted) transaction
             AND NOT EXISTS (
               SELECT 1 FROM transactions t
                WHERE t.deleted_at IS NULL
                  AND t.id IN (investment_transactions.cash_txn_id,
-                              investment_transactions.income_txn_id)
+                              investment_transactions.income_txn_id,
+                              investment_transactions.fee_txn_id)
             )`
       )
       .run({ ts });

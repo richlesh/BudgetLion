@@ -163,8 +163,10 @@ export function costBasisFromLots(lots: InvestmentTransaction[]): number {
   let basis = 0; // cents
   for (const l of ordered) {
     if (l.action === "buy" || l.action === "reinvest" || l.action === "grant") {
-      // Cost of acquired shares = shares*price + fees.
-      const cost = Math.round((l.quantityMicro * l.priceMicros) / (MICRO * MICRO)) + l.feesCents;
+      // Cost of acquired shares = shares*price + fees. When fees were expensed to
+      // a category (feeTxnId set, Option A), they are NOT capitalized into basis.
+      const capitalizedFees = l.feeTxnId ? 0 : l.feesCents;
+      const cost = Math.round((l.quantityMicro * l.priceMicros) / (MICRO * MICRO)) + capitalizedFees;
       shares += l.quantityMicro;
       basis += cost;
     } else if (l.action === "sell") {

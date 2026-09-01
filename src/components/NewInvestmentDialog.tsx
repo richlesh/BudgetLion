@@ -47,6 +47,7 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
   const [fees, setFees] = useState("0.00");
   const [cashDiv, setCashDiv] = useState("0.00");
   const [categoryId, setCategoryId] = useState<string>("");
+  const [feeCategoryId, setFeeCategoryId] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -71,6 +72,11 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
   // Income categories for the picker (Salary, Dividend, etc.).
   const incomeCategoryChoices = useMemo(
     () => categoryOptions(categoriesForDirection(categories, "income")),
+    [categories]
+  );
+  // Expense categories for the optional fee picker (Investment:Fees, etc.).
+  const expenseCategoryChoices = useMemo(
+    () => categoryOptions(categoriesForDirection(categories, "expense")),
     [categories]
   );
 
@@ -130,6 +136,7 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
       feesCents,
       memo: null,
       categoryId: isIncome ? categoryId || null : null,
+      feeCategoryId: feeCategoryId || null,
       ...(creatingNew
         ? {
             newAsset: {
@@ -238,6 +245,18 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
         <div className="field">
           <label>Fees / commission</label>
           <input value={fees} onChange={(e) => setFees(e.target.value)} />
+        </div>
+
+        <div className="field">
+          <label>Fee category (optional — expense)</label>
+          <select value={feeCategoryId} onChange={(e) => setFeeCategoryId(e.target.value)}>
+            <option value="">— Add to cost basis (not categorized) —</option>
+            {expenseCategoryChoices.map((o) => (
+              <option key={o.category.id} value={o.category.id}>
+                {o.display}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="field">

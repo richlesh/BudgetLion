@@ -346,20 +346,21 @@ export function deleteTransaction(id: string): void {
     // OTHER leg (so no orphaned cash/income transaction is left behind).
     const lots = db
       .prepare(
-        `SELECT id, cash_txn_id, income_txn_id FROM investment_transactions
-          WHERE deleted_at IS NULL AND (cash_txn_id = ? OR income_txn_id = ?)`
+        `SELECT id, cash_txn_id, income_txn_id, fee_txn_id FROM investment_transactions
+          WHERE deleted_at IS NULL AND (cash_txn_id = ? OR income_txn_id = ? OR fee_txn_id = ?)`
       )
-      .all(id, id) as Array<{
+      .all(id, id, id) as Array<{
       id: string;
       cash_txn_id: string | null;
       income_txn_id: string | null;
+      fee_txn_id: string | null;
     }>;
     for (const lot of lots) {
       db.prepare(
         "UPDATE investment_transactions SET deleted_at = ?, updated_at = ? WHERE id = ?"
       ).run(ts, ts, lot.id);
       // Soft-delete the sibling leg(s) that weren't the one just deleted.
-      for (const legId of [lot.cash_txn_id, lot.income_txn_id]) {
+      for (const legId of [lot.cash_txn_id, lot.income_txn_id, lot.fee_txn_id]) {
         if (legId && legId !== id) {
           db.prepare(
             "UPDATE transactions SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL"
@@ -1178,6 +1179,7 @@ interface InvTxRow {
   cash_cents: number;
   cash_txn_id: string | null;
   income_txn_id: string | null;
+  fee_txn_id: string | null;
   memo: string | null;
   created_at: string;
   updated_at: string;
@@ -1197,6 +1199,7 @@ function toInvTx(r: InvTxRow): InvestmentTransaction {
     cashCents: r.cash_cents,
     cashTxnId: r.cash_txn_id,
     incomeTxnId: r.income_txn_id,
+    feeTxnId: r.fee_txn_id,
     memo: r.memo,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -1332,9 +1335,15 @@ export function recordTrade(input: NewTradeInput): InvestmentTransaction {
     const grossCents = Math.round(Math.abs(units) * (input.pricePerUnitCents ?? 0));
     const cashDividend = input.cashCents ?? 0;
 
+    // Option A: when a fee category is chosen, fees become a SEPARATE categorized
+    // expense leg — excluded from the trade cash leg and from cost basis. When no
+    // category is chosen, fees fold into the trade cash leg and cost basis (default).
+    const expenseFees = !!input.feeCategoryId && feesCents > 0;
+    const tradeFeesCents = expenseFees ? 0 : feesCents;
+
     // The TRADE (purchase/sale) cash leg — money that moves to acquire/dispose of
     // shares (buy/grant negative, sell positive, reinvest zero, div positive).
-    const tradeCents = tradeCashCents(input.action, grossCents, feesCents, cashDividend);
+    const tradeCents = tradeCashCents(input.action, grossCents, tradeFeesCents, cashDividend);
 
     // The INCOME leg — categorized money coming IN, recorded as a separate cash
     // transaction so it shows up as income. grant => grant value (gross);
@@ -1406,8 +1415,16 @@ export function recordTrade(input: NewTradeInput): InvestmentTransaction {
       const category = input.action === "div" ? input.categoryId ?? null : null;
       cashTxnId = insertCashTxn(tradeCents, intoAccount, label, category);
     }
+    // Fee leg (Option A): a separate categorized expense when a fee category is set.
+    let feeTxnId: string | null = null;
+    if (expenseFees) {
+      // Money OUT of the account, categorized to the chosen expense category.
+      feeTxnId = insertCashTxn(-feesCents, false, `${label} fee`, input.feeCategoryId ?? null);
+    }
 
-    // 4. Insert the investment_transactions lot.
+    // 4. Insert the investment_transactions lot. `fees_cents` still records the fee
+    // amount for reference; cost-basis logic excludes it when fee_txn_id is set
+    // (fees were expensed, not capitalized).
     const row: InvTxRow = {
       id: randomUUID(),
       asset_id: assetId,
@@ -1417,9 +1434,10 @@ export function recordTrade(input: NewTradeInput): InvestmentTransaction {
       quantity_micro: quantityMicro,
       price_micros: priceMicros,
       fees_cents: feesCents,
-      cash_cents: cashCents,
+      cash_cents: cashCents + (expenseFees ? -feesCents : 0),
       cash_txn_id: cashTxnId,
       income_txn_id: incomeTxnId,
+      fee_txn_id: feeTxnId,
       memo: input.memo ?? null,
       created_at: ts,
       updated_at: ts,
@@ -1428,10 +1446,10 @@ export function recordTrade(input: NewTradeInput): InvestmentTransaction {
     db.prepare(
       `INSERT INTO investment_transactions
          (id, asset_id, account_id, date, action, quantity_micro, price_micros,
-          fees_cents, cash_cents, cash_txn_id, income_txn_id, memo, created_at, updated_at, deleted_at)
+          fees_cents, cash_cents, cash_txn_id, income_txn_id, fee_txn_id, memo, created_at, updated_at, deleted_at)
        VALUES
          (@id, @asset_id, @account_id, @date, @action, @quantity_micro, @price_micros,
-          @fees_cents, @cash_cents, @cash_txn_id, @income_txn_id, @memo, @created_at, @updated_at, @deleted_at)`
+          @fees_cents, @cash_cents, @cash_txn_id, @income_txn_id, @fee_txn_id, @memo, @created_at, @updated_at, @deleted_at)`
     ).run(row);
 
     // 5. Upsert a valuation at the trade price (buy/sell/reinvest carry a price).
@@ -1459,12 +1477,14 @@ export function deleteInvestmentTxn(id: string): void {
   const ts = now();
   const run = db.transaction(() => {
     const row = db
-      .prepare("SELECT cash_txn_id, income_txn_id FROM investment_transactions WHERE id = ?")
-      .get(id) as { cash_txn_id: string | null; income_txn_id: string | null } | undefined;
+      .prepare("SELECT cash_txn_id, income_txn_id, fee_txn_id FROM investment_transactions WHERE id = ?")
+      .get(id) as
+      | { cash_txn_id: string | null; income_txn_id: string | null; fee_txn_id: string | null }
+      | undefined;
     db.prepare(
       "UPDATE investment_transactions SET deleted_at = ?, updated_at = ? WHERE id = ?"
     ).run(ts, ts, id);
-    for (const txnId of [row?.cash_txn_id, row?.income_txn_id]) {
+    for (const txnId of [row?.cash_txn_id, row?.income_txn_id, row?.fee_txn_id]) {
       if (txnId) {
         db.prepare("UPDATE transactions SET deleted_at = ?, updated_at = ? WHERE id = ?").run(
           ts,

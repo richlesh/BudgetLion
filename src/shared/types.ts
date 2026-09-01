@@ -233,6 +233,7 @@ export interface InvestmentTransaction {
   cashCents: number; // signed cash effect on the account
   cashTxnId: string | null; // linked cash (trade) leg transaction id
   incomeTxnId: string | null; // linked categorized income leg (grant/reinvest)
+  feeTxnId: string | null; // linked categorized fee expense leg (Option A)
   memo: string | null;
   createdAt: string;
   updatedAt: string;
@@ -266,6 +267,13 @@ export interface NewTradeInput {
   pricePerUnitCents?: number;
   /** Commission/fees in cents (>= 0). */
   feesCents?: number;
+  /**
+   * Expense category for the fees. When set, fees are recorded as a SEPARATE
+   * categorized expense transaction (Option A) and are excluded from the trade
+   * cash leg and the cost basis. When omitted, fees are folded into the trade
+   * cash amount and capitalized into cost basis (the default behavior).
+   */
+  feeCategoryId?: string | null;
   /** For 'div': the cash dividend amount in cents (before fees). */
   cashCents?: number;
   /**

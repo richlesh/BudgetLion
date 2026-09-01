@@ -185,6 +185,7 @@ CREATE TABLE IF NOT EXISTS investment_transactions (
   cash_cents     INTEGER NOT NULL DEFAULT 0,    -- signed cash effect on the account (cents)
   cash_txn_id    TEXT REFERENCES transactions(id), -- linked cash (trade) leg (nullable)
   income_txn_id  TEXT REFERENCES transactions(id), -- linked categorized income leg (grant/reinvest, nullable)
+  fee_txn_id     TEXT REFERENCES transactions(id), -- linked categorized fee expense leg (nullable)
   memo           TEXT,
   created_at     TEXT NOT NULL,
   updated_at     TEXT NOT NULL,
