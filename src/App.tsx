@@ -709,10 +709,13 @@ export function App() {
             memo: s.memo,
           }));
         } else {
-          // If this is a transfer whose counterparty is a LOAN account, auto-compute
-          // a principal/interest split (interest on the loan balance as of the
-          // payment date; principal = remainder). Falls back to a single seed leg
-          // if the auto-split can't be built.
+          // If this is a transfer that PAYS DOWN a loan (counterparty is a loan
+          // account AND money is leaving this account toward it), auto-compute a
+          // principal/interest split (interest on the loan balance as of the
+          // payment date; principal = remainder). Works from any source account
+          // (checking, savings, credit card, …) — the key is the transfer targets
+          // a loan. A loan DISBURSEMENT (money coming from the loan) is not split.
+          // Falls back to a single seed leg if the auto-split can't be built.
           const otherId =
             t.fromAccountId && t.toAccountId
               ? t.fromAccountId === selected.id
@@ -720,8 +723,9 @@ export function App() {
                 : t.fromAccountId
               : null;
           const otherAcct = otherId ? accounts.find((a) => a.id === otherId) : undefined;
+          const paysDownLoan = otherAcct?.type === "loan" && signedTotalCents < 0;
           let autoSplits: NewSplitInput[] | null = null;
-          if (isOwner && otherAcct?.type === "loan") {
+          if (isOwner && paysDownLoan) {
             try {
               const result = await window.ledger.buildLoanPaymentSplit(id);
               autoSplits = result.splits;
