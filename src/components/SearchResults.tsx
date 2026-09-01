@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import type { Account, AggregateData, Category, LedgerRow, TransactionSplit } from "../shared/types";
+import type { Account, AggregateData, Category, LedgerRow, Transaction, TransactionSplit } from "../shared/types";
 import { buildLedger } from "../core/balances";
 import { LedgerGrid } from "./LedgerGrid";
 import type { CategoryChoice } from "./CategoryAccountEditor";
@@ -14,6 +14,17 @@ interface Props {
   /** Re-fetch aggregate data (after an edit) so results stay current. */
   onReload: () => void;
   onToast: (msg: string) => void;
+  /**
+   * Open the split editor for a result. Delegated to the app (which owns the
+   * split editor + loan auto-split), scoped to the result's owning account.
+   */
+  onEditSplit: (
+    tx: Transaction,
+    account: Account,
+    isSplit: boolean,
+    splits: TransactionSplit[] | undefined,
+    signedTotalCents: number
+  ) => void;
 }
 
 /**
@@ -23,7 +34,7 @@ interface Props {
  * table and inline-edit mechanisms as the main ledger. Edits are account-scoped
  * and reload the search data on success.
  */
-export function SearchResults({ data, criteria, dark, onClose, onReload, onToast }: Props) {
+export function SearchResults({ data, criteria, dark, onClose, onReload, onToast, onEditSplit }: Props) {
   const matchingIds = useMemo(() => searchTransactionIds(data, criteria), [data, criteria]);
   const groupAccountIds = useMemo(
     () => accountsWithMatches(data, matchingIds),
@@ -88,7 +99,19 @@ export function SearchResults({ data, criteria, dark, onClose, onReload, onToast
   const setCategoryFor = useCallback(
     (account: Account) => async (id: string, choice: CategoryChoice) => {
       if (choice.kind === "split") {
-        onToast("Edit splits from the account's ledger.");
+        // Delegate to the app's split editor (which handles the loan auto-split),
+        // scoped to this result's owning account. Look up the row for its
+        // owning-signed total and current split state.
+        const row = rowsForAccount(account).find((r) => r.transaction?.id === id);
+        const tx = row?.transaction ?? data.transactions.find((t) => t.id === id) ?? null;
+        if (!tx) return;
+        onEditSplit(
+          tx,
+          account,
+          !!row?.isSplit,
+          row?.splits,
+          row?.signedAmountCents ?? 0
+        );
         return;
       }
       const tx = data.transactions.find((t) => t.id === id);
@@ -117,7 +140,7 @@ export function SearchResults({ data, criteria, dark, onClose, onReload, onToast
         onToast(e instanceof Error ? e.message : "Change failed.");
       }
     },
-    [data.transactions, onReload, onToast]
+    [data.transactions, onReload, onToast, rowsForAccount, onEditSplit]
   );
 
   const deleteFor = useCallback(

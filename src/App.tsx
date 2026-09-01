@@ -14,6 +14,7 @@ import type {
   UpdateAccountInput,
   NewSplitInput,
   Transaction,
+  TransactionSplit,
   NewTradeInput,
 } from "./shared/types";
 import { displaySign, formatCents } from "./core/money";
@@ -110,10 +111,13 @@ export function App() {
   // Split editor: transaction id + its signed total on the selected account + seed legs.
   const [splitEditor, setSplitEditor] = useState<{
     txId: string;
+    account: Account; // the account the split is owned by (may differ from `selected`)
     signedTotalCents: number;
     initialSplits: NewSplitInput[];
     readOnly: boolean;
     fromAccountName?: string;
+    /** Called after a successful save (refresh ledger/search as appropriate). */
+    onSaved?: () => void | Promise<void>;
   } | null>(null);
   // A pending category/transfer change on a SPLIT row, awaiting confirmation
   // (applying it discards the split legs).
@@ -673,6 +677,81 @@ export function App() {
     [selected, ledger, refreshLedger, refreshAccounts]
   );
 
+  // Open the split editor for a transaction viewed from `account`, seeding the
+  // legs from existing splits, or (for a loan paydown transfer) an auto-computed
+  // principal/interest split, else a single seed leg. `onSaved` refreshes the
+  // caller's view. Shared by the main ledger and the Search results view.
+  const openSplitEditor = useCallback(
+    async (
+      tx: Transaction,
+      account: Account,
+      isSplit: boolean,
+      existingSplits: TransactionSplit[] | undefined,
+      signedTotalCents: number,
+      onSaved: () => void | Promise<void>
+    ) => {
+      const isOwner = tx.fromAccountId === account.id || tx.toAccountId === account.id;
+      const ownerFromId =
+        tx.fromAccountId && tx.fromAccountId !== account.id
+          ? tx.fromAccountId
+          : tx.toAccountId && tx.toAccountId !== account.id
+            ? tx.toAccountId
+            : null;
+      const fromAccountName = ownerFromId
+        ? accounts.find((a) => a.id === ownerFromId)?.name
+        : undefined;
+
+      let initialSplits: NewSplitInput[];
+      if (isSplit && existingSplits && existingSplits.length > 0) {
+        initialSplits = existingSplits.map((s) => ({
+          amountCents: s.amountCents,
+          categoryId: s.categoryId,
+          transferAccountId: s.transferAccountId,
+          memo: s.memo,
+        }));
+      } else {
+        const otherId =
+          tx.fromAccountId && tx.toAccountId
+            ? tx.fromAccountId === account.id
+              ? tx.toAccountId
+              : tx.fromAccountId
+            : null;
+        const otherAcct = otherId ? accounts.find((a) => a.id === otherId) : undefined;
+        const paysDownLoan = otherAcct?.type === "loan" && signedTotalCents < 0;
+        let autoSplits: NewSplitInput[] | null = null;
+        if (isOwner && paysDownLoan) {
+          try {
+            const result = await window.ledger.buildLoanPaymentSplit(tx.id);
+            autoSplits = result.splits;
+            await refreshCategories();
+          } catch {
+            autoSplits = null;
+          }
+        }
+        initialSplits =
+          autoSplits ??
+          [
+            {
+              amountCents: signedTotalCents,
+              categoryId: otherId ? null : tx.categoryId,
+              transferAccountId: otherId,
+              memo: null,
+            },
+          ];
+      }
+      setSplitEditor({
+        txId: tx.id,
+        account,
+        signedTotalCents,
+        initialSplits,
+        readOnly: !isOwner,
+        fromAccountName,
+        onSaved,
+      });
+    },
+    [accounts, refreshCategories]
+  );
+
   // The Category column can set a category, clear it, or convert the row into a
   // transfer (choosing another account). We preserve the viewed account's side of
   // the entry (determined by the current from/to) and set/clear the other side.
@@ -684,76 +763,17 @@ export function App() {
       if (!t) return;
       // "Split…" opens the split editor, seeded from the transaction's current state.
       if (choice.kind === "split") {
-        const signedTotalCents = row!.signedAmountCents; // stored sign (owning account)
-        // The current account owns the transaction only if it's the transaction's
-        // from/to side. Otherwise it's a transfer-leg counterparty (the TO side),
-        // where splits are view-only — they must be edited from the FROM side.
-        const isOwner = t.fromAccountId === selected.id || t.toAccountId === selected.id;
-        // On the TO side, the money comes FROM the split's owning account: the
-        // transaction's from/to side that isn't the current account.
-        const ownerFromId =
-          t.fromAccountId && t.fromAccountId !== selected.id
-            ? t.fromAccountId
-            : t.toAccountId && t.toAccountId !== selected.id
-              ? t.toAccountId
-              : null;
-        const fromAccountName = ownerFromId
-          ? accounts.find((a) => a.id === ownerFromId)?.name
-          : undefined;
-        let initialSplits: NewSplitInput[];
-        if (row!.isSplit && row!.splits && row!.splits.length > 0) {
-          initialSplits = row!.splits.map((s) => ({
-            amountCents: s.amountCents,
-            categoryId: s.categoryId,
-            transferAccountId: s.transferAccountId,
-            memo: s.memo,
-          }));
-        } else {
-          // If this is a transfer that PAYS DOWN a loan (counterparty is a loan
-          // account AND money is leaving this account toward it), auto-compute a
-          // principal/interest split (interest on the loan balance as of the
-          // payment date; principal = remainder). Works from any source account
-          // (checking, savings, credit card, …) — the key is the transfer targets
-          // a loan. A loan DISBURSEMENT (money coming from the loan) is not split.
-          // Falls back to a single seed leg if the auto-split can't be built.
-          const otherId =
-            t.fromAccountId && t.toAccountId
-              ? t.fromAccountId === selected.id
-                ? t.toAccountId
-                : t.fromAccountId
-              : null;
-          const otherAcct = otherId ? accounts.find((a) => a.id === otherId) : undefined;
-          const paysDownLoan = otherAcct?.type === "loan" && signedTotalCents < 0;
-          let autoSplits: NewSplitInput[] | null = null;
-          if (isOwner && paysDownLoan) {
-            try {
-              const result = await window.ledger.buildLoanPaymentSplit(id);
-              autoSplits = result.splits;
-              // The auto-split may have created the Interest category tree; refresh
-              // so the split editor's category picker shows them.
-              await refreshCategories();
-            } catch {
-              autoSplits = null; // fall back to the manual single-leg seed below
-            }
+        await openSplitEditor(
+          t,
+          selected,
+          !!row!.isSplit,
+          row!.splits,
+          row!.signedAmountCents,
+          async () => {
+            await refreshLedger(selected.id);
+            await refreshAccounts();
           }
-          initialSplits =
-            autoSplits ??
-            [
-              {
-                amountCents: signedTotalCents,
-                categoryId: otherId ? null : t.categoryId,
-                transferAccountId: otherId,
-                memo: null,
-              },
-            ];
-        }
-        setSplitEditor({
-          txId: id,
-          signedTotalCents,
-          initialSplits,
-          readOnly: !isOwner,
-          fromAccountName,
-        });
+        );
         return;
       }
       // Changing a SPLIT transaction to a plain category/transfer discards its
@@ -765,22 +785,22 @@ export function App() {
       }
       await applyCategoryChange(id, choice);
     },
-    [selected, ledger, accounts, applyCategoryChange, refreshCategories]
+    [selected, ledger, accounts, applyCategoryChange, openSplitEditor, refreshLedger, refreshAccounts]
   );
 
   // Persist split legs from the split editor.
   const saveSplit = useCallback(
     async (splits: NewSplitInput[]) => {
-      if (!selected || !splitEditor) return;
+      if (!splitEditor) return;
+      const owner = splitEditor.account;
       try {
-        // A split is owned by a single account (the one being viewed); its
-        // counterparties live in transfer legs. Normalize the transaction's
-        // from/to to just the owning side so the leg sum matches the stored
-        // owning-signed total (avoids "splits don't sum" when converting a
-        // transfer, which had both from and to set, into a split).
+        // A split is owned by a single account; its counterparties live in
+        // transfer legs. Normalize the transaction's from/to to just the owning
+        // side so the leg sum matches the stored owning-signed total (avoids
+        // "splits don't sum" when converting a transfer into a split).
         const signedTotal = splitEditor.signedTotalCents;
-        const owningFrom = signedTotal < 0 ? selected.id : null;
-        const owningTo = signedTotal < 0 ? null : selected.id;
+        const owningFrom = signedTotal < 0 ? owner.id : null;
+        const owningTo = signedTotal < 0 ? null : owner.id;
         await window.ledger.updateTransaction({
           id: splitEditor.txId,
           amountCents: Math.abs(signedTotal),
@@ -788,14 +808,14 @@ export function App() {
           toAccountId: owningTo,
           splits,
         });
+        const onSaved = splitEditor.onSaved;
         setSplitEditor(null);
-        await refreshLedger(selected.id);
-        await refreshAccounts();
+        if (onSaved) await onSaved();
       } catch (e) {
         setToast(e instanceof Error ? e.message : "Could not save split.");
       }
     },
-    [selected, splitEditor, refreshLedger, refreshAccounts]
+    [splitEditor]
   );
 
   // Stage a delete: the grid's trash button asks for confirmation first.
@@ -1197,15 +1217,15 @@ export function App() {
           onSave={saveAccount}
         />
       )}
-      {splitEditor && selected && (
+      {splitEditor && (
         <SplitEditorDialog
-          account={selected}
+          account={splitEditor.account}
           accounts={accounts}
           categories={categories}
           signedTotalCents={splitEditor.signedTotalCents}
           initialSplits={splitEditor.initialSplits}
           readOnly={splitEditor.readOnly}
-          currentAccountId={selected.id}
+          currentAccountId={splitEditor.account.id}
           fromAccountName={splitEditor.fromAccountName}
           onCancel={() => setSplitEditor(null)}
           onSave={saveSplit}
@@ -1300,6 +1320,11 @@ export function App() {
           }}
           onReload={() => void reloadSearch()}
           onToast={setToast}
+          onEditSplit={(tx, account, isSplit, splits, signedTotalCents) =>
+            void openSplitEditor(tx, account, isSplit, splits, signedTotalCents, () =>
+              reloadSearch()
+            )
+          }
         />
       )}
     </div>
