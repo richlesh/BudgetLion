@@ -27,10 +27,12 @@ import type {
   NewTradeInput,
   LedgerTradeInfo,
   InvestmentImportRow,
+  LoanPaymentSplitResult,
 } from "../../src/shared/types.js";
 import { ClearedState } from "../../src/shared/types.js";
 import { MICRO } from "../../src/shared/types.js";
 import { tradeCashCents } from "../../src/core/worth.js";
+import { loanBalanceAsOf, computeLoanPaymentSplit } from "../../src/core/loanSplit.js";
 import { getDb } from "./index.js";
 
 // ---- Row shapes (snake_case, as stored) ----
@@ -692,7 +694,114 @@ export function deleteCategory(id: string): void {
   db.prepare("UPDATE categories SET deleted_at = ?, updated_at = ? WHERE id = ?").run(ts, ts, id);
 }
 
-// ---- Bulk import/export of accounts + categories (JSON data exchange) ----
+/**
+ * Ensure the Interest category tree exists: a parent "Interest" (applicability
+ * 'both') with children "Expense" (expense) and "Income" (income), giving the
+ * display names Interest / Interest:Expense / Interest:Income. Idempotent —
+ * matches existing categories by name (case-insensitive) and only creates the
+ * missing ones. Returns the three category ids.
+ */
+export function ensureInterestCategories(): {
+  parentId: string;
+  expenseId: string;
+  incomeId: string;
+} {
+  const all = listCategories();
+  const findTop = (name: string) =>
+    all.find(
+      (c) => c.parentId == null && c.name.toLowerCase() === name.toLowerCase()
+    );
+  const findChild = (parentId: string, name: string) =>
+    all.find(
+      (c) => c.parentId === parentId && c.name.toLowerCase() === name.toLowerCase()
+    );
+
+  let parent = findTop("Interest");
+  if (!parent) parent = createCategory({ name: "Interest", applicability: "both" });
+
+  let expense = findChild(parent.id, "Expense");
+  if (!expense)
+    expense = createCategory({ name: "Expense", parentId: parent.id, applicability: "expense" });
+
+  let income = findChild(parent.id, "Income");
+  if (!income)
+    income = createCategory({ name: "Income", parentId: parent.id, applicability: "income" });
+
+  return { parentId: parent.id, expenseId: expense.id, incomeId: income.id };
+}
+
+/** Format integer cents as a plain "$1,234.56" string (for memos). */
+function fmtCents(cents: number): string {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(
+    cents / 100
+  );
+}
+
+/**
+ * Compute an auto principal/interest split for a loan-payment transaction (a
+ * transfer whose counterparty is a loan account). Interest is charged on the
+ * loan's balance AS OF the payment date (excluding this payment) at the loan's
+ * monthly rate; principal is the remainder. Ensures the Interest categories exist
+ * and returns split legs signed from the OWNING (paying) account's perspective:
+ *   - interest leg  -> Interest:Expense category
+ *   - principal leg -> transfer to the loan account
+ * Both legs carry a memo describing the breakdown. Throws if the transaction is
+ * not a transfer to a loan account.
+ */
+export function buildLoanPaymentSplit(txId: string): LoanPaymentSplitResult {
+  const db = getDb();
+  const tx = db
+    .prepare("SELECT * FROM transactions WHERE id = ? AND deleted_at IS NULL")
+    .get(txId) as TransactionRow | undefined;
+  if (!tx) throw new Error(`Transaction not found: ${txId}`);
+  if (!tx.from_account_id || !tx.to_account_id) {
+    throw new Error("Auto principal/interest split requires a transfer to a loan account.");
+  }
+
+  const accounts = listAccounts();
+  const from = accounts.find((a) => a.id === tx.from_account_id);
+  const to = accounts.find((a) => a.id === tx.to_account_id);
+  // The loan is whichever side is a loan account; the payer is the other side.
+  const loan = to?.type === "loan" ? to : from?.type === "loan" ? from : null;
+  const payer = loan && loan.id === tx.to_account_id ? from : to;
+  if (!loan || !payer) {
+    throw new Error("Auto principal/interest split requires the counterparty to be a loan account.");
+  }
+
+  // Loan balance as of the payment date, excluding this payment.
+  const loanTxns = transactionsForAccount(loan.id);
+  const splitsByTx = splitsForTransactions(loanTxns.map((t) => t.id));
+  const balanceAsOf = loanBalanceAsOf(loan, loanTxns, splitsByTx, tx.date, txId);
+
+  const payment = tx.amount_cents;
+  const { interestCents, principalCents } = computeLoanPaymentSplit(
+    payment,
+    balanceAsOf,
+    loan.interestRateBps
+  );
+
+  const { expenseId } = ensureInterestCategories();
+
+  // The split is owned by the paying account, where this is an outflow: legs are
+  // NEGATIVE (money leaving) and sum to -payment.
+  const memo = `Principal ${fmtCents(principalCents)} / Interest ${fmtCents(interestCents)}`;
+  const splits: NewSplitInput[] = [
+    // Principal -> transfer to the loan account.
+    {
+      amountCents: -principalCents,
+      transferAccountId: loan.id,
+      memo,
+    },
+    // Interest -> Interest:Expense category.
+    {
+      amountCents: -interestCents,
+      categoryId: expenseId,
+      memo,
+    },
+  ];
+
+  return { interestCents, principalCents, splits };
+}
 
 /** All non-deleted accounts and categories, for JSON export. */
 export function exportData(): {

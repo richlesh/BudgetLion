@@ -30,6 +30,7 @@ import type {
   NewTradeInput,
   SecurityHolding,
   InvestmentImportRow,
+  LoanPaymentSplitResult,
 } from "./types";
 
 export interface AppSettings {
@@ -148,6 +149,8 @@ export interface LedgerApi {
   createTransaction(input: NewTransactionInput): Promise<void>;
   updateTransaction(input: UpdateTransactionInput): Promise<void>;
   deleteTransaction(id: string): Promise<void>;
+  /** Auto-compute a principal/interest split for a loan-payment transfer. */
+  buildLoanPaymentSplit(txId: string): Promise<LoanPaymentSplitResult>;
 
   // Import (M5)
   openImportFile(): Promise<OpenedFile | null>;
@@ -258,6 +261,7 @@ export const IPC = {
   createTransaction: "tx:create",
   updateTransaction: "tx:update",
   deleteTransaction: "tx:delete",
+  buildLoanPaymentSplit: "tx:loan-split",
   openImportFile: "import:open",
   commitImport: "import:commit",
   getAggregateData: "charts:aggregate",

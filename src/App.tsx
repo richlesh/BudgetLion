@@ -709,21 +709,39 @@ export function App() {
             memo: s.memo,
           }));
         } else {
-          // Seed from the single category/transfer as one leg (editor adds a blank second leg).
+          // If this is a transfer whose counterparty is a LOAN account, auto-compute
+          // a principal/interest split (interest on the loan balance as of the
+          // payment date; principal = remainder). Falls back to a single seed leg
+          // if the auto-split can't be built.
           const otherId =
             t.fromAccountId && t.toAccountId
               ? t.fromAccountId === selected.id
                 ? t.toAccountId
                 : t.fromAccountId
               : null;
-          initialSplits = [
-            {
-              amountCents: signedTotalCents,
-              categoryId: otherId ? null : t.categoryId,
-              transferAccountId: otherId,
-              memo: null,
-            },
-          ];
+          const otherAcct = otherId ? accounts.find((a) => a.id === otherId) : undefined;
+          let autoSplits: NewSplitInput[] | null = null;
+          if (isOwner && otherAcct?.type === "loan") {
+            try {
+              const result = await window.ledger.buildLoanPaymentSplit(id);
+              autoSplits = result.splits;
+              // The auto-split may have created the Interest category tree; refresh
+              // so the split editor's category picker shows them.
+              await refreshCategories();
+            } catch {
+              autoSplits = null; // fall back to the manual single-leg seed below
+            }
+          }
+          initialSplits =
+            autoSplits ??
+            [
+              {
+                amountCents: signedTotalCents,
+                categoryId: otherId ? null : t.categoryId,
+                transferAccountId: otherId,
+                memo: null,
+              },
+            ];
         }
         setSplitEditor({
           txId: id,
@@ -743,7 +761,7 @@ export function App() {
       }
       await applyCategoryChange(id, choice);
     },
-    [selected, ledger, accounts, applyCategoryChange]
+    [selected, ledger, accounts, applyCategoryChange, refreshCategories]
   );
 
   // Persist split legs from the split editor.

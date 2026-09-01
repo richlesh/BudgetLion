@@ -96,6 +96,17 @@ export interface NewSplitInput {
   memo?: string | null;
 }
 
+/**
+ * Result of auto-computing a principal/interest split for a loan payment: the
+ * ready-to-save split legs plus the computed magnitudes for display.
+ */
+export interface LoanPaymentSplitResult {
+  interestCents: number;
+  principalCents: number;
+  /** The signed split legs (owning-account perspective), summing to the payment. */
+  splits: NewSplitInput[];
+}
+
 /** Input shape for creating an account (server fills id/timestamps). */
 export interface NewAccountInput {
   name: string;

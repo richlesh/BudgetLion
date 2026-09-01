@@ -180,6 +180,10 @@ export function registerIpcHandlers(): void {
     repo.deleteTransaction(id);
   });
 
+  ipcMain.handle(IPC.buildLoanPaymentSplit, (_e, txId: string) =>
+    repo.buildLoanPaymentSplit(txId)
+  );
+
   // ---- Charts (M3) ----
 
   ipcMain.handle(IPC.getAggregateData, (): AggregateData => {

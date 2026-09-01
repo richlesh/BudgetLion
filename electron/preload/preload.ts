@@ -62,6 +62,8 @@ const api: LedgerApi = {
   updateTransaction: (input: UpdateTransactionInput) =>
     ipcRenderer.invoke(IPC.updateTransaction, input),
   deleteTransaction: (id: string) => ipcRenderer.invoke(IPC.deleteTransaction, id),
+  buildLoanPaymentSplit: (txId: string) =>
+    ipcRenderer.invoke(IPC.buildLoanPaymentSplit, txId),
 
   // Import (M5)
   openImportFile: (): Promise<OpenedFile | null> => ipcRenderer.invoke(IPC.openImportFile),
