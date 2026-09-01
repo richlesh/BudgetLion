@@ -26,6 +26,9 @@ import type {
   NewValuationInput,
   AssetHolding,
   AccountWorth,
+  InvestmentTransaction,
+  NewTradeInput,
+  SecurityHolding,
 } from "./types";
 
 export interface AppSettings {
@@ -44,6 +47,19 @@ export interface AppSettings {
   ledgerFontSize?: number;
   printFont?: string;
   printFontSize?: number;
+  // Phase 2: automated price fetching (opt-in, off by default).
+  priceFetchEnabled?: boolean;
+  priceSource?: "stooq";
+}
+
+/** Result of attempting to fetch a price for one security symbol. */
+export interface PriceFetchResult {
+  assetId: string;
+  symbol: string;
+  resolved: boolean;
+  priceCents?: number;
+  asOfDate?: string;
+  error?: string;
 }
 
 /** Result of the main-process file open used by the Import dialog. */
@@ -100,6 +116,20 @@ export interface LedgerApi {
   deleteValuation(id: string): Promise<void>;
   /** Assets of an account plus their computed current holding values. */
   getHoldings(accountId: string): Promise<AssetHolding[]>;
+
+  // Investment transactions (Option A)
+  /** Record a buy/sell/dividend/reinvest atomically (creates linked cash txn). */
+  recordTrade(input: NewTradeInput): Promise<InvestmentTransaction>;
+  /** Soft-delete an investment transaction and its linked cash transaction. */
+  deleteInvestmentTxn(id: string): Promise<void>;
+  /** Investment transactions for an account. */
+  listInvestmentTxns(accountId: string): Promise<InvestmentTransaction[]>;
+  /** Per-security holdings for an account: shares, cost basis, market value. */
+  getSecurityHoldings(accountId: string): Promise<SecurityHolding[]>;
+
+  // Phase 2: automated price fetching (opt-in)
+  /** Fetch prices for an account's security symbols (or all when omitted). */
+  refreshPrices(accountId?: string): Promise<PriceFetchResult[]>;
 
   // Categories
   listCategories(): Promise<Category[]>;
@@ -210,6 +240,11 @@ export const IPC = {
   recordValuation: "assets:valuations:record",
   deleteValuation: "assets:valuations:delete",
   getHoldings: "assets:holdings",
+  recordTrade: "invtx:record",
+  deleteInvestmentTxn: "invtx:delete",
+  listInvestmentTxns: "invtx:list",
+  getSecurityHoldings: "invtx:holdings",
+  refreshPrices: "prices:refresh",
   listCategories: "categories:list",
   createCategory: "categories:create",
   updateCategory: "categories:update",

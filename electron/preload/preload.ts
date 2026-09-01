@@ -17,6 +17,7 @@ import type {
   NewAssetInput,
   UpdateAssetInput,
   NewValuationInput,
+  NewTradeInput,
 } from "../../src/shared/types.js";
 
 const api: LedgerApi = {
@@ -36,6 +37,17 @@ const api: LedgerApi = {
     ipcRenderer.invoke(IPC.recordValuation, input),
   deleteValuation: (id: string) => ipcRenderer.invoke(IPC.deleteValuation, id),
   getHoldings: (accountId: string) => ipcRenderer.invoke(IPC.getHoldings, accountId),
+
+  // Investment transactions (Option A)
+  recordTrade: (input: NewTradeInput) => ipcRenderer.invoke(IPC.recordTrade, input),
+  deleteInvestmentTxn: (id: string) => ipcRenderer.invoke(IPC.deleteInvestmentTxn, id),
+  listInvestmentTxns: (accountId: string) =>
+    ipcRenderer.invoke(IPC.listInvestmentTxns, accountId),
+  getSecurityHoldings: (accountId: string) =>
+    ipcRenderer.invoke(IPC.getSecurityHoldings, accountId),
+
+  // Phase 2: automated price fetching
+  refreshPrices: (accountId?: string) => ipcRenderer.invoke(IPC.refreshPrices, accountId),
   listCategories: () => ipcRenderer.invoke(IPC.listCategories),
   createCategory: (input: NewCategoryInput) => ipcRenderer.invoke(IPC.createCategory, input),
   updateCategory: (input: UpdateCategoryInput) => ipcRenderer.invoke(IPC.updateCategory, input),

@@ -14,6 +14,7 @@ import type {
   UpdateAccountInput,
   NewSplitInput,
   Transaction,
+  NewTradeInput,
 } from "./shared/types";
 import { displaySign, formatCents } from "./core/money";
 import { ledgerToHtml } from "./core/export/html";
@@ -22,6 +23,7 @@ import type { CategoryChoice } from "./components/CategoryAccountEditor";
 import { NewAccountDialog } from "./components/NewAccountDialog";
 import { SplitEditorDialog } from "./components/SplitEditorDialog";
 import { NewTransactionDialog } from "./components/NewTransactionDialog";
+import { NewInvestmentDialog } from "./components/NewInvestmentDialog";
 import { CategoriesDialog } from "./components/CategoriesDialog";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { DedupeDialog } from "./components/DedupeDialog";
@@ -513,6 +515,18 @@ export function App() {
     [selectedId, refreshLedger, refreshAccounts]
   );
 
+  // Record an investment trade (buy/sell/dividend/reinvest). Creates the linked
+  // cash transaction in the main process; refresh ledger + balances afterward.
+  const recordTrade = useCallback(
+    async (input: NewTradeInput) => {
+      await window.ledger.recordTrade(input);
+      setShowTxDialog(false);
+      if (selectedId) await refreshLedger(selectedId);
+      await refreshAccounts(); // cash balance + holdings change
+    },
+    [selectedId, refreshLedger, refreshAccounts]
+  );
+
   const addCategory = useCallback(
     async (input: NewCategoryInput) => {
       await window.ledger.createCategory(input);
@@ -989,7 +1003,14 @@ export function App() {
           onCreate={createAccount}
         />
       )}
-      {showTxDialog && selected && (
+      {showTxDialog && selected && selected.type === "investment" && (
+        <NewInvestmentDialog
+          account={selected}
+          onCancel={() => setShowTxDialog(false)}
+          onSubmit={recordTrade}
+        />
+      )}
+      {showTxDialog && selected && selected.type !== "investment" && (
         <NewTransactionDialog
           account={selected}
           accounts={accounts}

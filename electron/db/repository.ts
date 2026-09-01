@@ -23,8 +23,12 @@ import type {
   UpdateAssetInput,
   AssetValuation,
   NewValuationInput,
+  InvestmentTransaction,
+  NewTradeInput,
 } from "../../src/shared/types.js";
 import { ClearedState } from "../../src/shared/types.js";
+import { MICRO } from "../../src/shared/types.js";
+import { tradeCashCents } from "../../src/core/worth.js";
 import { getDb } from "./index.js";
 
 // ---- Row shapes (snake_case, as stored) ----
@@ -1130,4 +1134,227 @@ export function deleteValuation(id: string): void {
     ts,
     id
   );
+}
+
+// ---- Investment transactions (Option A) ----
+
+interface InvTxRow {
+  id: string;
+  asset_id: string;
+  account_id: string;
+  date: string;
+  action: string;
+  quantity_micro: number;
+  price_micros: number;
+  fees_cents: number;
+  cash_cents: number;
+  cash_txn_id: string | null;
+  memo: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+function toInvTx(r: InvTxRow): InvestmentTransaction {
+  return {
+    id: r.id,
+    assetId: r.asset_id,
+    accountId: r.account_id,
+    date: r.date,
+    action: r.action as InvestmentTransaction["action"],
+    quantityMicro: r.quantity_micro,
+    priceMicros: r.price_micros,
+    feesCents: r.fees_cents,
+    cashCents: r.cash_cents,
+    cashTxnId: r.cash_txn_id,
+    memo: r.memo,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    deletedAt: r.deleted_at,
+  };
+}
+
+/** Non-deleted investment transactions for one asset (chronological). */
+export function investmentTxnsForAsset(assetId: string): InvestmentTransaction[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      "SELECT * FROM investment_transactions WHERE deleted_at IS NULL AND asset_id = ? ORDER BY date, created_at"
+    )
+    .all(assetId) as InvTxRow[];
+  return rows.map(toInvTx);
+}
+
+/** Non-deleted investment transactions for an account. */
+export function investmentTxnsForAccount(accountId: string): InvestmentTransaction[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      "SELECT * FROM investment_transactions WHERE deleted_at IS NULL AND account_id = ? ORDER BY date, created_at"
+    )
+    .all(accountId) as InvTxRow[];
+  return rows.map(toInvTx);
+}
+
+/** ALL non-deleted investment transactions, grouped by assetId (for worth/holdings). */
+export function allInvestmentTxnsByAsset(): Map<string, InvestmentTransaction[]> {
+  const db = getDb();
+  const rows = db
+    .prepare("SELECT * FROM investment_transactions WHERE deleted_at IS NULL")
+    .all() as InvTxRow[];
+  const out = new Map<string, InvestmentTransaction[]>();
+  for (const r of rows) {
+    const list = out.get(r.asset_id) ?? [];
+    list.push(toInvTx(r));
+    out.set(r.asset_id, list);
+  }
+  return out;
+}
+
+/**
+ * Record a trade (buy/sell/dividend/reinvest) atomically:
+ *  1. resolve or create the asset (inline security creation),
+ *  2. compute signed shares, per-share micro-cents price, and the cash effect,
+ *  3. write a linked cash `transactions` row (except reinvest, which nets to 0),
+ *  4. insert the investment_transactions lot,
+ *  5. upsert an asset_valuations row at the trade price (for buy/sell/reinvest).
+ * All in one DB transaction so shares, cash, and valuation stay consistent.
+ */
+export function recordTrade(input: NewTradeInput): InvestmentTransaction {
+  const db = getDb();
+  const ts = now();
+
+  const run = db.transaction((): InvestmentTransaction => {
+    // 1. Resolve the asset.
+    let assetId = input.assetId ?? null;
+    if (!assetId) {
+      if (!input.newAsset) throw new Error("recordTrade requires assetId or newAsset.");
+      const created = createAsset({
+        accountId: input.accountId,
+        name: input.newAsset.name,
+        assetClass: input.newAsset.assetClass ?? "security",
+        symbol: input.newAsset.symbol,
+        quantityMicro: 0, // securities derive quantity from lots
+      });
+      assetId = created.id;
+    }
+
+    // 2. Compute micro-units, price, gross, and cash effect.
+    const units = input.units ?? 0;
+    const signedUnits = input.action === "sell" ? -Math.abs(units) : Math.abs(units);
+    const quantityMicro = input.action === "div" ? 0 : Math.round(signedUnits * MICRO);
+    // pricePerUnitCents is per-share in cents; store as micro-cents per share.
+    const priceMicros =
+      input.action === "div" ? 0 : Math.round((input.pricePerUnitCents ?? 0) * MICRO);
+    const feesCents = Math.max(0, input.feesCents ?? 0);
+    // Gross value in cents = |units| * pricePerUnitCents.
+    const grossCents = Math.round(Math.abs(units) * (input.pricePerUnitCents ?? 0));
+    const cashDividend = input.cashCents ?? 0;
+    const cashCents = tradeCashCents(input.action, grossCents, feesCents, cashDividend);
+
+    // 3. Linked cash transaction (skip for reinvest: net-zero cash).
+    let cashTxnId: string | null = null;
+    if (cashCents !== 0) {
+      // Positive cash => money into the account (to); negative => out (from).
+      const magnitude = Math.abs(cashCents);
+      const intoAccount = cashCents > 0;
+      const label =
+        input.action === "buy"
+          ? "Buy"
+          : input.action === "sell"
+            ? "Sell"
+            : input.action === "div"
+              ? "Dividend"
+              : "Reinvest";
+      const cashRow: TransactionRow = {
+        id: randomUUID(),
+        date: input.date,
+        payee: label,
+        memo: input.memo ?? null,
+        amount_cents: magnitude,
+        from_account_id: intoAccount ? null : input.accountId,
+        to_account_id: intoAccount ? input.accountId : null,
+        category_id: null,
+        cleared: ClearedState.Uncleared,
+        import_id: null,
+        created_at: ts,
+        updated_at: ts,
+        deleted_at: null,
+      };
+      db.prepare(
+        `INSERT INTO transactions
+           (id, date, payee, memo, amount_cents, from_account_id, to_account_id,
+            category_id, cleared, import_id, created_at, updated_at, deleted_at)
+         VALUES
+           (@id, @date, @payee, @memo, @amount_cents, @from_account_id, @to_account_id,
+            @category_id, @cleared, @import_id, @created_at, @updated_at, @deleted_at)`
+      ).run(cashRow);
+      cashTxnId = cashRow.id;
+    }
+
+    // 4. Insert the investment_transactions lot.
+    const row: InvTxRow = {
+      id: randomUUID(),
+      asset_id: assetId,
+      account_id: input.accountId,
+      date: input.date,
+      action: input.action,
+      quantity_micro: quantityMicro,
+      price_micros: priceMicros,
+      fees_cents: feesCents,
+      cash_cents: cashCents,
+      cash_txn_id: cashTxnId,
+      memo: input.memo ?? null,
+      created_at: ts,
+      updated_at: ts,
+      deleted_at: null,
+    };
+    db.prepare(
+      `INSERT INTO investment_transactions
+         (id, asset_id, account_id, date, action, quantity_micro, price_micros,
+          fees_cents, cash_cents, cash_txn_id, memo, created_at, updated_at, deleted_at)
+       VALUES
+         (@id, @asset_id, @account_id, @date, @action, @quantity_micro, @price_micros,
+          @fees_cents, @cash_cents, @cash_txn_id, @memo, @created_at, @updated_at, @deleted_at)`
+    ).run(row);
+
+    // 5. Upsert a valuation at the trade price (buy/sell/reinvest carry a price).
+    if (priceMicros > 0) {
+      recordValuation({
+        assetId,
+        asOfDate: input.date,
+        valueMicros: priceMicros,
+        source: "trade",
+      });
+    }
+
+    return toInvTx(row);
+  });
+
+  return run();
+}
+
+/**
+ * Soft-delete an investment transaction and its linked cash transaction (if any),
+ * so shares and cash stay consistent.
+ */
+export function deleteInvestmentTxn(id: string): void {
+  const db = getDb();
+  const ts = now();
+  const run = db.transaction(() => {
+    const row = db
+      .prepare("SELECT cash_txn_id FROM investment_transactions WHERE id = ?")
+      .get(id) as { cash_txn_id: string | null } | undefined;
+    db.prepare(
+      "UPDATE investment_transactions SET deleted_at = ?, updated_at = ? WHERE id = ?"
+    ).run(ts, ts, id);
+    if (row?.cash_txn_id) {
+      db.prepare("UPDATE transactions SET deleted_at = ?, updated_at = ? WHERE id = ?").run(
+        ts,
+        ts,
+        row.cash_txn_id
+      );
+    }
+  });
+  run();
 }

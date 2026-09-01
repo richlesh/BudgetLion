@@ -154,3 +154,42 @@ CREATE TABLE IF NOT EXISTS asset_valuations (
 );
 
 CREATE INDEX IF NOT EXISTS idx_valuation_asset ON asset_valuations(asset_id, as_of_date);
+
+-- Investment transactions (Option A): buy/sell/dividend/reinvest lots that change
+-- an asset's share count and/or move cash. Holdings share counts for security-class
+-- assets are COMPUTED as the signed sum of quantity_micro across these rows (never
+-- stored), consistent with BudgetLion's "balances are computed" principle.
+--
+--   action     effect on shares         cash movement (via linked cash txn)
+--   ------     ----------------         -----------------------------------
+--   buy        + quantity_micro         cash OUT  = shares*price + fees
+--   sell       - quantity_micro         cash IN   = shares*price - fees
+--   div        0 (cash dividend)        cash IN   = cash_cents - fees
+--   reinvest   + quantity_micro         0 net (dividend immediately buys shares)
+--
+-- price_micros is per-share in MICRO-CENTS (dollars*100*1e6), same scale as
+-- asset_valuations.value_micros. fees_cents and cash_cents are integer cents.
+-- cash_txn_id links to the transactions row that carries the cash leg (nullable
+-- for reinvest, which nets to zero cash). Each investment transaction records a
+-- valuation implicitly at its price (repository upserts asset_valuations).
+CREATE TABLE IF NOT EXISTS investment_transactions (
+  id             TEXT PRIMARY KEY,
+  asset_id       TEXT NOT NULL REFERENCES assets(id),
+  account_id     TEXT NOT NULL REFERENCES accounts(id),
+  date           TEXT NOT NULL,                 -- ISO 8601 date
+  action         TEXT NOT NULL                  -- 'buy'|'sell'|'div'|'reinvest'
+                   CHECK (action IN ('buy','sell','div','reinvest')),
+  quantity_micro INTEGER NOT NULL DEFAULT 0,    -- shares x1e6, signed (buy/reinvest +, sell -)
+  price_micros   INTEGER NOT NULL DEFAULT 0,    -- per-share micro-cents (0 for cash div)
+  fees_cents     INTEGER NOT NULL DEFAULT 0,    -- commission/fees in cents (>=0)
+  cash_cents     INTEGER NOT NULL DEFAULT 0,    -- signed cash effect on the account (cents)
+  cash_txn_id    TEXT REFERENCES transactions(id), -- linked cash leg (nullable)
+  memo           TEXT,
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL,
+  deleted_at     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_invtx_asset   ON investment_transactions(asset_id, date);
+CREATE INDEX IF NOT EXISTS idx_invtx_account ON investment_transactions(account_id, date);
+CREATE INDEX IF NOT EXISTS idx_invtx_cash    ON investment_transactions(cash_txn_id);

@@ -212,6 +212,69 @@ export interface AssetHolding {
   valueCents: number;
 }
 
+/** Kind of investment transaction (Option A lots). */
+export type InvestmentAction = "buy" | "sell" | "div" | "reinvest";
+
+/**
+ * An investment transaction (lot). Changes an asset's share count and/or moves
+ * cash. `quantityMicro` is signed shares x1e6 (buy/reinvest +, sell -, div 0);
+ * `priceMicros` is per-share micro-cents; `feesCents` and `cashCents` are cents
+ * (cashCents is the signed effect on the account, computed at creation).
+ */
+export interface InvestmentTransaction {
+  id: string;
+  assetId: string;
+  accountId: string;
+  date: string; // ISO date
+  action: InvestmentAction;
+  quantityMicro: number; // signed shares x1e6
+  priceMicros: number; // per-share micro-cents
+  feesCents: number;
+  cashCents: number; // signed cash effect on the account
+  cashTxnId: string | null; // linked cash leg transaction id
+  memo: string | null;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
+/**
+ * Input for recording a trade. Quantities/prices are given in human units and
+ * converted to micro-units by the repository. For 'div' (cash dividend), pass
+ * `cashCents` (the dividend amount) and 0 shares/price. For buy/sell/reinvest,
+ * pass `units` (shares) and `pricePerUnitCents` (per-share, in cents).
+ */
+export interface NewTradeInput {
+  accountId: string;
+  /** Existing asset to trade. Provide this OR `newAsset` to create one inline. */
+  assetId?: string;
+  /** Inline security creation (used when assetId is not given). */
+  newAsset?: { name: string; symbol: string; assetClass?: AssetClass };
+  date: string;
+  action: InvestmentAction;
+  /** Share count in human units (e.g. 12.5). Ignored/zero for cash 'div'. */
+  units?: number;
+  /** Per-share price in cents (e.g. 8840 = $88.40). Ignored/zero for cash 'div'. */
+  pricePerUnitCents?: number;
+  /** Commission/fees in cents (>= 0). */
+  feesCents?: number;
+  /** For 'div': the cash dividend amount in cents (before fees). */
+  cashCents?: number;
+  memo?: string | null;
+}
+
+/**
+ * Computed holding for a security, derived from its investment-transaction lots:
+ * total shares, average cost basis, and market value at the latest valuation.
+ */
+export interface SecurityHolding {
+  asset: Asset;
+  sharesMicro: number; // net shares x1e6 from all lots
+  costBasisCents: number; // total cost of shares still held (avg-cost method)
+  latestValuation: AssetValuation | null;
+  marketValueCents: number; // sharesMicro * latest price
+}
+
 /**
  * Net worth of a single account. For cash-style accounts (checking/savings/
  * credit_card/loan) worth == balanceCents. For investment/asset accounts,

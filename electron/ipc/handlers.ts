@@ -23,9 +23,16 @@ import type {
   NewValuationInput,
   AccountWorth,
   AssetHolding,
+  NewTradeInput,
+  SecurityHolding,
 } from "../../src/shared/types.js";
 import { buildLedger, currentBalance } from "../../src/core/balances.js";
-import { accountWorth, holdingsForAssets } from "../../src/core/worth.js";
+import {
+  accountWorth,
+  holdingsForAssets,
+  securityHolding,
+} from "../../src/core/worth.js";
+import { refreshPrices } from "../prices/index.js";
 import { validateTransaction } from "../../src/core/validation.js";
 import { rowToTransaction } from "../../src/core/import/index.js";
 import { balanceForecast, projectLedger, addMonthsISO } from "../../src/core/recurring.js";
@@ -70,9 +77,10 @@ export function registerIpcHandlers(): void {
     const splitsByTx = repo.splitsForTransactions(txns.map((t) => t.id));
     const assets = repo.listAssets();
     const valuationsByAsset = repo.allValuationsByAsset();
-    // Group holdings by account id.
+    const lotsByAsset = repo.allInvestmentTxnsByAsset();
+    // Group holdings by account id (share counts derived from lots for securities).
     const holdingsByAccount = new Map<string, AssetHolding[]>();
-    for (const h of holdingsForAssets(assets, valuationsByAsset)) {
+    for (const h of holdingsForAssets(assets, valuationsByAsset, lotsByAsset)) {
       const list = holdingsByAccount.get(h.asset.accountId) ?? [];
       list.push(h);
       holdingsByAccount.set(h.asset.accountId, list);
@@ -96,7 +104,35 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC.getHoldings, (_e, accountId: string): AssetHolding[] => {
     const assets = repo.listAssets(accountId);
     const valuationsByAsset = repo.allValuationsByAsset();
-    return holdingsForAssets(assets, valuationsByAsset);
+    const lotsByAsset = repo.allInvestmentTxnsByAsset();
+    return holdingsForAssets(assets, valuationsByAsset, lotsByAsset);
+  });
+
+  // ---- Investment transactions (Option A) ----
+
+  ipcMain.handle(IPC.recordTrade, (_e, input: NewTradeInput) => repo.recordTrade(input));
+  ipcMain.handle(IPC.deleteInvestmentTxn, (_e, id: string) => repo.deleteInvestmentTxn(id));
+  ipcMain.handle(IPC.listInvestmentTxns, (_e, accountId: string) =>
+    repo.investmentTxnsForAccount(accountId)
+  );
+  // Security holdings for an account: shares, cost basis, market value per security.
+  ipcMain.handle(IPC.getSecurityHoldings, (_e, accountId: string): SecurityHolding[] => {
+    const assets = repo.listAssets(accountId).filter((a) => a.assetClass === "security");
+    const valuationsByAsset = repo.allValuationsByAsset();
+    const lotsByAsset = repo.allInvestmentTxnsByAsset();
+    return assets.map((a) =>
+      securityHolding(a, lotsByAsset.get(a.id) ?? [], valuationsByAsset.get(a.id) ?? [])
+    );
+  });
+
+  // ---- Phase 2: automated price fetching (opt-in) ----
+
+  ipcMain.handle(IPC.refreshPrices, async (_e, accountId?: string) => {
+    // Gather (assetId, symbol) pairs for security assets to price.
+    const assets = repo
+      .listAssets(accountId)
+      .filter((a) => a.assetClass === "security" && a.symbol);
+    return refreshPrices(assets.map((a) => ({ assetId: a.id, symbol: a.symbol as string })));
   });
 
   ipcMain.handle(IPC.listCategories, () => repo.listCategories());
