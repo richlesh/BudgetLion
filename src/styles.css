@@ -725,8 +725,7 @@ button.danger {
 /* Gain/loss (and ledger) amount colors. */
 .amount-pos {
   color: #15803d;
-}
-.amount-neg {
+}.amount-neg {
   color: #dc2626;
 }
 body.dark .amount-pos {
@@ -734,4 +733,10 @@ body.dark .amount-pos {
 }
 body.dark .amount-neg {
   color: #f87171;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 4px 0 12px;
 }

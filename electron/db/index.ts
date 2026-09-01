@@ -87,6 +87,85 @@ function runMigrations(instance: Database.Database): void {
     instance.exec("ALTER TABLE categories ADD COLUMN applicability TEXT NOT NULL DEFAULT 'both'");
   }
 
+  // investment_transactions.income_txn_id: link to the categorized income leg for
+  // grant/reinvest (added after the table's initial release). ALTER ADD COLUMN is
+  // safe here because it's a nullable column with no CHECK/constraint change.
+  const invCols = instance
+    .prepare("PRAGMA table_info(investment_transactions)")
+    .all() as Array<{ name: string }>;
+  if (invCols.length > 0 && !invCols.some((c) => c.name === "income_txn_id")) {
+    instance.exec("ALTER TABLE investment_transactions ADD COLUMN income_txn_id TEXT");
+  }
+
+  // Widen investment_transactions.action CHECK to allow 'grant'. Like the accounts
+  // CHECK, SQLite can't ALTER a constraint, so rebuild the table only when the
+  // stored SQL still has the old (narrow) constraint. FK toggle is OUTSIDE the
+  // transaction (PRAGMA foreign_keys is a no-op inside one).
+  const invSql = (
+    instance
+      .prepare(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'investment_transactions'"
+      )
+      .get() as { sql: string } | undefined
+  )?.sql;
+  if (invSql && !invSql.includes("'grant'")) {
+    instance.pragma("foreign_keys = OFF");
+    const rebuild = instance.transaction(() => {
+      instance.exec(`
+        CREATE TABLE investment_transactions_new (
+          id             TEXT PRIMARY KEY,
+          asset_id       TEXT NOT NULL REFERENCES assets(id),
+          account_id     TEXT NOT NULL REFERENCES accounts(id),
+          date           TEXT NOT NULL,
+          action         TEXT NOT NULL CHECK (action IN ('buy','sell','div','reinvest','grant')),
+          quantity_micro INTEGER NOT NULL DEFAULT 0,
+          price_micros   INTEGER NOT NULL DEFAULT 0,
+          fees_cents     INTEGER NOT NULL DEFAULT 0,
+          cash_cents     INTEGER NOT NULL DEFAULT 0,
+          cash_txn_id    TEXT REFERENCES transactions(id),
+          income_txn_id  TEXT REFERENCES transactions(id),
+          memo           TEXT,
+          created_at     TEXT NOT NULL,
+          updated_at     TEXT NOT NULL,
+          deleted_at     TEXT
+        )
+      `);
+      instance.exec(`
+        INSERT INTO investment_transactions_new
+          (id, asset_id, account_id, date, action, quantity_micro, price_micros,
+           fees_cents, cash_cents, cash_txn_id, income_txn_id, memo,
+           created_at, updated_at, deleted_at)
+        SELECT
+           id, asset_id, account_id, date, action, quantity_micro, price_micros,
+           fees_cents, cash_cents, cash_txn_id, income_txn_id, memo,
+           created_at, updated_at, deleted_at
+        FROM investment_transactions
+      `);
+      instance.exec("DROP TABLE investment_transactions");
+      instance.exec("ALTER TABLE investment_transactions_new RENAME TO investment_transactions");
+      instance.exec(
+        "CREATE INDEX IF NOT EXISTS idx_invtx_asset   ON investment_transactions(asset_id, date)"
+      );
+      instance.exec(
+        "CREATE INDEX IF NOT EXISTS idx_invtx_account ON investment_transactions(account_id, date)"
+      );
+      instance.exec(
+        "CREATE INDEX IF NOT EXISTS idx_invtx_cash    ON investment_transactions(cash_txn_id)"
+      );
+    });
+    try {
+      rebuild();
+      const violations = instance.pragma("foreign_key_check") as unknown[];
+      if (violations.length > 0) {
+        throw new Error(
+          `investment_transactions migration left ${violations.length} foreign-key violation(s)`
+        );
+      }
+    } finally {
+      instance.pragma("foreign_keys = ON");
+    }
+  }
+
   // Widen accounts.type CHECK to allow 'investment' and 'asset' (Phase 1 asset
   // tracking). SQLite cannot ALTER a CHECK constraint, so rebuild the table only
   // when the existing constraint is the old (narrow) one. Detected by reading the

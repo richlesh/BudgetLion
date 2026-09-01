@@ -1149,6 +1149,7 @@ interface InvTxRow {
   fees_cents: number;
   cash_cents: number;
   cash_txn_id: string | null;
+  income_txn_id: string | null;
   memo: string | null;
   created_at: string;
   updated_at: string;
@@ -1167,6 +1168,7 @@ function toInvTx(r: InvTxRow): InvestmentTransaction {
     feesCents: r.fees_cents,
     cashCents: r.cash_cents,
     cashTxnId: r.cash_txn_id,
+    incomeTxnId: r.income_txn_id,
     memo: r.memo,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -1239,9 +1241,10 @@ export function recordTrade(input: NewTradeInput): InvestmentTransaction {
       assetId = created.id;
     }
 
-    // 2. Compute micro-units, price, gross, and cash effect.
+    // 2. Compute micro-units, price, gross, and cash legs.
     const units = input.units ?? 0;
     const signedUnits = input.action === "sell" ? -Math.abs(units) : Math.abs(units);
+    // Buy/sell/reinvest/grant carry shares; a cash 'div' does not.
     const quantityMicro = input.action === "div" ? 0 : Math.round(signedUnits * MICRO);
     // pricePerUnitCents is per-share in cents; store as micro-cents per share.
     const priceMicros =
@@ -1250,31 +1253,37 @@ export function recordTrade(input: NewTradeInput): InvestmentTransaction {
     // Gross value in cents = |units| * pricePerUnitCents.
     const grossCents = Math.round(Math.abs(units) * (input.pricePerUnitCents ?? 0));
     const cashDividend = input.cashCents ?? 0;
-    const cashCents = tradeCashCents(input.action, grossCents, feesCents, cashDividend);
 
-    // 3. Linked cash transaction (skip for reinvest: net-zero cash).
-    let cashTxnId: string | null = null;
-    if (cashCents !== 0) {
-      // Positive cash => money into the account (to); negative => out (from).
-      const magnitude = Math.abs(cashCents);
-      const intoAccount = cashCents > 0;
-      const label =
-        input.action === "buy"
-          ? "Buy"
-          : input.action === "sell"
-            ? "Sell"
-            : input.action === "div"
-              ? "Dividend"
-              : "Reinvest";
+    // The TRADE (purchase/sale) cash leg — money that moves to acquire/dispose of
+    // shares (buy/grant negative, sell positive, reinvest zero, div positive).
+    const tradeCents = tradeCashCents(input.action, grossCents, feesCents, cashDividend);
+
+    // The INCOME leg — categorized money coming IN, recorded as a separate cash
+    // transaction so it shows up as income. grant => grant value (gross);
+    // reinvest => the reinvested dividend (gross). A cash 'div' is itself income,
+    // so it is recorded as one categorized income transaction (tradeCents) and
+    // needs no separate leg here.
+    const incomeCents =
+      input.action === "grant" || input.action === "reinvest" ? grossCents : 0;
+
+    // Net cash effect stored on the lot for reference/reversal.
+    const cashCents = tradeCents + incomeCents;
+
+    const insertCashTxn = (
+      amountCents: number,
+      intoAccount: boolean,
+      payee: string,
+      categoryId: string | null
+    ): string => {
       const cashRow: TransactionRow = {
         id: randomUUID(),
         date: input.date,
-        payee: label,
+        payee,
         memo: input.memo ?? null,
-        amount_cents: magnitude,
+        amount_cents: Math.abs(amountCents),
         from_account_id: intoAccount ? null : input.accountId,
         to_account_id: intoAccount ? input.accountId : null,
-        category_id: null,
+        category_id: categoryId,
         cleared: ClearedState.Uncleared,
         import_id: null,
         created_at: ts,
@@ -1289,7 +1298,35 @@ export function recordTrade(input: NewTradeInput): InvestmentTransaction {
            (@id, @date, @payee, @memo, @amount_cents, @from_account_id, @to_account_id,
             @category_id, @cleared, @import_id, @created_at, @updated_at, @deleted_at)`
       ).run(cashRow);
-      cashTxnId = cashRow.id;
+      return cashRow.id;
+    };
+
+    // 3. Write cash transaction(s). The lot links to the primary (trade) leg;
+    // the income leg (grant/reinvest) is a separate categorized transaction.
+    const label =
+      input.action === "buy"
+        ? "Buy"
+        : input.action === "sell"
+          ? "Sell"
+          : input.action === "div"
+            ? "Dividend"
+            : input.action === "grant"
+              ? "Grant"
+              : "Reinvest";
+
+    let cashTxnId: string | null = null;
+    let incomeTxnId: string | null = null;
+    // Income leg first (grant/reinvest): categorized money IN.
+    if (incomeCents > 0) {
+      const incomeLabel = input.action === "grant" ? "Grant" : "Dividend";
+      incomeTxnId = insertCashTxn(incomeCents, true, incomeLabel, input.categoryId ?? null);
+    }
+    // Trade leg: for a cash 'div', this IS the (categorized) income; otherwise it
+    // is the uncategorized purchase/sale of shares.
+    if (tradeCents !== 0) {
+      const intoAccount = tradeCents > 0;
+      const category = input.action === "div" ? input.categoryId ?? null : null;
+      cashTxnId = insertCashTxn(tradeCents, intoAccount, label, category);
     }
 
     // 4. Insert the investment_transactions lot.
@@ -1304,6 +1341,7 @@ export function recordTrade(input: NewTradeInput): InvestmentTransaction {
       fees_cents: feesCents,
       cash_cents: cashCents,
       cash_txn_id: cashTxnId,
+      income_txn_id: incomeTxnId,
       memo: input.memo ?? null,
       created_at: ts,
       updated_at: ts,
@@ -1312,10 +1350,10 @@ export function recordTrade(input: NewTradeInput): InvestmentTransaction {
     db.prepare(
       `INSERT INTO investment_transactions
          (id, asset_id, account_id, date, action, quantity_micro, price_micros,
-          fees_cents, cash_cents, cash_txn_id, memo, created_at, updated_at, deleted_at)
+          fees_cents, cash_cents, cash_txn_id, income_txn_id, memo, created_at, updated_at, deleted_at)
        VALUES
          (@id, @asset_id, @account_id, @date, @action, @quantity_micro, @price_micros,
-          @fees_cents, @cash_cents, @cash_txn_id, @memo, @created_at, @updated_at, @deleted_at)`
+          @fees_cents, @cash_cents, @cash_txn_id, @income_txn_id, @memo, @created_at, @updated_at, @deleted_at)`
     ).run(row);
 
     // 5. Upsert a valuation at the trade price (buy/sell/reinvest carry a price).
@@ -1343,17 +1381,19 @@ export function deleteInvestmentTxn(id: string): void {
   const ts = now();
   const run = db.transaction(() => {
     const row = db
-      .prepare("SELECT cash_txn_id FROM investment_transactions WHERE id = ?")
-      .get(id) as { cash_txn_id: string | null } | undefined;
+      .prepare("SELECT cash_txn_id, income_txn_id FROM investment_transactions WHERE id = ?")
+      .get(id) as { cash_txn_id: string | null; income_txn_id: string | null } | undefined;
     db.prepare(
       "UPDATE investment_transactions SET deleted_at = ?, updated_at = ? WHERE id = ?"
     ).run(ts, ts, id);
-    if (row?.cash_txn_id) {
-      db.prepare("UPDATE transactions SET deleted_at = ?, updated_at = ? WHERE id = ?").run(
-        ts,
-        ts,
-        row.cash_txn_id
-      );
+    for (const txnId of [row?.cash_txn_id, row?.income_txn_id]) {
+      if (txnId) {
+        db.prepare("UPDATE transactions SET deleted_at = ?, updated_at = ? WHERE id = ?").run(
+          ts,
+          ts,
+          txnId
+        );
+      }
     }
   });
   run();

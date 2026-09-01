@@ -1,10 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
-import type { Account, Asset, InvestmentAction, NewTradeInput } from "../shared/types";
+import type {
+  Account,
+  Asset,
+  Category,
+  InvestmentAction,
+  NewTradeInput,
+} from "../shared/types";
 import { parseCents, formatCents } from "../core/money";
 import { tradeCashCents } from "../core/worth";
+import { categoriesForDirection, categoryOptions } from "../core/categories";
 
 interface Props {
   account: Account; // the investment account we're trading in
+  categories: Category[]; // for the income-category picker (grant/div/reinvest)
   onCancel: () => void;
   onSubmit: (input: NewTradeInput) => void | Promise<void>;
 }
@@ -18,18 +26,19 @@ const ACTIONS: { value: InvestmentAction; label: string }[] = [
   { value: "sell", label: "Sell" },
   { value: "div", label: "Dividend (cash)" },
   { value: "reinvest", label: "Reinvest dividend" },
+  { value: "grant", label: "Grant (salary / RSU)" },
 ];
 
 /**
- * Investment transaction entry: pick Buy/Sell/Dividend/Reinvest, a security
- * (existing or created inline via ticker), shares, per-share price, and fees.
- * The cash amount that will move in/out of the account is computed and shown live.
+ * Investment transaction entry: Buy / Sell / Dividend / Reinvest / Grant, a
+ * security (existing or created inline via ticker), shares, per-share price, and
+ * fees. Income-bearing actions (grant/dividend/reinvest) also take an income
+ * category. The cash amount moving in/out of the account is computed live.
  */
-export function NewInvestmentDialog({ account, onCancel, onSubmit }: Props) {
+export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }: Props) {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [date, setDate] = useState(today());
   const [action, setAction] = useState<InvestmentAction>("buy");
-  // "" = create new inline; otherwise an existing asset id.
   const [assetId, setAssetId] = useState<string>("");
   const [newName, setNewName] = useState("");
   const [newSymbol, setNewSymbol] = useState("");
@@ -37,16 +46,15 @@ export function NewInvestmentDialog({ account, onCancel, onSubmit }: Props) {
   const [price, setPrice] = useState("0.00");
   const [fees, setFees] = useState("0.00");
   const [cashDiv, setCashDiv] = useState("0.00");
+  const [categoryId, setCategoryId] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
 
-  // Load existing securities for this account to populate the picker.
   useEffect(() => {
     let alive = true;
     void window.ledger.listAssets(account.id).then((list) => {
       if (!alive) return;
       const securities = list.filter((a) => a.assetClass === "security");
       setAssets(securities);
-      // Default to the first existing security, else inline-create mode.
       setAssetId(securities[0]?.id ?? "");
     });
     return () => {
@@ -56,9 +64,17 @@ export function NewInvestmentDialog({ account, onCancel, onSubmit }: Props) {
 
   const creatingNew = assetId === "";
   const isCashDiv = action === "div";
-  const needsShares = action !== "div"; // buy/sell/reinvest move shares
+  const needsShares = action !== "div"; // buy/sell/reinvest/grant move shares
+  // Grant, cash dividend, and reinvested dividend are income and can be categorized.
+  const isIncome = action === "grant" || action === "div" || action === "reinvest";
 
-  // Live computed cash effect on the account.
+  // Income categories for the picker (Salary, Dividend, etc.).
+  const incomeCategoryChoices = useMemo(
+    () => categoryOptions(categoriesForDirection(categories, "income")),
+    [categories]
+  );
+
+  // Live computed cash effect on the account (trade leg + income leg).
   const cashCents = useMemo(() => {
     const feesCents = parseCents(fees) ?? 0;
     if (isCashDiv) {
@@ -68,7 +84,9 @@ export function NewInvestmentDialog({ account, onCancel, onSubmit }: Props) {
     const units = Number(shares) || 0;
     const priceCents = parseCents(price) ?? 0;
     const gross = Math.round(Math.abs(units) * priceCents);
-    return tradeCashCents(action, gross, feesCents);
+    const tradeLeg = tradeCashCents(action, gross, feesCents);
+    const incomeLeg = action === "grant" || action === "reinvest" ? gross : 0;
+    return tradeLeg + incomeLeg;
   }, [action, shares, price, fees, cashDiv, isCashDiv]);
 
   const cashLabel =
@@ -76,16 +94,13 @@ export function NewInvestmentDialog({ account, onCancel, onSubmit }: Props) {
       ? `Cash in: ${formatCents(cashCents, account.currency)}`
       : cashCents < 0
         ? `Cash out: ${formatCents(-cashCents, account.currency)}`
-        : "No net cash (reinvested)";
+        : "No net cash change";
 
   function submit() {
     setError(null);
-    // Validate security selection.
-    if (creatingNew) {
-      if (!newSymbol.trim()) {
-        setError("Enter a ticker symbol (or pick an existing security).");
-        return;
-      }
+    if (creatingNew && !newSymbol.trim()) {
+      setError("Enter a ticker symbol (or pick an existing security).");
+      return;
     }
     const feesCents = Math.max(0, parseCents(fees) ?? 0);
 
@@ -114,6 +129,7 @@ export function NewInvestmentDialog({ account, onCancel, onSubmit }: Props) {
       action,
       feesCents,
       memo: null,
+      categoryId: isIncome ? categoryId || null : null,
       ...(creatingNew
         ? {
             newAsset: {
@@ -192,7 +208,7 @@ export function NewInvestmentDialog({ account, onCancel, onSubmit }: Props) {
               <input value={shares} onChange={(e) => setShares(e.target.value)} />
             </div>
             <div className="field">
-              <label>Price per share</label>
+              <label>{action === "grant" ? "Grant price per share" : "Price per share"}</label>
               <input value={price} onChange={(e) => setPrice(e.target.value)} />
             </div>
           </>
@@ -202,6 +218,20 @@ export function NewInvestmentDialog({ account, onCancel, onSubmit }: Props) {
           <div className="field">
             <label>Dividend amount</label>
             <input value={cashDiv} autoFocus onChange={(e) => setCashDiv(e.target.value)} />
+          </div>
+        )}
+
+        {isIncome && (
+          <div className="field">
+            <label>Income category {action === "grant" ? "(e.g. Salary)" : "(e.g. Dividend)"}</label>
+            <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
+              <option value="">— Uncategorized —</option>
+              {incomeCategoryChoices.map((o) => (
+                <option key={o.category.id} value={o.category.id}>
+                  {o.display}
+                </option>
+              ))}
+            </select>
           </div>
         )}
 

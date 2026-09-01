@@ -213,7 +213,7 @@ export interface AssetHolding {
 }
 
 /** Kind of investment transaction (Option A lots). */
-export type InvestmentAction = "buy" | "sell" | "div" | "reinvest";
+export type InvestmentAction = "buy" | "sell" | "div" | "reinvest" | "grant";
 
 /**
  * An investment transaction (lot). Changes an asset's share count and/or moves
@@ -231,7 +231,8 @@ export interface InvestmentTransaction {
   priceMicros: number; // per-share micro-cents
   feesCents: number;
   cashCents: number; // signed cash effect on the account
-  cashTxnId: string | null; // linked cash leg transaction id
+  cashTxnId: string | null; // linked cash (trade) leg transaction id
+  incomeTxnId: string | null; // linked categorized income leg (grant/reinvest)
   memo: string | null;
   createdAt: string;
   updatedAt: string;
@@ -242,7 +243,10 @@ export interface InvestmentTransaction {
  * Input for recording a trade. Quantities/prices are given in human units and
  * converted to micro-units by the repository. For 'div' (cash dividend), pass
  * `cashCents` (the dividend amount) and 0 shares/price. For buy/sell/reinvest,
- * pass `units` (shares) and `pricePerUnitCents` (per-share, in cents).
+ * pass `units` (shares) and `pricePerUnitCents` (per-share, in cents). For 'grant'
+ * (salary/RSU stock grant), pass `units` + `pricePerUnitCents`: the grant value
+ * (units*price) is recorded as categorized income and the shares are acquired at
+ * that cost basis, so net cash change is just -fees.
  */
 export interface NewTradeInput {
   accountId: string;
@@ -260,6 +264,12 @@ export interface NewTradeInput {
   feesCents?: number;
   /** For 'div': the cash dividend amount in cents (before fees). */
   cashCents?: number;
+  /**
+   * Income category for the income leg of grant/div/reinvest (Salary, Dividend,
+   * etc.). Null/omitted leaves the income transaction uncategorized. Ignored for
+   * buy/sell (they carry no income).
+   */
+  categoryId?: string | null;
   memo?: string | null;
 }
 

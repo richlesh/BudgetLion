@@ -52,6 +52,9 @@ export function App() {
   const [showAccountDialog, setShowAccountDialog] = useState(false);
   const [showTxDialog, setShowTxDialog] = useState(false);
   const [holdingsReloadKey, setHoldingsReloadKey] = useState(0);
+  // For investment accounts, which entry form to show: a chooser first, then
+  // either the trade dialog or the regular cash/transfer transaction dialog.
+  const [invTxMode, setInvTxMode] = useState<"choose" | "trade" | "cash">("choose");
   const [showCategoriesDialog, setShowCategoriesDialog] = useState(false);
   // Usage counts per category id (only non-zero). Categories with no usage can be
   // deleted from the Categories editor. Loaded when the editor opens.
@@ -384,7 +387,10 @@ export function App() {
       applyFontSettings(s);
     });
     window.ledger.onMenuNewTransaction(() => {
-      if (selectedRef.current) setShowTxDialog(true);
+      if (selectedRef.current) {
+        setInvTxMode("choose");
+        setShowTxDialog(true);
+      }
     });
     window.ledger.onMenuNewAccount(() => setShowAccountDialog(true));
     window.ledger.onMenuNewCategory(() => setShowCategoriesDialog(true));
@@ -955,7 +961,14 @@ export function App() {
               <button className="secondary" onClick={doPrint}>
                 Print…
               </button>
-              <button onClick={() => setShowTxDialog(true)}>+ New Transaction</button>
+              <button
+                onClick={() => {
+                  setInvTxMode("choose");
+                  setShowTxDialog(true);
+                }}
+              >
+                + New Transaction
+              </button>
             </div>
             {selected.type === "investment" && (
               <HoldingsPanel account={selected} reloadKey={holdingsReloadKey} />
@@ -1009,24 +1022,46 @@ export function App() {
           onCreate={createAccount}
         />
       )}
-      {showTxDialog && selected && selected.type === "investment" && (
+      {showTxDialog && selected && selected.type === "investment" && invTxMode === "choose" && (
+        <div className="dialog-backdrop" onClick={() => setShowTxDialog(false)}>
+          <div className="dialog" onClick={(e) => e.stopPropagation()}>
+            <h3>New Transaction</h3>
+            <p className="muted">What would you like to record in {selected.name}?</p>
+            <div className="dialog-actions" style={{ justifyContent: "flex-start", gap: 10 }}>
+              <button onClick={() => setInvTxMode("trade")}>Trade (buy / sell / dividend / grant)</button>
+              <button className="secondary" onClick={() => setInvTxMode("cash")}>
+                Transfer / cash transaction
+              </button>
+            </div>
+            <div className="dialog-actions">
+              <button className="secondary" onClick={() => setShowTxDialog(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {showTxDialog && selected && selected.type === "investment" && invTxMode === "trade" && (
         <NewInvestmentDialog
           account={selected}
+          categories={categories}
           onCancel={() => setShowTxDialog(false)}
           onSubmit={recordTrade}
         />
       )}
-      {showTxDialog && selected && selected.type !== "investment" && (
-        <NewTransactionDialog
-          account={selected}
-          accounts={accounts}
-          categories={categories}
-          payeeSuggestions={payeeSuggestions}
-          memoSuggestions={memoSuggestions}
-          onCancel={() => setShowTxDialog(false)}
-          onCreate={createTransaction}
-        />
-      )}
+      {showTxDialog &&
+        selected &&
+        (selected.type !== "investment" || invTxMode === "cash") && (
+          <NewTransactionDialog
+            account={selected}
+            accounts={accounts}
+            categories={categories}
+            payeeSuggestions={payeeSuggestions}
+            memoSuggestions={memoSuggestions}
+            onCancel={() => setShowTxDialog(false)}
+            onCreate={createTransaction}
+          />
+        )}
       {showCategoriesDialog && (
         <CategoriesDialog
           categories={categories}

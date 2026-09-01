@@ -162,7 +162,7 @@ export function costBasisFromLots(lots: InvestmentTransaction[]): number {
   let shares = 0; // micro-units
   let basis = 0; // cents
   for (const l of ordered) {
-    if (l.action === "buy" || l.action === "reinvest") {
+    if (l.action === "buy" || l.action === "reinvest" || l.action === "grant") {
       // Cost of acquired shares = shares*price + fees.
       const cost = Math.round((l.quantityMicro * l.priceMicros) / (MICRO * MICRO)) + l.feesCents;
       shares += l.quantityMicro;
@@ -214,10 +214,12 @@ export function effectiveQuantityMicro(asset: Asset, lots: InvestmentTransaction
 }
 
 /**
- * Signed cash effect (cents) on the account for a proposed trade, given the
- * gross value (units*price, in cents) and fees. Used to preview the "cash amount"
- * in the UI and to write the linked cash transaction.
+ * Signed cash effect (cents) on the account for the TRADE (purchase/sale) leg of
+ * a transaction, given the gross value (units*price, in cents) and fees. This is
+ * the cash that moves to acquire/dispose of shares; income legs (dividends, grant
+ * value) are recorded separately by the repository.
  *   buy      -> -(gross + fees)
+ *   grant    -> -(gross + fees)   (shares acquired using the granted income)
  *   sell     -> +(gross - fees)
  *   div      -> +(cashDividend - fees)
  *   reinvest ->  0 (dividend immediately buys shares)
@@ -230,6 +232,7 @@ export function tradeCashCents(
 ): number {
   switch (action) {
     case "buy":
+    case "grant":
       return -(grossCents + feesCents);
     case "sell":
       return grossCents - feesCents;

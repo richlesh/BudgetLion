@@ -177,13 +177,14 @@ CREATE TABLE IF NOT EXISTS investment_transactions (
   asset_id       TEXT NOT NULL REFERENCES assets(id),
   account_id     TEXT NOT NULL REFERENCES accounts(id),
   date           TEXT NOT NULL,                 -- ISO 8601 date
-  action         TEXT NOT NULL                  -- 'buy'|'sell'|'div'|'reinvest'
-                   CHECK (action IN ('buy','sell','div','reinvest')),
+  action         TEXT NOT NULL                  -- 'buy'|'sell'|'div'|'reinvest'|'grant'
+                   CHECK (action IN ('buy','sell','div','reinvest','grant')),
   quantity_micro INTEGER NOT NULL DEFAULT 0,    -- shares x1e6, signed (buy/reinvest +, sell -)
   price_micros   INTEGER NOT NULL DEFAULT 0,    -- per-share micro-cents (0 for cash div)
   fees_cents     INTEGER NOT NULL DEFAULT 0,    -- commission/fees in cents (>=0)
   cash_cents     INTEGER NOT NULL DEFAULT 0,    -- signed cash effect on the account (cents)
-  cash_txn_id    TEXT REFERENCES transactions(id), -- linked cash leg (nullable)
+  cash_txn_id    TEXT REFERENCES transactions(id), -- linked cash (trade) leg (nullable)
+  income_txn_id  TEXT REFERENCES transactions(id), -- linked categorized income leg (grant/reinvest, nullable)
   memo           TEXT,
   created_at     TEXT NOT NULL,
   updated_at     TEXT NOT NULL,
