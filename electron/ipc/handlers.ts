@@ -158,7 +158,8 @@ export function registerIpcHandlers(): void {
     const extra = repo.transactionsByIds(counterpartyIds.filter((id) => !ownedIds.has(id)));
     const txns = [...owned, ...extra];
     const splitsByTx = repo.splitsForTransactions(txns.map((t) => t.id));
-    return buildLedger(account, txns, splitsByTx);
+    const tradeByTxn = repo.tradeInfoByTxnId(txns.map((t) => t.id));
+    return buildLedger(account, txns, splitsByTx, tradeByTxn);
   });
 
   ipcMain.handle(IPC.createTransaction, (_e, input: NewTransactionInput) => {

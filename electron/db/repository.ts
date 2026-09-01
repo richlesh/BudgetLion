@@ -25,6 +25,7 @@ import type {
   NewValuationInput,
   InvestmentTransaction,
   NewTradeInput,
+  LedgerTradeInfo,
 } from "../../src/shared/types.js";
 import { ClearedState } from "../../src/shared/types.js";
 import { MICRO } from "../../src/shared/types.js";
@@ -1241,7 +1242,57 @@ export function allInvestmentTxnsByAsset(): Map<string, InvestmentTransaction[]>
 }
 
 /**
- * Record a trade (buy/sell/dividend/reinvest) atomically:
+ * Map of transactionId -> trade display info, for the given cash/income leg
+ * transaction ids. Joins the linked investment lot with its asset so the ledger
+ * can show ticker/name/shares/price on Buy/Sell/Dividend/Reinvest/Grant rows.
+ * A single lot may map to two transaction ids (its cash leg and its income leg).
+ */
+export function tradeInfoByTxnId(txnIds: string[]): Map<string, LedgerTradeInfo> {
+  const out = new Map<string, LedgerTradeInfo>();
+  if (txnIds.length === 0) return out;
+  const db = getDb();
+  const placeholders = txnIds.map(() => "?").join(",");
+  const rows = db
+    .prepare(
+      `SELECT it.action        AS action,
+              it.quantity_micro AS quantity_micro,
+              it.price_micros   AS price_micros,
+              it.cash_txn_id    AS cash_txn_id,
+              it.income_txn_id  AS income_txn_id,
+              a.symbol          AS symbol,
+              a.name            AS asset_name
+         FROM investment_transactions it
+         JOIN assets a ON a.id = it.asset_id
+        WHERE it.deleted_at IS NULL
+          AND (it.cash_txn_id IN (${placeholders}) OR it.income_txn_id IN (${placeholders}))`
+    )
+    .all(...txnIds, ...txnIds) as Array<{
+    action: string;
+    quantity_micro: number;
+    price_micros: number;
+    cash_txn_id: string | null;
+    income_txn_id: string | null;
+    symbol: string | null;
+    asset_name: string;
+  }>;
+  for (const r of rows) {
+    const info: LedgerTradeInfo = {
+      action: r.action as LedgerTradeInfo["action"],
+      symbol: r.symbol,
+      assetName: r.asset_name,
+      units: r.quantity_micro / MICRO,
+      // price_micros is per-share micro-cents => cents = /MICRO.
+      pricePerUnitCents: Math.round(r.price_micros / MICRO),
+    };
+    for (const id of [r.cash_txn_id, r.income_txn_id]) {
+      if (id && txnIds.includes(id)) out.set(id, info);
+    }
+  }
+  return out;
+}
+
+/**
+ * Record a trade (buy/sell/dividend/reinvest/grant) atomically:
  *  1. resolve or create the asset (inline security creation),
  *  2. compute signed shares, per-share micro-cents price, and the cash effect,
  *  3. write a linked cash `transactions` row (except reinvest, which nets to 0),

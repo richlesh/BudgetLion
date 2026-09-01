@@ -80,6 +80,8 @@ interface GridRow {
   // only as a transfer-leg counterparty — the "TO side"). Such rows are view-only.
   isForeignSplit: boolean;
   splitTooltip: string;
+  /** True when this row is an investment trade leg (memo is derived, read-only). */
+  isTrade: boolean;
 }
 
 const NO_CATEGORY = "—";
@@ -204,14 +206,26 @@ export function LedgerGrid({
   );
 
   // Memo display: for a split, derive from the legs' memos (the transaction-level
-  // memo isn't meaningful for splits); otherwise use the transaction memo.
+  // memo isn't meaningful for splits). For an investment trade, show the security
+  // (ticker/name) plus shares and price per share. Otherwise use the tx memo.
   const memoFor = useCallback((r: LedgerRow): string => {
     if (r.isSplit && r.splits && r.splits.length > 0) {
       const legMemos = r.splits.map((s) => (s.memo ?? "").trim()).filter((m) => m.length > 0);
       return legMemos.join(", ");
     }
+    if (r.trade) {
+      const t = r.trade;
+      const security = t.symbol ? `${t.symbol} ${t.assetName}` : t.assetName;
+      // Cash dividends have no shares/price; show just the security.
+      if (t.units > 0 && t.pricePerUnitCents > 0) {
+        const shares = Number(t.units.toFixed(6)).toString();
+        const price = formatCents(t.pricePerUnitCents, account.currency);
+        return `${security} — ${shares} sh @ ${price}`;
+      }
+      return security;
+    }
     return r.transaction?.memo ?? "";
-  }, []);
+  }, [account.currency]);
   const nameById = useMemo(() => {
     const m = new Map<string, string>();
     categories.forEach((c) => m.set(c.id, categoryDisplayName(c, categories)));
@@ -270,6 +284,7 @@ export function LedgerGrid({
             isSplit: false,
             isForeignSplit: false,
             splitTooltip: "",
+            isTrade: false,
           };
         }
         const t = r.transaction!;
@@ -289,6 +304,7 @@ export function LedgerGrid({
           isForeignSplit:
             !!r.isSplit && t.fromAccountId !== account.id && t.toAccountId !== account.id,
           splitTooltip: splitTooltipFor(r),
+          isTrade: !!r.trade,
         };
       }),
     [rows, categoryFor, splitTooltipFor, sign, payeeFor, memoFor, account.openingBalanceDate, account.createdAt]
@@ -307,10 +323,11 @@ export function LedgerGrid({
       {
         field: "payee",
         headerName: "Payee",
-        // Payee is auto-generated for transfers ("From/To <account>") and derived
-        // for splits, so it's not editable in those cases; it stays editable for
-        // ordinary transactions.
-        editable: (p) => isTxRow(p) && !p.data?.isTransfer && !p.data?.isSplit,
+        // Payee is auto-generated for transfers ("From/To <account>"), derived for
+        // splits, and set to the action (Buy/Sell/…) for trades, so it's editable
+        // only for ordinary transactions.
+        editable: (p) =>
+          isTxRow(p) && !p.data?.isTransfer && !p.data?.isSplit && !p.data?.isTrade,
         cellEditor: AutocompleteCellEditor,
         cellEditorParams: () => ({ suggestions: payeeSuggestionsRef.current }),
         flex: 1,
@@ -319,8 +336,9 @@ export function LedgerGrid({
       {
         field: "memo",
         headerName: "Memo",
-        // A split's memo is derived from its legs, so it's read-only for splits.
-        editable: (p) => isTxRow(p) && !p.data?.isSplit,
+        // A split's memo is derived from its legs, and a trade's memo shows the
+        // security/shares/price, so both are read-only.
+        editable: (p) => isTxRow(p) && !p.data?.isSplit && !p.data?.isTrade,
         cellEditor: AutocompleteCellEditor,
         cellEditorParams: () => ({ suggestions: memoSuggestionsRef.current }),
         flex: 1,

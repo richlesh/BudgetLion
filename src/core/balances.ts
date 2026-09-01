@@ -1,6 +1,6 @@
 // Balance and running-balance computation. Pure, framework-agnostic.
 
-import type { Account, LedgerRow, Transaction, TransactionSplit } from "../shared/types";
+import type { Account, LedgerRow, LedgerTradeInfo, Transaction, TransactionSplit } from "../shared/types";
 
 /**
  * The signed effect of a transaction on a given account, in cents.
@@ -65,7 +65,8 @@ function affectsAccount(
 export function buildLedger(
   account: Account,
   transactions: Transaction[],
-  splitsByTx: Map<string, TransactionSplit[]> = new Map()
+  splitsByTx: Map<string, TransactionSplit[]> = new Map(),
+  tradeByTxn: Map<string, LedgerTradeInfo> = new Map()
 ): LedgerRow[] {
   const relevant = transactions.filter(
     (tx) => tx.deletedAt == null && affectsAccount(tx, splitsByTx.get(tx.id), account.id)
@@ -122,6 +123,7 @@ export function buildLedger(
       runningBalanceCents: running,
       isSplit: !!(splits && splits.length > 0),
       splits: splits ?? [],
+      trade: e.tx ? tradeByTxn.get(e.tx.id) : undefined,
     });
   }
   return rows;

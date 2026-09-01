@@ -370,6 +370,23 @@ export interface LedgerRow {
   isSplit?: boolean;
   /** The transaction's split legs (empty for unsplit rows). */
   splits?: TransactionSplit[];
+  /**
+   * Investment-trade details when this transaction is the cash/income leg of an
+   * investment lot (buy/sell/dividend/reinvest/grant). Present only for such rows
+   * so the ledger can show the security ticker/name, shares, and price per share.
+   */
+  trade?: LedgerTradeInfo;
+}
+
+/** Compact investment-trade description attached to a ledger row for display. */
+export interface LedgerTradeInfo {
+  action: InvestmentAction;
+  symbol: string | null;
+  assetName: string;
+  /** Shares in human units (e.g. 12.5); 0 for a cash dividend. */
+  units: number;
+  /** Price per share in cents (e.g. 8840 = $88.40); 0 for a cash dividend. */
+  pricePerUnitCents: number;
 }
 
 // ---- Import / Export (M5 / M6) ----
