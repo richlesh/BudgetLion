@@ -44,6 +44,11 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
   const [newSymbol, setNewSymbol] = useState("");
   const [shares, setShares] = useState("0");
   const [price, setPrice] = useState("0.00");
+  const [amount, setAmount] = useState("0.00");
+  // Which of price/amount the user last typed. The OTHER is derived from shares:
+  //   lastEdited "price"  => amount = shares * price
+  //   lastEdited "amount" => price  = amount / shares
+  const [lastEdited, setLastEdited] = useState<"price" | "amount">("price");
   const [fees, setFees] = useState("0.00");
   const [cashDiv, setCashDiv] = useState("0.00");
   const [categoryId, setCategoryId] = useState<string>("");
@@ -69,6 +74,32 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
   // Grant, cash dividend, and reinvested dividend are income and can be categorized.
   const isIncome = action === "grant" || action === "div" || action === "reinvest";
 
+  // ---- Bidirectional shares / price / amount ----
+  // The user types two of the three; the third is derived. `lastEdited` records
+  // whether price or amount is the typed one, so the other is computed here.
+  const unitsNum = Math.abs(Number(shares) || 0);
+
+  // Effective per-share price in (possibly fractional) cents.
+  const effectivePriceCents = useMemo(() => {
+    if (lastEdited === "price") return parsePriceCents(price) ?? 0;
+    // Derived from amount: price = amount / shares.
+    const amt = parseCents(amount) ?? 0;
+    return unitsNum > 0 ? amt / unitsNum : 0;
+  }, [lastEdited, price, amount, unitsNum]);
+
+  // Effective gross amount (shares * price) in whole cents.
+  const effectiveGrossCents = useMemo(() => {
+    if (lastEdited === "amount") return parseCents(amount) ?? 0;
+    return Math.round(unitsNum * (parsePriceCents(price) ?? 0));
+  }, [lastEdited, price, amount, unitsNum]);
+
+  // Display strings for the two fields: the typed one shows what the user typed;
+  // the derived one shows the computed value.
+  const priceDisplay =
+    lastEdited === "price" ? price : (effectivePriceCents / 100).toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
+  const amountDisplay =
+    lastEdited === "amount" ? amount : (effectiveGrossCents / 100).toFixed(2);
+
   // Income categories for the picker (Salary, Dividend, etc.).
   const incomeCategoryChoices = useMemo(
     () => categoryOptions(categoriesForDirection(categories, "income")),
@@ -87,13 +118,11 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
       const div = parseCents(cashDiv) ?? 0;
       return tradeCashCents("div", 0, feesCents, div);
     }
-    const units = Number(shares) || 0;
-    const priceCents = parsePriceCents(price) ?? 0;
-    const gross = Math.round(Math.abs(units) * priceCents);
+    const gross = effectiveGrossCents;
     const tradeLeg = tradeCashCents(action, gross, feesCents);
     const incomeLeg = action === "grant" || action === "reinvest" ? gross : 0;
     return tradeLeg + incomeLeg;
-  }, [action, shares, price, fees, cashDiv, isCashDiv]);
+  }, [action, effectiveGrossCents, fees, cashDiv, isCashDiv]);
 
   const cashLabel =
     cashCents > 0
@@ -116,9 +145,8 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
         setError("Enter a positive number of shares.");
         return;
       }
-      const priceCents = parsePriceCents(price);
-      if (priceCents == null || priceCents < 0) {
-        setError("Enter a valid per-share price.");
+      if (!(effectivePriceCents >= 0) || effectiveGrossCents <= 0) {
+        setError("Enter a valid price per share or amount.");
         return;
       }
     } else {
@@ -147,7 +175,7 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
           }
         : { assetId }),
       ...(needsShares
-        ? { units: Number(shares), pricePerUnitCents: parsePriceCents(price) ?? 0 }
+        ? { units: Number(shares), pricePerUnitCents: effectivePriceCents }
         : { cashCents: parseCents(cashDiv) ?? 0 }),
     };
     void onSubmit(input);
@@ -216,7 +244,23 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
             </div>
             <div className="field">
               <label>{action === "grant" ? "Grant price per share" : "Price per share"}</label>
-              <input value={price} onChange={(e) => setPrice(e.target.value)} />
+              <input
+                value={priceDisplay}
+                onChange={(e) => {
+                  setPrice(e.target.value);
+                  setLastEdited("price");
+                }}
+              />
+            </div>
+            <div className="field">
+              <label>Amount (shares × price)</label>
+              <input
+                value={amountDisplay}
+                onChange={(e) => {
+                  setAmount(e.target.value);
+                  setLastEdited("amount");
+                }}
+              />
             </div>
           </>
         )}
