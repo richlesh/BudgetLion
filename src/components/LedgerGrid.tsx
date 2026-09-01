@@ -216,9 +216,11 @@ export function LedgerGrid({
     if (r.trade) {
       const t = r.trade;
       const security = t.symbol ? `${t.symbol} ${t.assetName}` : t.assetName;
-      // Cash dividends have no shares/price; show just the security.
-      if (t.units > 0 && t.pricePerUnitCents > 0) {
-        const shares = Number(t.units.toFixed(6)).toString();
+      // Sells store negative shares; display the magnitude (direction is shown by
+      // the "Sell" payee and the negative Amount). Cash dividends have no shares.
+      const shareCount = Math.abs(t.units);
+      if (shareCount > 0 && t.pricePerUnitCents > 0) {
+        const shares = Number(shareCount.toFixed(6)).toString();
         const price = formatCents(t.pricePerUnitCents, account.currency);
         return `${security} — ${shares} sh @ ${price}`;
       }
