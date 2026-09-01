@@ -81,3 +81,37 @@ export function parseCents(input: string): number | null {
   const cents = Math.round(value * 100);
   return negative ? -cents : cents;
 }
+
+/**
+ * Parse a per-unit PRICE string into cents, WITHOUT rounding to whole cents, so
+ * sub-cent precision (e.g. a share price of $88.123456) is preserved. Returns a
+ * possibly-fractional number of cents (here 8812.3456), or null if unparseable.
+ *
+ * Downstream storage keeps prices in micro-cents (price × 1e6, then rounded), so
+ * this supports up to 6 decimal places of a dollar price. Use this for security
+ * prices; use parseCents for ordinary money amounts (whole cents).
+ */
+export function parsePriceCents(input: string): number | null {
+  if (input == null) return null;
+  let s = String(input).trim();
+  if (s === "") return null;
+
+  let negative = false;
+  if (/^\(.*\)$/.test(s)) {
+    negative = true;
+    s = s.slice(1, -1);
+  }
+  if (s.startsWith("-")) {
+    negative = true;
+    s = s.slice(1);
+  }
+  s = s.replace(/[^0-9.]/g, "");
+  if (s === "" || s === ".") return null;
+
+  const value = Number(s);
+  if (!Number.isFinite(value)) return null;
+
+  // Cents WITHOUT whole-cent rounding (keeps up to sub-cent precision).
+  const cents = value * 100;
+  return negative ? -cents : cents;
+}

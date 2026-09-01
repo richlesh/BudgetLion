@@ -258,7 +258,11 @@ export interface NewTradeInput {
   action: InvestmentAction;
   /** Share count in human units (e.g. 12.5). Ignored/zero for cash 'div'. */
   units?: number;
-  /** Per-share price in cents (e.g. 8840 = $88.40). Ignored/zero for cash 'div'. */
+  /**
+   * Per-share price in cents (e.g. 8840 = $88.40). MAY be fractional to preserve
+   * sub-cent precision (e.g. 8812.3456 = $88.123456); the repository rounds to
+   * micro-cents for storage. Ignored/zero for cash 'div'.
+   */
   pricePerUnitCents?: number;
   /** Commission/fees in cents (>= 0). */
   feesCents?: number;

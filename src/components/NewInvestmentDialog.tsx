@@ -6,7 +6,7 @@ import type {
   InvestmentAction,
   NewTradeInput,
 } from "../shared/types";
-import { parseCents, formatCents } from "../core/money";
+import { parseCents, parsePriceCents, formatCents } from "../core/money";
 import { tradeCashCents } from "../core/worth";
 import { categoriesForDirection, categoryOptions } from "../core/categories";
 
@@ -82,7 +82,7 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
       return tradeCashCents("div", 0, feesCents, div);
     }
     const units = Number(shares) || 0;
-    const priceCents = parseCents(price) ?? 0;
+    const priceCents = parsePriceCents(price) ?? 0;
     const gross = Math.round(Math.abs(units) * priceCents);
     const tradeLeg = tradeCashCents(action, gross, feesCents);
     const incomeLeg = action === "grant" || action === "reinvest" ? gross : 0;
@@ -110,7 +110,7 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
         setError("Enter a positive number of shares.");
         return;
       }
-      const priceCents = parseCents(price);
+      const priceCents = parsePriceCents(price);
       if (priceCents == null || priceCents < 0) {
         setError("Enter a valid per-share price.");
         return;
@@ -140,7 +140,7 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
           }
         : { assetId }),
       ...(needsShares
-        ? { units: Number(shares), pricePerUnitCents: parseCents(price) ?? 0 }
+        ? { units: Number(shares), pricePerUnitCents: parsePriceCents(price) ?? 0 }
         : { cashCents: parseCents(cashDiv) ?? 0 }),
     };
     void onSubmit(input);
