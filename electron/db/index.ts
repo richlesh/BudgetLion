@@ -166,10 +166,36 @@ function runMigrations(instance: Database.Database): void {
     }
   }
 
-  // Widen accounts.type CHECK to allow 'investment' and 'asset' (Phase 1 asset
-  // tracking). SQLite cannot ALTER a CHECK constraint, so rebuild the table only
-  // when the existing constraint is the old (narrow) one. Detected by reading the
-  // stored CREATE TABLE SQL from sqlite_master.
+  // One-time (idempotent) cleanup of ORPHANED investment lots: a non-deleted lot
+  // whose every linked cash/income transaction is deleted or missing. This can
+  // happen for lots created before deleteTransaction cascaded to the lot — the
+  // user deleted the cash leg from the ledger, leaving the lot (and thus its
+  // computed shares) behind. Only lots with at least one leg reference and no
+  // live leg are removed, so legitimately-linked lots are never touched.
+  const invTableExists = instance
+    .prepare(
+      "SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'investment_transactions'"
+    )
+    .get() as { n: number };
+  if (invTableExists.n > 0) {
+    const ts = new Date().toISOString();
+    instance
+      .prepare(
+        `UPDATE investment_transactions
+            SET deleted_at = @ts, updated_at = @ts
+          WHERE deleted_at IS NULL
+            -- has at least one linked leg id
+            AND (cash_txn_id IS NOT NULL OR income_txn_id IS NOT NULL)
+            -- and NO leg points to a live (non-deleted) transaction
+            AND NOT EXISTS (
+              SELECT 1 FROM transactions t
+               WHERE t.deleted_at IS NULL
+                 AND t.id IN (investment_transactions.cash_txn_id,
+                              investment_transactions.income_txn_id)
+            )`
+      )
+      .run({ ts });
+  }
   const accountsSql = (
     instance
       .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'accounts'")
