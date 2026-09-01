@@ -14,6 +14,9 @@ import type {
   UpdateRecurringRuleInput,
   UpdateTransactionInput,
   UpdateAccountInput,
+  NewAssetInput,
+  UpdateAssetInput,
+  NewValuationInput,
 } from "../../src/shared/types.js";
 
 const api: LedgerApi = {
@@ -21,6 +24,18 @@ const api: LedgerApi = {
   createAccount: (input: NewAccountInput) => ipcRenderer.invoke(IPC.createAccount, input),
   updateAccount: (input: UpdateAccountInput) => ipcRenderer.invoke(IPC.updateAccount, input),
   getAllBalances: () => ipcRenderer.invoke(IPC.getAllBalances),
+  getAllWorth: () => ipcRenderer.invoke(IPC.getAllWorth),
+
+  // Assets & valuations (Phase 1)
+  listAssets: (accountId?: string) => ipcRenderer.invoke(IPC.listAssets, accountId),
+  createAsset: (input: NewAssetInput) => ipcRenderer.invoke(IPC.createAsset, input),
+  updateAsset: (input: UpdateAssetInput) => ipcRenderer.invoke(IPC.updateAsset, input),
+  deleteAsset: (id: string) => ipcRenderer.invoke(IPC.deleteAsset, id),
+  listValuations: (assetId: string) => ipcRenderer.invoke(IPC.listValuations, assetId),
+  recordValuation: (input: NewValuationInput) =>
+    ipcRenderer.invoke(IPC.recordValuation, input),
+  deleteValuation: (id: string) => ipcRenderer.invoke(IPC.deleteValuation, id),
+  getHoldings: (accountId: string) => ipcRenderer.invoke(IPC.getHoldings, accountId),
   listCategories: () => ipcRenderer.invoke(IPC.listCategories),
   createCategory: (input: NewCategoryInput) => ipcRenderer.invoke(IPC.createCategory, input),
   updateCategory: (input: UpdateCategoryInput) => ipcRenderer.invoke(IPC.updateCategory, input),

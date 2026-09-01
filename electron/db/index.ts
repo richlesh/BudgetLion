@@ -86,6 +86,53 @@ function runMigrations(instance: Database.Database): void {
   if (!catCols.some((c) => c.name === "applicability")) {
     instance.exec("ALTER TABLE categories ADD COLUMN applicability TEXT NOT NULL DEFAULT 'both'");
   }
+
+  // Widen accounts.type CHECK to allow 'investment' and 'asset' (Phase 1 asset
+  // tracking). SQLite cannot ALTER a CHECK constraint, so rebuild the table only
+  // when the existing constraint is the old (narrow) one. Detected by reading the
+  // stored CREATE TABLE SQL from sqlite_master.
+  const accountsSql = (
+    instance
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'accounts'")
+      .get() as { sql: string } | undefined
+  )?.sql;
+  if (accountsSql && !accountsSql.includes("'investment'")) {
+    const rebuild = instance.transaction(() => {
+      instance.exec("PRAGMA foreign_keys = OFF");
+      instance.exec(`
+        CREATE TABLE accounts_new (
+          id                    TEXT PRIMARY KEY,
+          name                  TEXT NOT NULL,
+          type                  TEXT NOT NULL CHECK (type IN ('checking','savings','credit_card','loan','investment','asset')),
+          currency              TEXT NOT NULL DEFAULT 'USD',
+          opening_balance_cents INTEGER NOT NULL DEFAULT 0,
+          opening_balance_date  TEXT,
+          account_code          TEXT,
+          interest_rate_bps     INTEGER,
+          principal_cents       INTEGER,
+          term_months           INTEGER,
+          created_at            TEXT NOT NULL,
+          updated_at            TEXT NOT NULL,
+          deleted_at            TEXT
+        )
+      `);
+      instance.exec(`
+        INSERT INTO accounts_new
+          (id, name, type, currency, opening_balance_cents, opening_balance_date,
+           account_code, interest_rate_bps, principal_cents, term_months,
+           created_at, updated_at, deleted_at)
+        SELECT
+           id, name, type, currency, opening_balance_cents, opening_balance_date,
+           account_code, interest_rate_bps, principal_cents, term_months,
+           created_at, updated_at, deleted_at
+        FROM accounts
+      `);
+      instance.exec("DROP TABLE accounts");
+      instance.exec("ALTER TABLE accounts_new RENAME TO accounts");
+      instance.exec("PRAGMA foreign_keys = ON");
+    });
+    rebuild();
+  }
 }
 
 export function closeDb(): void {

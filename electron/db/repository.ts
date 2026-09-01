@@ -18,6 +18,11 @@ import type {
   RecurringRule,
   NewRecurringRuleInput,
   UpdateRecurringRuleInput,
+  Asset,
+  NewAssetInput,
+  UpdateAssetInput,
+  AssetValuation,
+  NewValuationInput,
 } from "../../src/shared/types.js";
 import { ClearedState } from "../../src/shared/types.js";
 import { getDb } from "./index.js";
@@ -900,6 +905,229 @@ export function deleteRecurringRule(id: string): void {
   db.prepare("UPDATE recurring_rules SET deleted_at = ?, updated_at = ? WHERE id = ?").run(
     now(),
     now(),
+    id
+  );
+}
+
+// ---- Assets & valuations (Phase 1) ----
+
+interface AssetRow {
+  id: string;
+  account_id: string;
+  name: string;
+  asset_class: string;
+  symbol: string | null;
+  quantity_micro: number;
+  metadata: string | null;
+  currency: string;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+interface ValuationRow {
+  id: string;
+  asset_id: string;
+  as_of_date: string;
+  value_micros: number;
+  source: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+function toAsset(r: AssetRow): Asset {
+  return {
+    id: r.id,
+    accountId: r.account_id,
+    name: r.name,
+    assetClass: r.asset_class as Asset["assetClass"],
+    symbol: r.symbol,
+    quantityMicro: r.quantity_micro,
+    metadata: r.metadata,
+    currency: r.currency,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    deletedAt: r.deleted_at,
+  };
+}
+
+function toValuation(r: ValuationRow): AssetValuation {
+  return {
+    id: r.id,
+    assetId: r.asset_id,
+    asOfDate: r.as_of_date,
+    valueMicros: r.value_micros,
+    source: r.source,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    deletedAt: r.deleted_at,
+  };
+}
+
+/** All non-deleted assets (optionally for a single account). */
+export function listAssets(accountId?: string): Asset[] {
+  const db = getDb();
+  const rows = accountId
+    ? (db
+        .prepare(
+          "SELECT * FROM assets WHERE deleted_at IS NULL AND account_id = ? ORDER BY name COLLATE NOCASE"
+        )
+        .all(accountId) as AssetRow[])
+    : (db
+        .prepare("SELECT * FROM assets WHERE deleted_at IS NULL ORDER BY name COLLATE NOCASE")
+        .all() as AssetRow[]);
+  return rows.map(toAsset);
+}
+
+export function createAsset(input: NewAssetInput): Asset {
+  const db = getDb();
+  const ts = now();
+  const row: AssetRow = {
+    id: randomUUID(),
+    account_id: input.accountId,
+    name: input.name,
+    asset_class: input.assetClass ?? "other",
+    symbol: input.symbol ?? null,
+    quantity_micro: input.quantityMicro ?? 1_000_000,
+    metadata: input.metadata ?? null,
+    currency: input.currency ?? "USD",
+    created_at: ts,
+    updated_at: ts,
+    deleted_at: null,
+  };
+  db.prepare(
+    `INSERT INTO assets
+       (id, account_id, name, asset_class, symbol, quantity_micro, metadata, currency,
+        created_at, updated_at, deleted_at)
+     VALUES
+       (@id, @account_id, @name, @asset_class, @symbol, @quantity_micro, @metadata, @currency,
+        @created_at, @updated_at, @deleted_at)`
+  ).run(row);
+  return toAsset(row);
+}
+
+export function updateAsset(input: UpdateAssetInput): void {
+  const db = getDb();
+  const fields: string[] = [];
+  const params: Record<string, unknown> = { id: input.id, updated_at: now() };
+  const map: Array<[keyof UpdateAssetInput, string]> = [
+    ["name", "name"],
+    ["assetClass", "asset_class"],
+    ["symbol", "symbol"],
+    ["quantityMicro", "quantity_micro"],
+    ["metadata", "metadata"],
+    ["currency", "currency"],
+  ];
+  for (const [key, col] of map) {
+    if (input[key] !== undefined) {
+      fields.push(`${col} = @${col}`);
+      params[col] = input[key];
+    }
+  }
+  if (fields.length === 0) return;
+  fields.push("updated_at = @updated_at");
+  db.prepare(`UPDATE assets SET ${fields.join(", ")} WHERE id = @id`).run(params);
+}
+
+/** Soft-delete an asset and its valuations so the deletion can sync. */
+export function deleteAsset(id: string): void {
+  const db = getDb();
+  const ts = now();
+  const run = db.transaction(() => {
+    db.prepare("UPDATE assets SET deleted_at = ?, updated_at = ? WHERE id = ?").run(ts, ts, id);
+    db.prepare(
+      "UPDATE asset_valuations SET deleted_at = ?, updated_at = ? WHERE asset_id = ? AND deleted_at IS NULL"
+    ).run(ts, ts, id);
+  });
+  run();
+}
+
+/** Non-deleted valuations for a single asset (most recent first). */
+export function valuationsForAsset(assetId: string): AssetValuation[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      "SELECT * FROM asset_valuations WHERE deleted_at IS NULL AND asset_id = ? ORDER BY as_of_date DESC"
+    )
+    .all(assetId) as ValuationRow[];
+  return rows.map(toValuation);
+}
+
+/** ALL non-deleted valuations, grouped by assetId (for worth computation). */
+export function allValuationsByAsset(): Map<string, AssetValuation[]> {
+  const db = getDb();
+  const rows = db
+    .prepare("SELECT * FROM asset_valuations WHERE deleted_at IS NULL")
+    .all() as ValuationRow[];
+  const out = new Map<string, AssetValuation[]>();
+  for (const r of rows) {
+    const list = out.get(r.asset_id) ?? [];
+    list.push(toValuation(r));
+    out.set(r.asset_id, list);
+  }
+  return out;
+}
+
+/**
+ * Record a valuation for an asset on a date. Because (asset_id, as_of_date) is
+ * UNIQUE, an existing (even soft-deleted) row for that date is updated in place
+ * and revived, so re-valuing a date replaces the prior value.
+ */
+export function recordValuation(input: NewValuationInput): AssetValuation {
+  const db = getDb();
+  const ts = now();
+  const existing = db
+    .prepare("SELECT * FROM asset_valuations WHERE asset_id = ? AND as_of_date = ?")
+    .get(input.assetId, input.asOfDate) as ValuationRow | undefined;
+
+  if (existing) {
+    db.prepare(
+      `UPDATE asset_valuations
+         SET value_micros = @value_micros, source = @source, updated_at = @updated_at,
+             deleted_at = NULL
+       WHERE id = @id`
+    ).run({
+      id: existing.id,
+      value_micros: input.valueMicros,
+      source: input.source ?? null,
+      updated_at: ts,
+    });
+    return toValuation({
+      ...existing,
+      value_micros: input.valueMicros,
+      source: input.source ?? null,
+      updated_at: ts,
+      deleted_at: null,
+    });
+  }
+
+  const row: ValuationRow = {
+    id: randomUUID(),
+    asset_id: input.assetId,
+    as_of_date: input.asOfDate,
+    value_micros: input.valueMicros,
+    source: input.source ?? null,
+    created_at: ts,
+    updated_at: ts,
+    deleted_at: null,
+  };
+  db.prepare(
+    `INSERT INTO asset_valuations
+       (id, asset_id, as_of_date, value_micros, source, created_at, updated_at, deleted_at)
+     VALUES
+       (@id, @asset_id, @as_of_date, @value_micros, @source, @created_at, @updated_at, @deleted_at)`
+  ).run(row);
+  return toValuation(row);
+}
+
+/** Soft-delete a single valuation. */
+export function deleteValuation(id: string): void {
+  const db = getDb();
+  const ts = now();
+  db.prepare("UPDATE asset_valuations SET deleted_at = ?, updated_at = ? WHERE id = ?").run(
+    ts,
+    ts,
     id
   );
 }

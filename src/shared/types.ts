@@ -2,7 +2,13 @@
 // Framework-agnostic: no imports from Electron, React, or the DB driver.
 // Money is always represented as integer cents (minor currency units) to avoid float errors.
 
-export type AccountType = "checking" | "savings" | "credit_card" | "loan";
+export type AccountType =
+  | "checking"
+  | "savings"
+  | "credit_card"
+  | "loan"
+  | "investment"
+  | "asset";
 
 /** Clearance state of a transaction. */
 export enum ClearedState {
@@ -113,6 +119,109 @@ export interface UpdateAccountInput {
   openingBalanceCents?: number;
   openingBalanceDate?: string | null;
   interestRateBps?: number | null;
+}
+
+// ---- Assets & valuations (Phase 1) ----
+
+/** Broad classification of an owned asset. */
+export type AssetClass =
+  | "security" // stocks, mutual funds, ETFs (market-priceable)
+  | "real_estate"
+  | "vehicle"
+  | "collectible"
+  | "cash"
+  | "other";
+
+/** Micro-unit scale factor (x1e6) used for asset quantities and per-unit values. */
+export const MICRO = 1_000_000;
+
+/**
+ * A thing you own whose value changes over time independently of transactions.
+ * Belongs to an 'investment' or 'asset' account. `quantityMicro` is in micro-units
+ * (x1e6): a single indivisible asset is 1_000_000 (= 1.0); a security holds a share
+ * count. Its worth in cents is derived from the latest valuation (see AssetHolding).
+ */
+export interface Asset {
+  id: string; // UUID
+  accountId: string;
+  name: string;
+  assetClass: AssetClass;
+  symbol: string | null; // ticker for market-priced assets (nullable)
+  quantityMicro: number; // shares/units x1e6
+  metadata: string | null; // JSON blob (address, VIN, purchase info, notes, ...)
+  currency: string;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
+/**
+ * A point-in-time per-unit valuation of an asset. `valueMicros` is the per-unit
+ * value in MICRO-CENTS (cents-per-unit x 1e6 == dollars-per-unit x 100 x 1e6);
+ * use the worth-module converters at the UI boundary. The most recent (max
+ * asOfDate) valuation is "current".
+ */
+export interface AssetValuation {
+  id: string; // UUID
+  assetId: string;
+  asOfDate: string; // ISO 8601 date
+  valueMicros: number; // per-unit value in micro-cents (see above)
+  source: string | null; // 'manual' | 'appraisal' | 'stooq' | ...
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
+/** Input shape for creating an asset (server fills id/timestamps). */
+export interface NewAssetInput {
+  accountId: string;
+  name: string;
+  assetClass?: AssetClass;
+  symbol?: string | null;
+  quantityMicro?: number; // defaults to 1_000_000 (1.0)
+  metadata?: string | null;
+  currency?: string;
+}
+
+/** Partial update for an asset (id required). Only provided fields change. */
+export interface UpdateAssetInput {
+  id: string;
+  name?: string;
+  assetClass?: AssetClass;
+  symbol?: string | null;
+  quantityMicro?: number;
+  metadata?: string | null;
+  currency?: string;
+}
+
+/** Input for recording/replacing a valuation for an asset on a given date. */
+export interface NewValuationInput {
+  assetId: string;
+  asOfDate: string; // ISO date
+  valueMicros: number; // per-unit value in micro-cents (dollars x 100 x 1e6)
+  source?: string | null;
+}
+
+/**
+ * An asset plus its computed current holding value. `valueCents` =
+ * round(quantityMicro * latestValueMicros / 1e12); null latest valuation => 0.
+ */
+export interface AssetHolding {
+  asset: Asset;
+  latestValuation: AssetValuation | null;
+  valueCents: number;
+}
+
+/**
+ * Net worth of a single account. For cash-style accounts (checking/savings/
+ * credit_card/loan) worth == balanceCents. For investment/asset accounts,
+ * worth == cash balance (opening + transactions) + sum of holding values.
+ */
+export interface AccountWorth {
+  accountId: string;
+  cashCents: number; // balance from opening + transactions
+  holdingsCents: number; // sum of asset holding values (0 for cash accounts)
+  worthCents: number; // cashCents + holdingsCents
 }
 
 /** Input shape for creating a transaction. */

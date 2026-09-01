@@ -11,6 +11,8 @@ const TYPE_LABELS: Record<Account["type"], string> = {
   savings: "Savings",
   credit_card: "Credit Card",
   loan: "Loan / Mortgage",
+  investment: "Investment",
+  asset: "Asset",
 };
 
 function Row({ label, value }: { label: string; value: string }) {

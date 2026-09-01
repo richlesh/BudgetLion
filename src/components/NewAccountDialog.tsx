@@ -12,6 +12,8 @@ const TYPES: { value: AccountType; label: string }[] = [
   { value: "savings", label: "Savings" },
   { value: "credit_card", label: "Credit Card" },
   { value: "loan", label: "Loan / Mortgage" },
+  { value: "investment", label: "Investment" },
+  { value: "asset", label: "Asset" },
 ];
 
 function today(): string {

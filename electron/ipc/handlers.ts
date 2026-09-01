@@ -18,8 +18,14 @@ import type {
   UpdateRecurringRuleInput,
   UpdateTransactionInput,
   UpdateAccountInput,
+  NewAssetInput,
+  UpdateAssetInput,
+  NewValuationInput,
+  AccountWorth,
+  AssetHolding,
 } from "../../src/shared/types.js";
 import { buildLedger, currentBalance } from "../../src/core/balances.js";
+import { accountWorth, holdingsForAssets } from "../../src/core/worth.js";
 import { validateTransaction } from "../../src/core/validation.js";
 import { rowToTransaction } from "../../src/core/import/index.js";
 import { balanceForecast, projectLedger, addMonthsISO } from "../../src/core/recurring.js";
@@ -54,6 +60,43 @@ export function registerIpcHandlers(): void {
       accountId: a.id,
       balanceCents: currentBalance(a, txns, splitsByTx),
     }));
+  });
+
+  // Net worth per account: cash balance (opening + transactions) plus, for
+  // investment/asset accounts, the sum of asset holding values (latest valuation).
+  ipcMain.handle(IPC.getAllWorth, (): AccountWorth[] => {
+    const accounts = repo.listAccounts();
+    const txns = repo.allTransactions();
+    const splitsByTx = repo.splitsForTransactions(txns.map((t) => t.id));
+    const assets = repo.listAssets();
+    const valuationsByAsset = repo.allValuationsByAsset();
+    // Group holdings by account id.
+    const holdingsByAccount = new Map<string, AssetHolding[]>();
+    for (const h of holdingsForAssets(assets, valuationsByAsset)) {
+      const list = holdingsByAccount.get(h.asset.accountId) ?? [];
+      list.push(h);
+      holdingsByAccount.set(h.asset.accountId, list);
+    }
+    return accounts.map((a) =>
+      accountWorth(a, txns, splitsByTx, holdingsByAccount.get(a.id) ?? [])
+    );
+  });
+
+  // ---- Assets & valuations (Phase 1) ----
+
+  ipcMain.handle(IPC.listAssets, (_e, accountId?: string) => repo.listAssets(accountId));
+  ipcMain.handle(IPC.createAsset, (_e, input: NewAssetInput) => repo.createAsset(input));
+  ipcMain.handle(IPC.updateAsset, (_e, input: UpdateAssetInput) => repo.updateAsset(input));
+  ipcMain.handle(IPC.deleteAsset, (_e, id: string) => repo.deleteAsset(id));
+  ipcMain.handle(IPC.listValuations, (_e, assetId: string) => repo.valuationsForAsset(assetId));
+  ipcMain.handle(IPC.recordValuation, (_e, input: NewValuationInput) =>
+    repo.recordValuation(input)
+  );
+  ipcMain.handle(IPC.deleteValuation, (_e, id: string) => repo.deleteValuation(id));
+  ipcMain.handle(IPC.getHoldings, (_e, accountId: string): AssetHolding[] => {
+    const assets = repo.listAssets(accountId);
+    const valuationsByAsset = repo.allValuationsByAsset();
+    return holdingsForAssets(assets, valuationsByAsset);
   });
 
   ipcMain.handle(IPC.listCategories, () => repo.listCategories());

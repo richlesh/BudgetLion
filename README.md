@@ -1,6 +1,6 @@
 ![app_icon_256](resources/app_icon_256.png)
 
-# BudgetLion v1.0.0
+# BudgetLion v1.1.0
 
 A cross-platform personal-finance ledger with double-entry accounting, built with Electron, React, and SQLite.
 

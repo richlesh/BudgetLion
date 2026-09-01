@@ -19,6 +19,13 @@ import type {
   UpdateTransactionInput,
   UpdateAccountInput,
   ParsedRow,
+  Asset,
+  NewAssetInput,
+  UpdateAssetInput,
+  AssetValuation,
+  NewValuationInput,
+  AssetHolding,
+  AccountWorth,
 } from "./types";
 
 export interface AppSettings {
@@ -75,6 +82,24 @@ export interface LedgerApi {
   createAccount(input: NewAccountInput): Promise<Account>;
   updateAccount(input: UpdateAccountInput): Promise<void>;
   getAllBalances(): Promise<AccountBalance[]>;
+  /** Net worth per account (cash + asset holdings). */
+  getAllWorth(): Promise<AccountWorth[]>;
+
+  // Assets & valuations (Phase 1)
+  /** Assets, optionally filtered to a single account. */
+  listAssets(accountId?: string): Promise<Asset[]>;
+  createAsset(input: NewAssetInput): Promise<Asset>;
+  updateAsset(input: UpdateAssetInput): Promise<void>;
+  /** Soft-delete an asset and its valuations. */
+  deleteAsset(id: string): Promise<void>;
+  /** Non-deleted valuations for an asset (most recent first). */
+  listValuations(assetId: string): Promise<AssetValuation[]>;
+  /** Record/replace a valuation for an asset on a date. */
+  recordValuation(input: NewValuationInput): Promise<AssetValuation>;
+  /** Soft-delete a single valuation. */
+  deleteValuation(id: string): Promise<void>;
+  /** Assets of an account plus their computed current holding values. */
+  getHoldings(accountId: string): Promise<AssetHolding[]>;
 
   // Categories
   listCategories(): Promise<Category[]>;
@@ -176,6 +201,15 @@ export const IPC = {
   createAccount: "accounts:create",
   updateAccount: "accounts:update",
   getAllBalances: "accounts:balances",
+  getAllWorth: "accounts:worth",
+  listAssets: "assets:list",
+  createAsset: "assets:create",
+  updateAsset: "assets:update",
+  deleteAsset: "assets:delete",
+  listValuations: "assets:valuations:list",
+  recordValuation: "assets:valuations:record",
+  deleteValuation: "assets:valuations:delete",
+  getHoldings: "assets:holdings",
   listCategories: "categories:list",
   createCategory: "categories:create",
   updateCategory: "categories:update",

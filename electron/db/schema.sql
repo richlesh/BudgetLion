@@ -12,7 +12,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS accounts (
   id                    TEXT PRIMARY KEY,
   name                  TEXT NOT NULL,
-  type                  TEXT NOT NULL CHECK (type IN ('checking','savings','credit_card','loan')),
+  type                  TEXT NOT NULL CHECK (type IN ('checking','savings','credit_card','loan','investment','asset')),
   currency              TEXT NOT NULL DEFAULT 'USD',
   opening_balance_cents INTEGER NOT NULL DEFAULT 0,
   opening_balance_date  TEXT,             -- ISO 8601 date for the opening balance (nullable)
@@ -107,3 +107,50 @@ CREATE TABLE IF NOT EXISTS recurring_rules (
 
 CREATE INDEX IF NOT EXISTS idx_rule_from ON recurring_rules(from_account_id);
 CREATE INDEX IF NOT EXISTS idx_rule_to   ON recurring_rules(to_account_id);
+
+-- Assets (Phase 1). A thing you own whose value changes over time independently
+-- of transactions: securities (stocks, funds, ETFs), real estate, vehicles,
+-- collectibles, etc. Belongs to an 'investment' or 'asset' account. Securities are
+-- the special case that can be priced automatically (via `symbol` in a later phase);
+-- everything else is valued manually or by appraisal.
+--
+-- Precision: quantity is stored in MICRO-UNITS (x1,000,000) so fractional shares and
+-- single indivisible assets (quantity 1.0 => 1000000) both stay integer-based. A
+-- valuation's per-unit value is likewise in micro-cents-ish units (see asset_valuations),
+-- and an asset's worth in cents is round(quantity_micro * value_micros / 1e12).
+CREATE TABLE IF NOT EXISTS assets (
+  id             TEXT PRIMARY KEY,
+  account_id     TEXT NOT NULL REFERENCES accounts(id),
+  name           TEXT NOT NULL,                 -- 'Primary Home', '2019 Subaru', 'VTSAX'
+  asset_class    TEXT NOT NULL DEFAULT 'other'  -- 'security'|'real_estate'|'vehicle'|'collectible'|'cash'|'other'
+                   CHECK (asset_class IN ('security','real_estate','vehicle','collectible','cash','other')),
+  symbol         TEXT,                          -- ticker for market-priced assets (nullable)
+  quantity_micro INTEGER NOT NULL DEFAULT 1000000, -- shares x1e6; 1000000 = 1.0 for single assets
+  metadata       TEXT,                          -- JSON blob: address, VIN, purchase info, appraiser, notes
+  currency       TEXT NOT NULL DEFAULT 'USD',
+  created_at     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL,
+  deleted_at     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_asset_account ON assets(account_id);
+
+-- Point-in-time valuations for an asset. One row per asset per date; the most
+-- recent (max as_of_date) is the current per-unit value. `value_micros` is the
+-- per-unit value in MICRO-CENTS (cents-per-unit x 1e6 == dollars x 100 x 1e6), so
+-- worth_cents = round(quantity_micro * value_micros / 1e12). Example: 12.5 shares
+-- (quantity_micro 12,500,000) at $88.40/share (value_micros 8,840,000,000) =>
+-- round(12,500,000 * 8,840,000,000 / 1e12) = 110,500 cents = $1,105.00.
+CREATE TABLE IF NOT EXISTS asset_valuations (
+  id            TEXT PRIMARY KEY,
+  asset_id      TEXT NOT NULL REFERENCES assets(id),
+  as_of_date    TEXT NOT NULL,                  -- ISO 8601 date
+  value_micros  INTEGER NOT NULL,               -- per-unit value in micro-cents
+  source        TEXT,                           -- 'manual'|'appraisal'|'stooq'|'yahoo'|... (nullable)
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,
+  deleted_at    TEXT,
+  UNIQUE (asset_id, as_of_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_valuation_asset ON asset_valuations(asset_id, as_of_date);
