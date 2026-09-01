@@ -850,6 +850,7 @@ export function App() {
     setPendingDeleteId(null);
     await refreshLedger(selected.id);
     await refreshAccounts();
+    setHoldingsReloadKey((k) => k + 1); // trade legs may have been removed
   }, [selected, pendingDeleteId, refreshLedger, refreshAccounts]);
 
   // Delete all transactions staged for bulk deletion, then refresh.
@@ -862,6 +863,7 @@ export function App() {
     }
     await refreshLedger(selected.id);
     await refreshAccounts();
+    setHoldingsReloadKey((k) => k + 1);
     setToast(`Deleted ${ids.length} transaction(s).`);
   }, [selected, pendingBulkDelete, refreshLedger, refreshAccounts]);
 

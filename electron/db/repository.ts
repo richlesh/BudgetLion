@@ -339,6 +339,33 @@ export function deleteTransaction(id: string): void {
     db.prepare(
       "UPDATE transaction_splits SET deleted_at = ?, updated_at = ? WHERE transaction_id = ? AND deleted_at IS NULL"
     ).run(ts, ts, id);
+
+    // If this transaction is the cash or income leg of an investment lot, deleting
+    // it must also remove the lot (so computed share counts adjust) and the lot's
+    // OTHER leg (so no orphaned cash/income transaction is left behind).
+    const lots = db
+      .prepare(
+        `SELECT id, cash_txn_id, income_txn_id FROM investment_transactions
+          WHERE deleted_at IS NULL AND (cash_txn_id = ? OR income_txn_id = ?)`
+      )
+      .all(id, id) as Array<{
+      id: string;
+      cash_txn_id: string | null;
+      income_txn_id: string | null;
+    }>;
+    for (const lot of lots) {
+      db.prepare(
+        "UPDATE investment_transactions SET deleted_at = ?, updated_at = ? WHERE id = ?"
+      ).run(ts, ts, lot.id);
+      // Soft-delete the sibling leg(s) that weren't the one just deleted.
+      for (const legId of [lot.cash_txn_id, lot.income_txn_id]) {
+        if (legId && legId !== id) {
+          db.prepare(
+            "UPDATE transactions SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL"
+          ).run(ts, ts, legId);
+        }
+      }
+    }
   });
   run();
 }
