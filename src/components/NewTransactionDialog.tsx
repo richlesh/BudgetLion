@@ -3,11 +3,16 @@ import type { Account, Category, NewTransactionInput } from "../shared/types";
 import { parseCents } from "../core/money";
 import { validateTransaction } from "../core/validation";
 import { categoriesForDirection, categoryOptions } from "../core/categories";
+import { AutocompleteInput } from "./AutocompleteInput";
 
 interface Props {
   account: Account; // the account whose ledger we're editing
   accounts: Account[]; // for transfer target selection
   categories: Category[];
+  /** Distinct prior payees in this account, for autocomplete. */
+  payeeSuggestions?: string[];
+  /** Distinct prior memos in this account, for autocomplete. */
+  memoSuggestions?: string[];
   onCancel: () => void;
   onCreate: (input: NewTransactionInput) => void;
 }
@@ -22,7 +27,15 @@ function today(): string {
  *  - "in":  money enters this account (income or transfer in)
  * Optional transfer target maps to the other account side.
  */
-export function NewTransactionDialog({ account, accounts, categories, onCancel, onCreate }: Props) {
+export function NewTransactionDialog({
+  account,
+  accounts,
+  categories,
+  payeeSuggestions = [],
+  memoSuggestions = [],
+  onCancel,
+  onCreate,
+}: Props) {
   const [date, setDate] = useState(today());
   const [payee, setPayee] = useState("");
   const [memo, setMemo] = useState("");
@@ -148,12 +161,16 @@ export function NewTransactionDialog({ account, accounts, categories, onCancel, 
               title="Transfers don't use a payee; the ledger shows the other account."
             />
           ) : (
-            <input value={payee} onChange={(e) => setPayee(e.target.value)} />
+            <AutocompleteInput
+              value={payee}
+              onChange={setPayee}
+              suggestions={payeeSuggestions}
+            />
           )}
         </div>
         <div className="field">
           <label>Memo</label>
-          <input value={memo} onChange={(e) => setMemo(e.target.value)} />
+          <AutocompleteInput value={memo} onChange={setMemo} suggestions={memoSuggestions} />
         </div>
         <div className="field">
           <label>Amount</label>

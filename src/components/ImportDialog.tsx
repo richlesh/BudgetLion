@@ -5,11 +5,12 @@ import type {
   ImportFormat,
   ParsedRow,
 } from "../shared/types";
-import { formatCents } from "../core/money";
+import { formatCents, isLiability } from "../core/money";
 import { parseCsvGrid, guessMapping, csvToRows } from "../core/import/csv";
 import { ofxToRows } from "../core/import/ofx";
 import { qifToRows } from "../core/import/qif";
 import { detectFormat, dedupeKey, looksLikeTransferByDescription } from "../core/import";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 interface Props {
   account: Account;
@@ -41,6 +42,8 @@ export function ImportDialog({ account, accounts, onCancel, onDone }: Props) {
   const [descIndex, setDescIndex] = useState(0);
   // Currently selected account in the description-transfer picker (per step).
   const [descPick, setDescPick] = useState<string>("");
+  // When true, show a "notation looks off" confirmation before committing.
+  const [notationWarn, setNotationWarn] = useState(false);
 
   // Accounts other than the import target, that could be a transfer counterparty.
   const otherAccounts = useMemo(
@@ -94,7 +97,10 @@ export function ImportDialog({ account, accounts, onCancel, onDone }: Props) {
         return;
       }
       setGrid(g);
-      setMapping(guessMapping(g));
+      // Credit-card/loan statement CSVs typically use positive = outgoing and
+      // negative = incoming (opposite of the internal convention), so default the
+      // invert on for liability accounts. The user can toggle it in the mapping UI.
+      setMapping({ ...guessMapping(g), invertAmounts: isLiability(account.type) });
       setStage("map");
     } else {
       const parsed = fmt === "ofx" ? ofxToRows(opened.text) : qifToRows(opened.text);
@@ -193,7 +199,37 @@ export function ImportDialog({ account, accounts, onCancel, onDone }: Props) {
 
   const dupCount = previewRows.filter((p) => p.duplicate).length;
 
+  // Sign-distribution sanity check on the resolved rows (stored convention).
+  // Expected dominant sign differs by account type:
+  //   - loan/mortgage: one big disbursement (negative) plus many payments that
+  //     reduce the balance (positive) -> expect MORE POSITIVES than negatives.
+  //   - everything else (checking/savings/credit card): mostly outflows
+  //     (spending / charges) -> expect MORE NEGATIVES than positives.
+  // If the dominant sign is the opposite of expected, the file's amount notation
+  // is probably reversed for this account.
+  function notationLooksWrong(): boolean {
+    let neg = 0;
+    let pos = 0;
+    for (const r of resolveRows(rows)) {
+      if (r.amountCents < 0) neg++;
+      else if (r.amountCents > 0) pos++;
+    }
+    if (neg === 0 && pos === 0) return false;
+    return account.type === "loan" ? neg > pos : pos > neg;
+  }
+
+  // Called by the Import button: run the safety check first; if it trips, show a
+  // confirmation, otherwise commit immediately.
+  function attemptCommit() {
+    if (notationLooksWrong()) {
+      setNotationWarn(true);
+      return;
+    }
+    void commit();
+  }
+
   async function commit() {
+    setNotationWarn(false);
     setBusy(true);
     setError(null);
     try {
@@ -238,6 +274,7 @@ export function ImportDialog({ account, accounts, onCancel, onDone }: Props) {
   }
 
   return (
+    <>
     <div className="dialog-backdrop" onClick={onCancel}>
       <div
         className="dialog"
@@ -273,6 +310,20 @@ export function ImportDialog({ account, accounts, onCancel, onDone }: Props) {
               />
               First row is a header
             </label>
+            <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
+              <input
+                type="checkbox"
+                checked={!!mapping.invertAmounts}
+                onChange={(e) => setMap("invertAmounts", e.target.checked)}
+                style={{ width: "auto" }}
+              />
+              Amounts use loan / credit-card conventions
+            </label>
+            <div className="account-type" style={{ marginTop: -2 }}>
+              Check when the file lists charges/payments as positive and
+              credits/deposits as negative (typical of loan and credit-card
+              statements). Amounts will be flipped on import.
+            </div>
             <div className="field">
               <label>Date format</label>
               <select
@@ -425,13 +476,34 @@ export function ImportDialog({ account, accounts, onCancel, onDone }: Props) {
             </>
           )}
           {stage === "preview" && (
-            <button onClick={commit} disabled={busy}>
+            <button onClick={attemptCommit} disabled={busy}>
               {busy ? "Importing…" : `Import ${rows.length} transaction(s)`}
             </button>
           )}
         </div>
       </div>
     </div>
+    {notationWarn && (
+      <ConfirmDialog
+        title="Amount signs may be wrong"
+        message={
+          account.type === "loan"
+            ? `Most imported transactions are outflows, but for the loan ${account.name} you'd ` +
+              `normally expect more inflows (payments that reduce the balance). The file's amount ` +
+              `notation may be reversed for this account (try toggling “invert” in the mapping ` +
+              `step). Import anyway?`
+            : `Most imported transactions are inflows, but for ${account.name} you'd normally ` +
+              `expect more outflows. The file's amount notation may be reversed for this account ` +
+              `(try toggling “invert” in the mapping step). Import anyway?`
+        }
+        confirmLabel="Continue"
+        cancelLabel="Cancel"
+        destructive={false}
+        onConfirm={() => void commit()}
+        onCancel={() => setNotationWarn(false)}
+      />
+    )}
+    </>
   );
 }
 

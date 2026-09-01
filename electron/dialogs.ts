@@ -204,6 +204,41 @@ export function buildMenu(mainWin: BrowserWindow): void {
       label: "File",
       submenu: [
         {
+          label: "New DB…",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-db-new"),
+        },
+        {
+          label: "Open DB…",
+          accelerator: "CmdOrCtrl+O",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-db-open"),
+        },
+        {
+          label: "Open Default DB",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-db-open-default"),
+        },
+        {
+          label: "Save DB As…",
+          accelerator: "CmdOrCtrl+Shift+S",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-db-save-as"),
+        },
+        {
+          label: "Backup DB…",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-db-backup"),
+        },
+        {
+          label: "Restore DB…",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-db-restore"),
+        },
+        { type: "separator" },
+        {
+          label: "New Account…",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-new-account"),
+        },
+        {
+          label: "New Category…",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-new-category"),
+        },
+        {
           label: "New Transaction",
           accelerator: "CmdOrCtrl+N",
           click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-new-transaction"),
@@ -214,12 +249,12 @@ export function buildMenu(mainWin: BrowserWindow): void {
         },
         { type: "separator" },
         {
-          label: "Import…",
+          label: "Import Transactions…",
           accelerator: "CmdOrCtrl+I",
           click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-import"),
         },
         {
-          label: "Export…",
+          label: "Export Transactions…",
           accelerator: "CmdOrCtrl+E",
           click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-export"),
         },
@@ -252,9 +287,19 @@ export function buildMenu(mainWin: BrowserWindow): void {
           click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-toggle-charts"),
         },
         {
+          label: "Toggle Forecast",
+          accelerator: "CmdOrCtrl+Shift+F",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-toggle-forecast"),
+        },
+        {
           label: "Recurring Rules…",
           accelerator: "CmdOrCtrl+R",
           click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-recurring"),
+        },
+        {
+          label: "Search…",
+          accelerator: "CmdOrCtrl+F",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-search"),
         },
         { type: "separator" },
         { role: "reload" },

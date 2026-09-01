@@ -13,6 +13,8 @@ export interface Settings {
   userName?: string;
   // UI persistence
   windowBounds?: { width: number; height: number; x?: number; y?: number };
+  // Path to the current database folder ("package"). Unset = default userData.
+  currentDbDir?: string;
   ledgerColumnWidths?: Record<string, number>;
   // Forecast (projection) ledger column widths (colKey -> px).
   forecastColumnWidths?: Record<string, number>;

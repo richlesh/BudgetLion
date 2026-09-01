@@ -230,6 +230,12 @@ export interface CsvColumnMapping {
   transferAccountId: number | null; // "Transfer Account ID" column (TO:/FROM:<code>)
   hasHeaderRow: boolean;
   dateFormat: "iso" | "us" | "eu"; // YYYY-MM-DD | MM/DD/YYYY | DD/MM/YYYY
+  /**
+   * When true, negate parsed amounts. Bank/statement CSVs (esp. credit cards)
+   * often use positive = outgoing / negative = incoming, the opposite of the
+   * internal convention (negative = outflow, positive = inflow).
+   */
+  invertAmounts?: boolean;
 }
 
 /** A previewed import row plus whether it is a duplicate of an existing transaction. */

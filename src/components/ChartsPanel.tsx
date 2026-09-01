@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
+import * as echarts from "echarts";
 import type { Account, AggregateData, ChartScope, DateRange } from "../shared/types";
-import { spendingByCategory, spendingByMonth, dataDateBounds, scopeLabel } from "../core/aggregate";
+import { categoryFlow, spendingByMonth, dataDateBounds, scopeLabel } from "../core/aggregate";
 import { formatCents } from "../core/money";
 
 interface Props {
@@ -21,6 +22,8 @@ export function ChartsPanel({ account, dark, onClose, onToast }: Props) {
   const [data, setData] = useState<AggregateData | null>(null);
   const [scopeKind, setScopeKind] = useState<"account" | "all">(account ? "account" : "all");
   const [range, setRange] = useState<DateRange>({ start: null, end: null });
+  // Pie chart mode: expenses (outflows) or income (inflows).
+  const [pieMode, setPieMode] = useState<"expense" | "income">("expense");
   const pieRef = useRef<ReactECharts>(null);
   const barRef = useRef<ReactECharts>(null);
 
@@ -40,8 +43,8 @@ export function ChartsPanel({ account, dark, onClose, onToast }: Props) {
   );
 
   const categoryData = useMemo(
-    () => (data ? spendingByCategory(data, scope, range) : []),
-    [data, scope, range]
+    () => (data ? categoryFlow(data, scope, range, pieMode) : []),
+    [data, scope, range, pieMode]
   );
   const monthData = useMemo(
     () => (data ? spendingByMonth(data, scope, range) : []),
@@ -56,7 +59,11 @@ export function ChartsPanel({ account, dark, onClose, onToast }: Props) {
       backgroundColor: "transparent",
       color: PALETTE,
       textStyle: { color: textColor },
-      title: { text: "Spending by Category", left: "center", textStyle: { color: textColor, fontSize: 14 } },
+      title: {
+        text: pieMode === "expense" ? "Expenses by Category" : "Income by Category",
+        left: "center",
+        textStyle: { color: textColor, fontSize: 14 },
+      },
       tooltip: {
         trigger: "item",
         formatter: (p: unknown) => {
@@ -75,7 +82,7 @@ export function ChartsPanel({ account, dark, onClose, onToast }: Props) {
         },
       ],
     }),
-    [categoryData, currency, textColor]
+    [categoryData, currency, textColor, pieMode]
   );
 
   const barOption: EChartsOption = useMemo(
@@ -124,7 +131,37 @@ export function ChartsPanel({ account, dark, onClose, onToast }: Props) {
     if (ok) onToast(`Exported ${which} chart as PNG.`);
   }
 
-  const totalSpending = categoryData.reduce((s, c) => s + c.amountCents, 0);
+  async function exportSvg(which: "pie" | "bar") {
+    const onScreen = (which === "pie" ? pieRef.current : barRef.current)?.getEchartsInstance();
+    const option = which === "pie" ? pieOption : barOption;
+    // ECharts renders SVG only via the SVG renderer, so build a temporary
+    // offscreen instance with that renderer, sized to the on-screen chart.
+    const width = onScreen?.getWidth() ?? 600;
+    const height = onScreen?.getHeight() ?? 320;
+    const holder = document.createElement("div");
+    holder.style.cssText = `position:absolute;left:-99999px;top:0;width:${width}px;height:${height}px;`;
+    document.body.appendChild(holder);
+    try {
+      const inst = echarts.init(holder, undefined, { renderer: "svg", width, height });
+      // Disable animation: with the SVG renderer, renderToSVGString() captures a
+      // single synchronous frame, so animated series (pie slices, bars) would
+      // otherwise be captured at their pre-animation (empty) state.
+      inst.setOption({
+        ...option,
+        animation: false,
+        backgroundColor: dark ? "#1e1f22" : "#ffffff",
+      });
+      const svg = inst.renderToSVGString();
+      inst.dispose();
+      const name = `${scopeLabel(scope, data?.accounts ?? []).replace(/[^a-z0-9]/gi, "_")}-${which}`;
+      const ok = await window.ledger.saveTextFile(name, svg, "svg");
+      if (ok) onToast(`Exported ${which} chart as SVG.`);
+    } finally {
+      document.body.removeChild(holder);
+    }
+  }
+
+  const pieTotal = categoryData.reduce((s, c) => s + c.amountCents, 0);
 
   return (
     <div className="charts-panel">
@@ -163,11 +200,25 @@ export function ChartsPanel({ account, dark, onClose, onToast }: Props) {
 
       {!data ? (
         <div className="empty">Loading…</div>
-      ) : totalSpending === 0 && monthData.length === 0 ? (
+      ) : categoryData.length === 0 && monthData.length === 0 ? (
         <div className="empty">No transactions in the selected range.</div>
       ) : (
         <div className="charts-grid">
           <div className="chart-card">
+            <div className="pie-mode-toggle">
+              <span className={pieMode === "expense" ? "active" : ""}>Expenses</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={pieMode === "income"}
+                aria-label="Toggle between expenses and income"
+                className={"switch" + (pieMode === "income" ? " on" : "")}
+                onClick={() => setPieMode((m) => (m === "expense" ? "income" : "expense"))}
+              >
+                <span className="switch-knob" />
+              </button>
+              <span className={pieMode === "income" ? "active" : ""}>Income</span>
+            </div>
             <ReactECharts
               ref={pieRef}
               option={pieOption}
@@ -176,9 +227,15 @@ export function ChartsPanel({ account, dark, onClose, onToast }: Props) {
               theme={undefined}
             />
             <div className="chart-actions">
-              <span className="account-type">Total: {formatCents(totalSpending, currency)}</span>
               <button className="secondary" onClick={() => exportPng("pie")}>
                 Export PNG
+              </button>
+              <span className="account-type">
+                Total {pieMode === "expense" ? "expenses" : "income"}:{" "}
+                {formatCents(pieTotal, currency)}
+              </span>
+              <button className="secondary" onClick={() => exportSvg("pie")}>
+                Export SVG
               </button>
             </div>
           </div>
@@ -187,6 +244,9 @@ export function ChartsPanel({ account, dark, onClose, onToast }: Props) {
             <div className="chart-actions">
               <button className="secondary" onClick={() => exportPng("bar")}>
                 Export PNG
+              </button>
+              <button className="secondary" onClick={() => exportSvg("bar")}>
+                Export SVG
               </button>
             </div>
           </div>

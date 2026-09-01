@@ -66,6 +66,15 @@ const api: LedgerApi = {
   ) => ipcRenderer.invoke(IPC.arePairSimilar, aPayee, aMemo, bPayee, bMemo, useAI),
   isAiAvailable: () => ipcRenderer.invoke(IPC.isAiAvailable),
 
+  // Database management (File menu).
+  dbNew: () => ipcRenderer.invoke(IPC.dbNew),
+  dbOpen: () => ipcRenderer.invoke(IPC.dbOpen),
+  dbOpenDefault: () => ipcRenderer.invoke(IPC.dbOpenDefault),
+  dbSaveAs: () => ipcRenderer.invoke(IPC.dbSaveAs),
+  dbBackup: () => ipcRenderer.invoke(IPC.dbBackup),
+  dbRestore: () => ipcRenderer.invoke(IPC.dbRestore),
+  dbCurrentName: () => ipcRenderer.invoke(IPC.dbCurrentName),
+
   // Export (M6)
   saveTextFile: (defaultName: string, content: string, ext: string) =>
     ipcRenderer.invoke(IPC.saveTextFile, defaultName, content, ext),
@@ -82,6 +91,12 @@ const api: LedgerApi = {
   },
   onMenuNewTransaction: (cb: () => void) => {
     ipcRenderer.on("menu-new-transaction", () => cb());
+  },
+  onMenuNewAccount: (cb: () => void) => {
+    ipcRenderer.on("menu-new-account", () => cb());
+  },
+  onMenuNewCategory: (cb: () => void) => {
+    ipcRenderer.on("menu-new-category", () => cb());
   },
   onMenuDedupe: (cb: () => void) => {
     ipcRenderer.on("menu-dedupe", () => cb());
@@ -104,8 +119,32 @@ const api: LedgerApi = {
   onMenuToggleCharts: (cb: () => void) => {
     ipcRenderer.on("menu-toggle-charts", () => cb());
   },
+  onMenuToggleForecast: (cb: () => void) => {
+    ipcRenderer.on("menu-toggle-forecast", () => cb());
+  },
   onMenuRecurring: (cb: () => void) => {
     ipcRenderer.on("menu-recurring", () => cb());
+  },
+  onMenuSearch: (cb: () => void) => {
+    ipcRenderer.on("menu-search", () => cb());
+  },
+  onMenuDbNew: (cb: () => void) => {
+    ipcRenderer.on("menu-db-new", () => cb());
+  },
+  onMenuDbOpen: (cb: () => void) => {
+    ipcRenderer.on("menu-db-open", () => cb());
+  },
+  onMenuDbOpenDefault: (cb: () => void) => {
+    ipcRenderer.on("menu-db-open-default", () => cb());
+  },
+  onMenuDbSaveAs: (cb: () => void) => {
+    ipcRenderer.on("menu-db-save-as", () => cb());
+  },
+  onMenuDbBackup: (cb: () => void) => {
+    ipcRenderer.on("menu-db-backup", () => cb());
+  },
+  onMenuDbRestore: (cb: () => void) => {
+    ipcRenderer.on("menu-db-restore", () => cb());
   },
 };
 

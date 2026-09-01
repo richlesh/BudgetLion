@@ -17,6 +17,7 @@ import { displaySign, formatCents, parseCents } from "../core/money";
 import { categoryDisplayName } from "../core/categories";
 import { CategoryAccountEditor, type CategoryChoice } from "./CategoryAccountEditor";
 import { TrashIcon } from "./TrashIcon";
+import { AutocompleteCellEditor } from "./AutocompleteCellEditor";
 
 // Register all community modules. v33 is tree-shakeable, so this pulls in the
 // client-side row model, cell editors (text/date/select), and cell styling that
@@ -51,10 +52,16 @@ interface Props {
     displayValue: string;
     transactionId: string;
     isOpening: boolean;
+    /** Ids of all currently selected transaction rows (excludes the opening row). */
+    selectedTransactionIds: string[];
   }) => void;
   // Persisted ledger column widths (colId -> px) and a callback to save changes.
   columnWidths?: Record<string, number>;
   onColumnWidthsChange?: (widths: Record<string, number>) => void;
+  /** Prior payees in this account, for inline Payee autocomplete. */
+  payeeSuggestions?: string[];
+  /** Prior memos in this account, for inline Memo autocomplete. */
+  memoSuggestions?: string[];
 }
 
 // Flat row shape fed to AG Grid.
@@ -98,6 +105,8 @@ export function LedgerGrid({
   onCellContext,
   columnWidths,
   onColumnWidthsChange,
+  payeeSuggestions,
+  memoSuggestions,
 }: Props) {
   // Keep the latest callbacks/data in refs so `columnDefs` can be built once and
   // stay referentially stable. If columnDefs changed identity on every edit (e.g.
@@ -108,6 +117,11 @@ export function LedgerGrid({
   const onCellContextRef = useRef(onCellContext);
   const categoriesRef = useRef(categories);
   const otherAccountsRef = useRef<Account[]>([]);
+  // Suggestion lists kept in refs so the (stable) columnDefs read current values.
+  const payeeSuggestionsRef = useRef<string[]>([]);
+  const memoSuggestionsRef = useRef<string[]>([]);
+  payeeSuggestionsRef.current = payeeSuggestions ?? [];
+  memoSuggestionsRef.current = memoSuggestions ?? [];
   onDeleteRef.current = onDelete;
   onSetChoiceRef.current = onSetCategoryOrTransfer;
   onCellContextRef.current = onCellContext;
@@ -297,6 +311,8 @@ export function LedgerGrid({
         // for splits, so it's not editable in those cases; it stays editable for
         // ordinary transactions.
         editable: (p) => isTxRow(p) && !p.data?.isTransfer && !p.data?.isSplit,
+        cellEditor: AutocompleteCellEditor,
+        cellEditorParams: () => ({ suggestions: payeeSuggestionsRef.current }),
         flex: 1,
         minWidth: 130,
       },
@@ -305,6 +321,8 @@ export function LedgerGrid({
         headerName: "Memo",
         // A split's memo is derived from its legs, so it's read-only for splits.
         editable: (p) => isTxRow(p) && !p.data?.isSplit,
+        cellEditor: AutocompleteCellEditor,
+        cellEditorParams: () => ({ suggestions: memoSuggestionsRef.current }),
         flex: 1,
         minWidth: 130,
       },
@@ -326,11 +344,14 @@ export function LedgerGrid({
           accounts: otherAccountsRef.current,
           // Preselect the row's current category/transfer/split in the list.
           initialValue: initialEditorValue(p.data.id),
-          // Row direction from the account's perspective drives which categories
-          // are offered: inflow (+) => income, outflow (−) => expense.
-          direction: (p.data.signedAmountCents >= 0 ? "income" : "expense") as
-            | "income"
-            | "expense",
+          // Which categories are offered is driven by the NORMALIZED (stored)
+          // sign, not the display sign: a stored positive => income/both, a
+          // stored negative => expense/both. For liability accounts the display
+          // sign is flipped, so we read the raw row value (via rowByIdRef) rather
+          // than p.data.signedAmountCents (which is display-signed).
+          direction: ((rowByIdRef.current.get(p.data.id)?.signedAmountCents ?? 0) >= 0
+            ? "income"
+            : "expense") as "income" | "expense",
           onChoose: (choice: CategoryChoice) => onSetChoiceRef.current(p.data.id, choice),
         }),
         cellEditorPopup: true,
@@ -470,6 +491,12 @@ export function LedgerGrid({
       const displayValue = isMoney
         ? formatCents(Number(e.value ?? 0), account.currency)
         : String(e.value ?? "");
+      // Ids of the currently selected transaction rows (exclude the opening row).
+      const selectedTransactionIds: string[] = [];
+      gridApiRef.current?.getSelectedNodes().forEach((n) => {
+        const d = n.data as GridRow | undefined;
+        if (d && !d.isOpening) selectedTransactionIds.push(d.id);
+      });
       cb({
         x: me.clientX,
         y: me.clientY,
@@ -478,6 +505,7 @@ export function LedgerGrid({
         displayValue,
         transactionId: e.data.id,
         isOpening: !!e.data.isOpening,
+        selectedTransactionIds,
       });
     },
     [account.currency]
@@ -505,6 +533,9 @@ export function LedgerGrid({
         onGridReady={onGridReady}
         onColumnResized={onColumnResized}
         getRowId={(p) => p.data.id}
+        rowSelection="multiple"
+        isRowSelectable={(node) => !node.data?.isOpening}
+        suppressRowClickSelection={false}
         enableBrowserTooltips
         stopEditingWhenCellsLoseFocus
       />

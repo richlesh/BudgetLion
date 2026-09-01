@@ -324,7 +324,7 @@ button.active-toggle {
 
 .chart-actions {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
   align-items: center;
   gap: 10px;
   padding-top: 6px;
@@ -492,6 +492,126 @@ button.danger {
 .fc-col-resizer:hover::after,
 .fc-col-resizer:active::after {
   background: var(--accent);
+}
+
+/* New Transaction autocomplete (Payee/Memo completion popup). */
+.autocomplete {
+  position: relative;
+}
+
+/* AG Grid inline cell editor: the input fills the cell like the default editor;
+   the suggestion list floats as a fixed-position dropdown so it isn't clipped. */
+.autocomplete-cell {
+  width: 100%;
+  height: 100%;
+}
+
+.autocomplete-cell > input {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  border: none;
+  padding: 0 8px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+}
+
+.autocomplete-list-fixed {
+  position: fixed;
+  left: 0;
+  right: auto;
+  top: 0;
+}
+
+.autocomplete-list {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  z-index: 1200;
+  margin: 2px 0 0;
+  padding: 4px;
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+}
+
+.autocomplete-item {
+  padding: 6px 8px;
+  border-radius: 5px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.autocomplete-item.active {
+  background: var(--accent);
+  color: white;
+}
+
+/* Pie chart Expenses/Income light-switch toggle. */
+.pie-mode-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 4px 0 2px;
+}
+
+.pie-mode-toggle .active {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.pie-mode-toggle .switch {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s ease;
+}
+
+.pie-mode-toggle .switch.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.pie-mode-toggle .switch-knob {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  transition: transform 0.15s ease;
+}
+
+.pie-mode-toggle .switch.on .switch-knob {
+  transform: translateX(18px);
+}
+
+/* Search results: each account group's ledger grid gets a bounded height so the
+   (flex:1) grid-wrap inside can size itself. */
+.search-grid-box {
+  display: flex;
+  flex-direction: column;
+  min-height: 120px;
 }
 
 /* Categories editor: per-row delete (trash) button, far right of the row.

@@ -26,6 +26,10 @@ import { CategoriesDialog } from "./components/CategoriesDialog";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { DedupeDialog } from "./components/DedupeDialog";
 import { resolveDuplicatePairs, type DuplicatePair } from "./core/dedupe";
+import { SearchDialog } from "./components/SearchDialog";
+import { SearchResults } from "./components/SearchResults";
+import type { SearchCriteria } from "./core/search";
+import type { AggregateData } from "./shared/types";
 import { ImportDialog } from "./components/ImportDialog";
 import { ExportDialog } from "./components/ExportDialog";
 import { ChartsPanel } from "./components/ChartsPanel";
@@ -52,6 +56,11 @@ export function App() {
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [showCharts, setShowCharts] = useState(false);
   const [showProjection, setShowProjection] = useState(false);
+  // Transaction search: dialog visibility, and the results snapshot (whole-DB
+  // aggregate data) + criteria driving the results modal.
+  const [showSearchDialog, setShowSearchDialog] = useState(false);
+  const [searchData, setSearchData] = useState<AggregateData | null>(null);
+  const [searchCriteria, setSearchCriteria] = useState<SearchCriteria | null>(null);
   const [showRecurring, setShowRecurring] = useState(false);
   const [recurringSeed, setRecurringSeed] = useState<Partial<NewRecurringRuleInput> | null>(null);
   // Right-click context menu over a ledger cell.
@@ -72,6 +81,9 @@ export function App() {
   const printFontRef = useRef<{ font?: string; size?: number }>({});
   // Transaction id staged for deletion, pending user confirmation.
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  // Transaction ids staged for bulk deletion (from a multi-row selection),
+  // pending user confirmation. Null = no bulk-delete prompt showing.
+  const [pendingBulkDelete, setPendingBulkDelete] = useState<string[] | null>(null);
   // De-duplication review: confirmed duplicate pairs + the current index, plus a
   // "scanning…" flag while the (possibly AI-backed) similarity check runs.
   const [dedupePairs, setDedupePairs] = useState<DuplicatePair[]>([]);
@@ -111,6 +123,35 @@ export function App() {
     balances.forEach((b) => m.set(b.accountId, b.balanceCents));
     return m;
   }, [balances]);
+
+  // Distinct prior payees and memos from the current account's ledger, most
+  // recent first, for the New Transaction autocomplete. Sourced from the loaded
+  // ledger rows (transactions in the selected account).
+  const payeeSuggestions = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (let i = ledger.length - 1; i >= 0; i--) {
+      const p = ledger[i].transaction?.payee?.trim();
+      if (p && !seen.has(p.toLowerCase())) {
+        seen.add(p.toLowerCase());
+        out.push(p);
+      }
+    }
+    return out;
+  }, [ledger]);
+
+  const memoSuggestions = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (let i = ledger.length - 1; i >= 0; i--) {
+      const m = ledger[i].transaction?.memo?.trim();
+      if (m && !seen.has(m.toLowerCase())) {
+        seen.add(m.toLowerCase());
+        out.push(m);
+      }
+    }
+    return out;
+  }, [ledger]);
 
   const refreshAccounts = useCallback(async () => {
     const [list, bals] = await Promise.all([
@@ -276,6 +317,33 @@ export function App() {
     }
   }, [refreshAccounts, refreshCategories, refreshLedger]);
 
+  // Run a database lifecycle operation (New/Open/Save As/Restore) and, on
+  // success, reload everything so the UI reflects the now-current database.
+  const handleDbSwitch = useCallback(
+    async (op: () => Promise<import("./shared/ipc").DbOpResult>, verb: string) => {
+      const res = await op();
+      if (res.canceled) return;
+      if (!res.ok) {
+        setToast(res.error ? `${verb} failed: ${res.error}` : `${verb} failed.`);
+        return;
+      }
+      // The working database changed: reset selection and reload from scratch.
+      setSelectedId(null);
+      setLedger([]);
+      await refreshAccounts();
+      await refreshCategories();
+      setToast(`${verb}: ${res.name ?? "database"}.`);
+    },
+    [refreshAccounts, refreshCategories]
+  );
+
+  // Backup keeps the same database open; just report success/failure.
+  const handleDbBackup = useCallback(async () => {
+    const res = await window.ledger.dbBackup();
+    if (res.canceled) return;
+    setToast(res.ok ? "Backup created." : `Backup failed: ${res.error ?? "unknown error"}`);
+  }, []);
+
   // Apply the chosen ledger font/size to the grid via CSS variables, and remember
   // the print font/size for PDF/print export.
   function applyFontSettings(s: {
@@ -314,6 +382,8 @@ export function App() {
     window.ledger.onMenuNewTransaction(() => {
       if (selectedRef.current) setShowTxDialog(true);
     });
+    window.ledger.onMenuNewAccount(() => setShowAccountDialog(true));
+    window.ledger.onMenuNewCategory(() => setShowCategoriesDialog(true));
     window.ledger.onMenuDedupe(() => {
       if (selectedRef.current) void runDedupe();
     });
@@ -325,12 +395,26 @@ export function App() {
     });
     window.ledger.onMenuPrint(() => doPrint());
     window.ledger.onMenuToggleCharts(() => setShowCharts((v) => !v));
+    window.ledger.onMenuToggleForecast(() => setShowProjection((v) => !v));
     window.ledger.onMenuRecurring(() => {
       setRecurringSeed(null);
       setShowRecurring(true);
     });
+    window.ledger.onMenuSearch(() => setShowSearchDialog(true));
     window.ledger.onMenuImportData(() => void doImportData());
     window.ledger.onMenuExportData(() => void doExportData());
+    window.ledger.onMenuDbNew(() => void handleDbSwitch(() => window.ledger.dbNew(), "New database"));
+    window.ledger.onMenuDbOpen(() => void handleDbSwitch(() => window.ledger.dbOpen(), "Opened"));
+    window.ledger.onMenuDbOpenDefault(() =>
+      void handleDbSwitch(() => window.ledger.dbOpenDefault(), "Opened")
+    );
+    window.ledger.onMenuDbSaveAs(() =>
+      void handleDbSwitch(() => window.ledger.dbSaveAs(), "Saved as")
+    );
+    window.ledger.onMenuDbRestore(() =>
+      void handleDbSwitch(() => window.ledger.dbRestore(), "Restored")
+    );
+    window.ledger.onMenuDbBackup(() => void handleDbBackup());
   }, [refreshAccounts, refreshCategories, doPrint, doImportData, doExportData]);
 
   // Persist ledger column widths to settings when the user resizes columns.
@@ -344,6 +428,22 @@ export function App() {
     setForecastColumnWidths(widths);
     void window.ledger.saveSettings({ forecastColumnWidths: widths });
   }, []);
+
+  // Run a search: snapshot the whole-DB aggregate data and open the results.
+  const runSearch = useCallback(async (criteria: SearchCriteria) => {
+    const data = await window.ledger.getAggregateData();
+    setSearchData(data);
+    setSearchCriteria(criteria);
+    setShowSearchDialog(false);
+  }, []);
+
+  // After an edit in the results view, re-snapshot data and refresh the main UI.
+  const reloadSearch = useCallback(async () => {
+    setSearchData(await window.ledger.getAggregateData());
+    await refreshAccounts();
+    await refreshCategories();
+    if (selectedRef.current) await refreshLedger(selectedRef.current.id);
+  }, [refreshAccounts, refreshCategories, refreshLedger]);
 
   // Draggable divider between the accounts sidebar and the ledger panel.
   const SIDEBAR_MIN = 160;
@@ -681,6 +781,7 @@ export function App() {
       displayValue: string;
       transactionId: string;
       isOpening: boolean;
+      selectedTransactionIds: string[];
     }) => {
       const items: ContextMenuItem[] = [];
       if (info.displayValue) {
@@ -706,6 +807,14 @@ export function App() {
           });
         }
       }
+      // Bulk delete when more than one transaction row is selected.
+      if (info.selectedTransactionIds.length > 1) {
+        const ids = info.selectedTransactionIds;
+        items.push({
+          label: `Bulk Delete (${ids.length})`,
+          onClick: () => setPendingBulkDelete(ids),
+        });
+      }
       if (items.length === 0) return;
       setLedgerMenu({ x: info.x, y: info.y, items });
     },
@@ -719,6 +828,19 @@ export function App() {
     await refreshLedger(selected.id);
     await refreshAccounts();
   }, [selected, pendingDeleteId, refreshLedger, refreshAccounts]);
+
+  // Delete all transactions staged for bulk deletion, then refresh.
+  const confirmBulkDelete = useCallback(async () => {
+    if (!selected || !pendingBulkDelete || pendingBulkDelete.length === 0) return;
+    const ids = pendingBulkDelete;
+    setPendingBulkDelete(null);
+    for (const id of ids) {
+      await window.ledger.deleteTransaction(id);
+    }
+    await refreshLedger(selected.id);
+    await refreshAccounts();
+    setToast(`Deleted ${ids.length} transaction(s).`);
+  }, [selected, pendingBulkDelete, refreshLedger, refreshAccounts]);
 
   // Human-readable description of the transaction pending deletion.
   const pendingDeleteLabel = useMemo(() => {
@@ -774,6 +896,9 @@ export function App() {
           </button>
           <button className="secondary" onClick={() => setShowCategoriesDialog(true)}>
             Categories…
+          </button>
+          <button className="secondary" onClick={() => setShowSearchDialog(true)}>
+            Search…
           </button>
         </div>
       </aside>
@@ -848,6 +973,8 @@ export function App() {
                 onCellContext={handleCellContext}
                 columnWidths={columnWidths}
                 onColumnWidthsChange={handleColumnWidthsChange}
+                payeeSuggestions={payeeSuggestions}
+                memoSuggestions={memoSuggestions}
               />
             )}
           </>
@@ -867,6 +994,8 @@ export function App() {
           account={selected}
           accounts={accounts}
           categories={categories}
+          payeeSuggestions={payeeSuggestions}
+          memoSuggestions={memoSuggestions}
           onCancel={() => setShowTxDialog(false)}
           onCreate={createTransaction}
         />
@@ -888,6 +1017,15 @@ export function App() {
           confirmLabel="Delete"
           onConfirm={confirmDelete}
           onCancel={() => setPendingDeleteId(null)}
+        />
+      )}
+      {pendingBulkDelete && pendingBulkDelete.length > 0 && (
+        <ConfirmDialog
+          title="Delete transactions?"
+          message={`Are you sure you want to delete ${pendingBulkDelete.length} selected transaction(s)? This can’t be undone.`}
+          confirmLabel="Delete"
+          onConfirm={() => void confirmBulkDelete()}
+          onCancel={() => setPendingBulkDelete(null)}
         />
       )}
       {showImportDialog && selected && (
@@ -1027,6 +1165,28 @@ export function App() {
             />
           );
         })()}
+      {showSearchDialog && (
+        <SearchDialog
+          accounts={accounts}
+          categories={categories}
+          initialAccountId={selectedId}
+          onCancel={() => setShowSearchDialog(false)}
+          onSearch={(criteria) => void runSearch(criteria)}
+        />
+      )}
+      {searchData && searchCriteria && (
+        <SearchResults
+          data={searchData}
+          criteria={searchCriteria}
+          dark={dark}
+          onClose={() => {
+            setSearchData(null);
+            setSearchCriteria(null);
+          }}
+          onReload={() => void reloadSearch()}
+          onToast={setToast}
+        />
+      )}
     </div>
   );
 }

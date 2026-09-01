@@ -30,6 +30,7 @@ export function guessMapping(grid: string[][]): CsvColumnMapping {
     transferAccountId: null,
     hasHeaderRow: false,
     dateFormat: "us",
+    invertAmounts: false,
   };
   if (grid.length === 0) return mapping;
 
@@ -90,6 +91,10 @@ export function csvToRows(grid: string[][], mapping: CsvColumnMapping): ParsedRo
       else if (credit != null && credit !== 0) amountCents = Math.abs(credit);
     }
     if (amountCents == null) continue;
+
+    // Statement-convention files use positive = outgoing / negative = incoming;
+    // flip to the internal convention when requested.
+    if (mapping.invertAmounts) amountCents = -amountCents;
 
     const payee = cleanDescription(cell(row, mapping.payee) || null);
     const memo = cell(row, mapping.memo) || null;

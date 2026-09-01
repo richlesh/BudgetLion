@@ -25,6 +25,15 @@ import { rowToTransaction } from "../../src/core/import/index.js";
 import { balanceForecast, projectLedger, addMonthsISO } from "../../src/core/recurring.js";
 import * as repo from "../db/repository.js";
 import { arePairSimilar, isAiAvailable } from "../ai/similarity.js";
+import {
+  currentDbName,
+  dbBackup,
+  dbNew,
+  dbOpen,
+  dbOpenDefault,
+  dbRestore,
+  dbSaveAs,
+} from "../db/manage.js";
 
 export function registerIpcHandlers(): void {
   ipcMain.handle(IPC.listAccounts, () => repo.listAccounts());
@@ -244,6 +253,15 @@ export function registerIpcHandlers(): void {
     ) => arePairSimilar(aPayee, aMemo, bPayee, bMemo, useAI ?? true)
   );
   ipcMain.handle(IPC.isAiAvailable, () => isAiAvailable());
+
+  // ---- Database management (File menu) ----
+  ipcMain.handle(IPC.dbNew, () => dbNew());
+  ipcMain.handle(IPC.dbOpen, () => dbOpen());
+  ipcMain.handle(IPC.dbOpenDefault, () => dbOpenDefault());
+  ipcMain.handle(IPC.dbSaveAs, () => dbSaveAs());
+  ipcMain.handle(IPC.dbBackup, () => dbBackup());
+  ipcMain.handle(IPC.dbRestore, () => dbRestore());
+  ipcMain.handle(IPC.dbCurrentName, () => currentDbName());
 }
 
 /** Render standalone HTML to a PDF buffer using an offscreen window. */

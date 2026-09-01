@@ -53,6 +53,16 @@ export interface DataBundle {
   recurringRules?: RecurringRule[];
 }
 
+/** Result of a database lifecycle operation (New/Open/Save As/Backup/Restore). */
+export interface DbOpResult {
+  ok: boolean;
+  /** Display name (folder basename) of the now-current database. */
+  name?: string;
+  /** True when the user cancelled a dialog (not an error). */
+  canceled?: boolean;
+  error?: string;
+}
+
 /** Projected ledger + monthly balance forecast for one account (M4). */
 export interface AccountProjection {
   rows: ProjectionRow[];
@@ -114,6 +124,17 @@ export interface LedgerApi {
   // AI: is a provider configured AND currently responding? (live probe)
   isAiAvailable(): Promise<boolean>;
 
+  // Database management (File menu). Each returns the now-current DB name.
+  dbNew(): Promise<DbOpResult>;
+  dbOpen(): Promise<DbOpResult>;
+  /** Open the database at the OS default location (userData). */
+  dbOpenDefault(): Promise<DbOpResult>;
+  dbSaveAs(): Promise<DbOpResult>;
+  dbBackup(): Promise<DbOpResult>;
+  dbRestore(): Promise<DbOpResult>;
+  /** Current database display name (folder basename). */
+  dbCurrentName(): Promise<string>;
+
   // Export (M6)
   saveTextFile(defaultName: string, content: string, ext: string): Promise<boolean>;
   saveDataUrl(defaultName: string, dataUrl: string, ext: string): Promise<boolean>;
@@ -128,6 +149,8 @@ export interface LedgerApi {
 
   // Menu events
   onMenuNewTransaction(cb: () => void): void;
+  onMenuNewAccount(cb: () => void): void;
+  onMenuNewCategory(cb: () => void): void;
   onMenuDedupe(cb: () => void): void;
   onMenuImport(cb: () => void): void;
   onMenuExport(cb: () => void): void;
@@ -135,7 +158,16 @@ export interface LedgerApi {
   onMenuImportData(cb: () => void): void;
   onMenuExportData(cb: () => void): void;
   onMenuToggleCharts(cb: () => void): void;
+  onMenuToggleForecast(cb: () => void): void;
   onMenuRecurring(cb: () => void): void;
+  onMenuSearch(cb: () => void): void;
+  // Database management menu events.
+  onMenuDbNew(cb: () => void): void;
+  onMenuDbOpen(cb: () => void): void;
+  onMenuDbOpenDefault(cb: () => void): void;
+  onMenuDbSaveAs(cb: () => void): void;
+  onMenuDbBackup(cb: () => void): void;
+  onMenuDbRestore(cb: () => void): void;
 }
 
 // IPC channel names, centralized to avoid typos across main/preload.
@@ -172,4 +204,11 @@ export const IPC = {
   importData: "data:import",
   arePairSimilar: "ai:pair-similar",
   isAiAvailable: "ai:available",
+  dbNew: "db:new",
+  dbOpen: "db:open",
+  dbOpenDefault: "db:open-default",
+  dbSaveAs: "db:save-as",
+  dbBackup: "db:backup",
+  dbRestore: "db:restore",
+  dbCurrentName: "db:current-name",
 } as const;

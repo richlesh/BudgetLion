@@ -60,41 +60,53 @@ function scopeSignedAmount(tx: Transaction, scope: ChartScope): number {
   return eff;
 }
 
+/** Which side of the ledger a category chart aggregates. */
+export type FlowDirection = "expense" | "income";
+
 /**
- * For a transaction that is an OUTFLOW in scope, return the category->outflow
- * magnitude contributions. Handles splits (category legs only) and unsplit
- * transactions (single inline category). Transfer legs are ignored.
+ * For a transaction that flows in the requested DIRECTION within scope, return
+ * the category->magnitude contributions. "expense" counts outflows (negative in
+ * scope); "income" counts inflows (positive). Handles splits (category legs
+ * only) and unsplit transactions (single inline category). Transfer legs are
+ * ignored.
  */
-function outflowByCategory(
+function flowByCategory(
   tx: Transaction,
   splits: TransactionSplit[],
-  scope: ChartScope
+  scope: ChartScope,
+  direction: FlowDirection
 ): Array<{ categoryId: string | null; amountCents: number }> {
   const scopeSigned = scopeSignedAmount(tx, scope);
-  if (scopeSigned >= 0) return []; // not an outflow in this scope
+  const wantOutflow = direction === "expense";
+  // Skip transactions whose net scope effect is on the other side.
+  if (wantOutflow ? scopeSigned >= 0 : scopeSigned <= 0) return [];
 
   const txSplits = splits.filter((s) => s.transactionId === tx.id && s.deletedAt == null);
   if (txSplits.length > 0) {
-    // Split: each category leg with a negative (outflow) signed amount contributes.
     const out: Array<{ categoryId: string | null; amountCents: number }> = [];
     for (const s of txSplits) {
-      if (s.transferAccountId) continue; // transfer leg, not spending
-      if (s.amountCents < 0) {
+      if (s.transferAccountId) continue; // transfer leg, not spending/income
+      // Expense legs are negative; income legs are positive.
+      if (wantOutflow ? s.amountCents < 0 : s.amountCents > 0) {
         out.push({ categoryId: s.categoryId, amountCents: Math.abs(s.amountCents) });
       }
     }
-    // If splits didn't cover the whole outflow (or were all transfers), ignore remainder.
     return out;
   }
 
-  // Unsplit: the whole outflow belongs to the inline category (or uncategorized).
+  // Unsplit: the whole flow belongs to the inline category (or uncategorized).
   return [{ categoryId: tx.categoryId, amountCents: Math.abs(scopeSigned) }];
 }
 
-export function spendingByCategory(
+/**
+ * Category breakdown for a scope/range in one direction: "expense" (spending) or
+ * "income". Amounts are positive magnitudes, sorted descending.
+ */
+export function categoryFlow(
   data: AggregateData,
   scope: ChartScope,
-  range: DateRange
+  range: DateRange,
+  direction: FlowDirection
 ): CategorySpend[] {
   const catName = new Map(data.categories.map((c) => [c.id, categoryDisplayName(c, data.categories)]));
   const totals = new Map<string | null, number>();
@@ -104,7 +116,7 @@ export function spendingByCategory(
     if (!touchesScope(tx, scope)) continue;
     if (!inRange(tx.date, range)) continue;
 
-    for (const { categoryId, amountCents } of outflowByCategory(tx, data.splits, scope)) {
+    for (const { categoryId, amountCents } of flowByCategory(tx, data.splits, scope, direction)) {
       totals.set(categoryId, (totals.get(categoryId) ?? 0) + amountCents);
     }
   }
@@ -120,6 +132,15 @@ export function spendingByCategory(
   }
   result.sort((a, b) => b.amountCents - a.amountCents);
   return result;
+}
+
+/** Backward-compatible spending (expense) breakdown by category. */
+export function spendingByCategory(
+  data: AggregateData,
+  scope: ChartScope,
+  range: DateRange
+): CategorySpend[] {
+  return categoryFlow(data, scope, range, "expense");
 }
 
 export function spendingByMonth(

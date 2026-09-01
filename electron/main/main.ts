@@ -6,6 +6,7 @@ import { closeDb, getDb } from "../db/index.js";
 import { registerIpcHandlers } from "../ipc/handlers.js";
 import { buildMenu, showSplash } from "../dialogs.js";
 import { loadSettings, saveSettings } from "../settings.js";
+import { applyDbTitle, initDatabaseFromSettings } from "../db/manage.js";
 
 const isDev = process.env.NODE_ENV === "development";
 
@@ -49,6 +50,10 @@ function createWindow(): void {
 
   win.once("ready-to-show", () => win.show());
   buildMenu(win);
+  // Reflect the current database name in the title bar. Do this AFTER the page
+  // finishes loading, otherwise the renderer's document <title> ("BudgetLion")
+  // overrides it on first launch.
+  win.webContents.on("did-finish-load", () => applyDbTitle(win));
 
   // Persist window bounds on resize/move (debounced) so they restore next launch.
   let boundsTimer: NodeJS.Timeout | null = null;
@@ -69,6 +74,7 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  initDatabaseFromSettings(); // adopt the saved DB folder if present
   getDb(); // initialize schema on startup
   registerIpcHandlers();
   showSplash();
