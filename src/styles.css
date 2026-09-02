@@ -486,13 +486,10 @@ button.danger {
   opacity: 0.7;
 }
 
-/* Side submenu: pops out to the right of its parent row, slightly overlapping. */
+/* Side submenu: fixed-positioned by JS (viewport-clamped so long lists don't run
+   off-screen); scrolls vertically when taller than the available height. */
 .context-submenu {
-  position: absolute;
-  left: 100%;
-  top: -5px;
-  margin-left: 2px;
-  max-height: 70vh;
+  position: fixed;
   overflow-y: auto;
 }
 
