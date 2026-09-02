@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   principal_cents       INTEGER,          -- original loan principal (nullable)
   term_months           INTEGER,          -- loan term (nullable)
   escrow_payment_cents  INTEGER,          -- monthly escrow portion for a mortgage payment (nullable)
+  escrow_target         TEXT,             -- escrow destination: 'cat:<id>' | 'acct:<id>' (null = default Escrow category)
   created_at            TEXT NOT NULL,
   updated_at            TEXT NOT NULL,
   deleted_at            TEXT

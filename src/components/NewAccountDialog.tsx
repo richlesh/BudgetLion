@@ -1,8 +1,11 @@
 import { useState } from "react";
-import type { AccountType, NewAccountInput } from "../shared/types";
+import type { Account, AccountType, Category, NewAccountInput } from "../shared/types";
 import { displaySign, isLiability, parseCents, percentToBps } from "../core/money";
+import { categoriesForDirection, categoryOptions } from "../core/categories";
 
 interface Props {
+  categories: Category[];
+  accounts: Account[];
   onCancel: () => void;
   onCreate: (input: NewAccountInput) => void;
 }
@@ -20,7 +23,7 @@ function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-export function NewAccountDialog({ onCancel, onCreate }: Props) {
+export function NewAccountDialog({ categories, accounts, onCancel, onCreate }: Props) {
   const [name, setName] = useState("");
   const [type, setType] = useState<AccountType>("checking");
   const [accountCode, setAccountCode] = useState("");
@@ -28,7 +31,11 @@ export function NewAccountDialog({ onCancel, onCreate }: Props) {
   const [openingDate, setOpeningDate] = useState(today());
   const [interestRate, setInterestRate] = useState("");
   const [escrow, setEscrow] = useState("");
+  // Escrow destination: "" = default Escrow category, else "cat:<id>" | "acct:<id>".
+  const [escrowTarget, setEscrowTarget] = useState("");
   const [error, setError] = useState<string | null>(null);
+
+  const expenseCats = categoryOptions(categoriesForDirection(categories, "expense"));
 
   function submit() {
     if (!name.trim()) {
@@ -51,6 +58,7 @@ export function NewAccountDialog({ onCancel, onCreate }: Props) {
       interestRateBps: isLiability(type) ? percentToBps(interestRate) : null,
       // Escrow applies to a mortgage (loan); blank => null.
       escrowPaymentCents: type === "loan" ? parseCents(escrow) : null,
+      escrowTarget: type === "loan" ? escrowTarget || null : null,
     });
   }
 
@@ -90,6 +98,28 @@ export function NewAccountDialog({ onCancel, onCreate }: Props) {
               onChange={(e) => setEscrow(e.target.value)}
               placeholder="monthly escrow, e.g. 350.00"
             />
+          </div>
+        )}
+        {type === "loan" && (
+          <div className="field">
+            <label>Escrow goes to</label>
+            <select value={escrowTarget} onChange={(e) => setEscrowTarget(e.target.value)}>
+              <option value="">— Escrow (expense category) —</option>
+              <optgroup label="Categories">
+                {expenseCats.map((o) => (
+                  <option key={o.category.id} value={`cat:${o.category.id}`}>
+                    {o.display}
+                  </option>
+                ))}
+              </optgroup>
+              <optgroup label="Transfer to account">
+                {accounts.map((a) => (
+                  <option key={a.id} value={`acct:${a.id}`}>
+                    {a.name}
+                  </option>
+                ))}
+              </optgroup>
+            </select>
           </div>
         )}
         <div className="field">

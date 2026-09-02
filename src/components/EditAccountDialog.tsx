@@ -1,9 +1,12 @@
 import { useState } from "react";
-import type { Account, AccountType, UpdateAccountInput } from "../shared/types";
+import type { Account, AccountType, Category, UpdateAccountInput } from "../shared/types";
 import { bpsToPercent, displaySign, formatCents, isLiability, parseCents, percentToBps } from "../core/money";
+import { categoriesForDirection, categoryOptions } from "../core/categories";
 
 interface Props {
   account: Account;
+  categories: Category[];
+  accounts: Account[];
   onCancel: () => void;
   onSave: (update: UpdateAccountInput) => void;
 }
@@ -22,7 +25,7 @@ const TYPES: { value: AccountType; label: string }[] = [
  * display-sign convention as the ledger (liability debts shown positive) and
  * flipped back to the stored convention on save.
  */
-export function EditAccountDialog({ account, onCancel, onSave }: Props) {
+export function EditAccountDialog({ account, categories, accounts, onCancel, onSave }: Props) {
   const [name, setName] = useState(account.name);
   const [type, setType] = useState<AccountType>(account.type);
   const [accountCode, setAccountCode] = useState(account.accountCode ?? "");
@@ -38,7 +41,12 @@ export function EditAccountDialog({ account, onCancel, onSave }: Props) {
       ? formatCents(account.escrowPaymentCents, account.currency)
       : ""
   );
+  const [escrowTarget, setEscrowTarget] = useState(account.escrowTarget ?? "");
   const [error, setError] = useState<string | null>(null);
+
+  const expenseCats = categoryOptions(categoriesForDirection(categories, "expense"));
+  // Candidate escrow accounts: everything except the loan being edited.
+  const otherAccounts = accounts.filter((a) => a.id !== account.id);
 
   function submit() {
     if (!name.trim()) {
@@ -64,6 +72,7 @@ export function EditAccountDialog({ account, onCancel, onSave }: Props) {
       interestRateBps: isLiability(type) ? percentToBps(interestRate) : null,
       // Escrow applies to a mortgage (loan); cleared for other types, null if blank.
       escrowPaymentCents: type === "loan" ? parseCents(escrow) : null,
+      escrowTarget: type === "loan" ? escrowTarget || null : null,
     });
   }
 
@@ -99,6 +108,28 @@ export function EditAccountDialog({ account, onCancel, onSave }: Props) {
               onChange={(e) => setEscrow(e.target.value)}
               placeholder="monthly escrow, e.g. 350.00"
             />
+          </div>
+        )}
+        {type === "loan" && (
+          <div className="field">
+            <label>Escrow goes to</label>
+            <select value={escrowTarget} onChange={(e) => setEscrowTarget(e.target.value)}>
+              <option value="">— Escrow (expense category) —</option>
+              <optgroup label="Categories">
+                {expenseCats.map((o) => (
+                  <option key={o.category.id} value={`cat:${o.category.id}`}>
+                    {o.display}
+                  </option>
+                ))}
+              </optgroup>
+              <optgroup label="Transfer to account">
+                {otherAccounts.map((a) => (
+                  <option key={a.id} value={`acct:${a.id}`}>
+                    {a.name}
+                  </option>
+                ))}
+              </optgroup>
+            </select>
           </div>
         )}
         <div className="field">

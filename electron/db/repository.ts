@@ -49,6 +49,7 @@ interface AccountRow {
   principal_cents: number | null;
   term_months: number | null;
   escrow_payment_cents: number | null;
+  escrow_target: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -85,6 +86,7 @@ function toAccount(r: AccountRow): Account {
     principalCents: r.principal_cents,
     termMonths: r.term_months,
     escrowPaymentCents: r.escrow_payment_cents,
+    escrowTarget: r.escrow_target,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     deletedAt: r.deleted_at,
@@ -138,6 +140,7 @@ export function createAccount(input: NewAccountInput): Account {
     principal_cents: input.principalCents ?? null,
     term_months: input.termMonths ?? null,
     escrow_payment_cents: input.escrowPaymentCents ?? null,
+    escrow_target: input.escrowTarget ?? null,
     created_at: ts,
     updated_at: ts,
     deleted_at: null,
@@ -145,10 +148,10 @@ export function createAccount(input: NewAccountInput): Account {
   db.prepare(
     `INSERT INTO accounts
        (id, name, type, currency, account_code, opening_balance_cents, opening_balance_date,
-        interest_rate_bps, principal_cents, term_months, escrow_payment_cents, created_at, updated_at, deleted_at)
+        interest_rate_bps, principal_cents, term_months, escrow_payment_cents, escrow_target, created_at, updated_at, deleted_at)
      VALUES
        (@id, @name, @type, @currency, @account_code, @opening_balance_cents, @opening_balance_date,
-        @interest_rate_bps, @principal_cents, @term_months, @escrow_payment_cents, @created_at, @updated_at, @deleted_at)`
+        @interest_rate_bps, @principal_cents, @term_months, @escrow_payment_cents, @escrow_target, @created_at, @updated_at, @deleted_at)`
   ).run(row);
   return toAccount(row);
 }
@@ -182,6 +185,10 @@ export function updateAccount(input: UpdateAccountInput): void {
   if (input.escrowPaymentCents !== undefined) {
     fields.push("escrow_payment_cents = @escrow_payment_cents");
     params.escrow_payment_cents = input.escrowPaymentCents;
+  }
+  if (input.escrowTarget !== undefined) {
+    fields.push("escrow_target = @escrow_target");
+    params.escrow_target = input.escrowTarget;
   }
   if (input.openingBalanceCents !== undefined) {
     fields.push("opening_balance_cents = @opening_balance_cents");
@@ -817,10 +824,20 @@ export function buildLoanPaymentSplit(txId: string): LoanPaymentSplitResult {
       memo: null,
     },
   ];
-  // Escrow -> its own categorized expense leg (only when the loan has escrow).
+  // Escrow -> its own leg (only when the loan has escrow). Destination comes from
+  // the loan's escrow_target: 'cat:<id>' => a category leg, 'acct:<id>' => a
+  // transfer leg to that (escrow) account. When unset/invalid, fall back to an
+  // auto-created 'Escrow' expense category.
   if (escrowCents > 0) {
-    const escrowCatId = ensureExpenseCategory("Escrow");
-    splits.push({ amountCents: -escrowCents, categoryId: escrowCatId, memo: null });
+    const target = loan.escrowTarget ?? "";
+    if (target.startsWith("acct:")) {
+      splits.push({ amountCents: -escrowCents, transferAccountId: target.slice(5), memo: null });
+    } else if (target.startsWith("cat:")) {
+      splits.push({ amountCents: -escrowCents, categoryId: target.slice(4), memo: null });
+    } else {
+      const escrowCatId = ensureExpenseCategory("Escrow");
+      splits.push({ amountCents: -escrowCents, categoryId: escrowCatId, memo: null });
+    }
   }
 
   return { interestCents, principalCents, escrowCents, splits };
@@ -857,10 +874,10 @@ export function importData(data: {
   const upsertAccount = db.prepare(
     `INSERT INTO accounts
        (id, name, type, currency, account_code, opening_balance_cents, opening_balance_date,
-        interest_rate_bps, principal_cents, term_months, escrow_payment_cents, created_at, updated_at, deleted_at)
+        interest_rate_bps, principal_cents, term_months, escrow_payment_cents, escrow_target, created_at, updated_at, deleted_at)
      VALUES
        (@id, @name, @type, @currency, @account_code, @opening_balance_cents, @opening_balance_date,
-        @interest_rate_bps, @principal_cents, @term_months, @escrow_payment_cents, @created_at, @updated_at, @deleted_at)
+        @interest_rate_bps, @principal_cents, @term_months, @escrow_payment_cents, @escrow_target, @created_at, @updated_at, @deleted_at)
      ON CONFLICT(id) DO UPDATE SET
        name = excluded.name, type = excluded.type, currency = excluded.currency,
        account_code = excluded.account_code,
@@ -870,6 +887,7 @@ export function importData(data: {
        principal_cents = excluded.principal_cents,
        term_months = excluded.term_months,
        escrow_payment_cents = excluded.escrow_payment_cents,
+       escrow_target = excluded.escrow_target,
        updated_at = excluded.updated_at,
        deleted_at = excluded.deleted_at`
   );
@@ -916,6 +934,7 @@ export function importData(data: {
         principal_cents: a.principalCents ?? null,
         term_months: a.termMonths ?? null,
         escrow_payment_cents: a.escrowPaymentCents ?? null,
+        escrow_target: a.escrowTarget ?? null,
         created_at: a.createdAt ?? ts,
         updated_at: ts,
         deleted_at: a.deletedAt ?? null,

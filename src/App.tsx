@@ -1105,6 +1105,8 @@ export function App() {
 
       {showAccountDialog && (
         <NewAccountDialog
+          categories={categories}
+          accounts={accounts}
           onCancel={() => setShowAccountDialog(false)}
           onCreate={createAccount}
         />
@@ -1244,6 +1246,8 @@ export function App() {
       {editAccount && (
         <EditAccountDialog
           account={editAccount}
+          categories={categories}
+          accounts={accounts}
           onCancel={() => setEditAccount(null)}
           onSave={saveAccount}
         />
