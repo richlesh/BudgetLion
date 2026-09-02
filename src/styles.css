@@ -214,6 +214,10 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  /* Never taller than the viewport; scroll the content instead of bleeding
+     off the top/bottom of the window (e.g. a paycheck with many deductions). */
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
 }
 
 .dialog h3 {

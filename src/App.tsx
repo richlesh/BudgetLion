@@ -26,7 +26,7 @@ import { NewAccountDialog } from "./components/NewAccountDialog";
 import { SplitEditorDialog } from "./components/SplitEditorDialog";
 import { NewTransactionDialog } from "./components/NewTransactionDialog";
 import { PaycheckDialog } from "./components/PaycheckDialog";
-import { buildPaycheckTransactions } from "./core/paycheck";
+import { buildPaycheckTransactions, isPaycheckSplit, reconstructPaycheckInput } from "./core/paycheck";
 import { NewInvestmentDialog } from "./components/NewInvestmentDialog";
 import { HoldingsPanel } from "./components/HoldingsPanel";
 import { CategoriesDialog } from "./components/CategoriesDialog";
@@ -122,6 +122,14 @@ export function App() {
     readOnly: boolean;
     fromAccountName?: string;
     /** Called after a successful save (refresh ledger/search as appropriate). */
+    onSaved?: () => void | Promise<void>;
+  } | null>(null);
+  // A paycheck-shaped split opens the full Paycheck editor instead of the generic
+  // split editor: editable on the owning (deposit) side, read-only on the TO side.
+  const [paycheckEditor, setPaycheckEditor] = useState<{
+    txId: string;
+    initialInput: PaycheckInput;
+    readOnly: boolean;
     onSaved?: () => void | Promise<void>;
   } | null>(null);
   // A pending category/transfer change on a SPLIT row, awaiting confirmation
@@ -746,6 +754,23 @@ export function App() {
             },
           ];
       }
+      // A paycheck-shaped split (mixed-sign legs) opens the full Paycheck editor
+      // instead of the generic split editor. Editable on the owning (deposit)
+      // side; read-only when viewing the counterparty (TO) side.
+      if (isSplit && existingSplits && isPaycheckSplit(existingSplits)) {
+        const depositAccountId = isOwner
+          ? account.id
+          : tx.toAccountId ?? tx.fromAccountId ?? account.id;
+        const initialInput = reconstructPaycheckInput(existingSplits, {
+          date: tx.date,
+          employer: tx.payee ?? "",
+          depositAccountId,
+          memo: tx.memo,
+        });
+        setPaycheckEditor({ txId: tx.id, initialInput, readOnly: !isOwner, onSaved });
+        return;
+      }
+
       setSplitEditor({
         txId: tx.id,
         account,
@@ -890,6 +915,34 @@ export function App() {
       }
     },
     [splitEditor]
+  );
+
+  // Save edits to an existing paycheck: rebuild the deposit split legs from the
+  // edited paycheck input and replace them on the transaction. (Employer
+  // contributions are separate transactions and aren't edited here.)
+  const updatePaycheck = useCallback(
+    async (input: PaycheckInput) => {
+      if (!paycheckEditor) return;
+      try {
+        const { transactions, netCents } = buildPaycheckTransactions(input);
+        const splits = transactions[0].splits ?? [];
+        await window.ledger.updateTransaction({
+          id: paycheckEditor.txId,
+          amountCents: netCents,
+          fromAccountId: null,
+          toAccountId: input.depositAccountId,
+          splits,
+          payee: input.employer.trim() || null,
+          date: input.date,
+        });
+        const onSaved = paycheckEditor.onSaved;
+        setPaycheckEditor(null);
+        if (onSaved) await onSaved();
+      } catch (e) {
+        setToast(e instanceof Error ? e.message : "Could not update paycheck.");
+      }
+    },
+    [paycheckEditor]
   );
 
   // Stage a delete: the grid's trash button asks for confirmation first.
@@ -1395,6 +1448,17 @@ export function App() {
           fromAccountName={splitEditor.fromAccountName}
           onCancel={() => setSplitEditor(null)}
           onSave={saveSplit}
+        />
+      )}
+      {paycheckEditor && (
+        <PaycheckDialog
+          accounts={accounts}
+          categories={categories}
+          initialInput={paycheckEditor.initialInput}
+          mode="edit"
+          readOnly={paycheckEditor.readOnly}
+          onCancel={() => setPaycheckEditor(null)}
+          onSubmit={updatePaycheck}
         />
       )}
       {pendingSplitChange && (

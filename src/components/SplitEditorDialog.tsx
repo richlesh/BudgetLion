@@ -123,6 +123,12 @@ export function SplitEditorDialog({
   const [error, setError] = useState<string | null>(null);
 
   const allocated = legs.reduce((s, l) => s + (parseCents(l.amount) ?? 0), 0);
+  // Entries must be positive magnitudes (the sign is applied from the
+  // transaction's direction). Flag any negative entry so we can block saving.
+  const hasNegative = legs.some((l) => {
+    const c = parseCents(l.amount);
+    return c != null && c < 0;
+  });
   // On the read-only TO side, `signedTotalCents` reflects only this account's
   // (single-leg) effect, not the whole split's owning total, so use the sum of
   // the legs as the total there — the split is already balanced.
@@ -147,6 +153,10 @@ export function SplitEditorDialog({
     const out: NewSplitInput[] = [];
     for (const l of legs) {
       const cents = parseCents(l.amount);
+      if (cents != null && cents < 0) {
+        setError("Enter positive amounts only — the sign is applied automatically from the transaction's direction.");
+        return;
+      }
       if (cents == null || cents <= 0) {
         setError("Every leg needs a positive amount.");
         return;
@@ -260,6 +270,11 @@ export function SplitEditorDialog({
           </div>
         </div>
 
+        {!readOnly && hasNegative && (
+          <div className="error">
+            Enter positive amounts only — the sign is applied automatically from the transaction's direction.
+          </div>
+        )}
         {error && <div className="error">{error}</div>}
 
         <div className="dialog-actions">
@@ -267,7 +282,7 @@ export function SplitEditorDialog({
             {readOnly ? "Close" : "Cancel"}
           </button>
           {!readOnly && (
-            <button onClick={save} disabled={remaining !== 0}>
+            <button onClick={save} disabled={remaining !== 0 || hasNegative}>
               Save split
             </button>
           )}

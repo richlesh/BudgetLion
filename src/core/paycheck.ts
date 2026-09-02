@@ -155,3 +155,81 @@ export function buildEmployerContribution(
     categoryId: c.sourceCategoryId ?? null,
   };
 }
+
+/** A minimal split-leg shape both stored splits and draft legs satisfy. */
+interface LegLike {
+  amountCents: number;
+  categoryId?: string | null;
+  transferAccountId?: string | null;
+  memo?: string | null;
+}
+
+/**
+ * A split is "paycheck-shaped" when its legs contain BOTH a positive (income)
+ * leg and a negative (deduction) leg — the mixed-sign signature that only the
+ * paycheck builder produces. Ordinary splits and loan splits are single-signed.
+ */
+export function isPaycheckSplit(legs: LegLike[] | undefined | null): boolean {
+  if (!legs || legs.length < 2) return false;
+  let hasPos = false;
+  let hasNeg = false;
+  for (const l of legs) {
+    if (l.amountCents > 0) hasPos = true;
+    else if (l.amountCents < 0) hasNeg = true;
+    if (hasPos && hasNeg) return true;
+  }
+  return false;
+}
+
+/**
+ * Reconstruct a PaycheckInput from a stored paycheck split so it can be reopened
+ * in the Paycheck dialog. Positive legs are gross income (summed; the first
+ * positive category leg supplies grossCategoryId); negative legs become
+ * deductions routed to their category or transfer account, labeled by memo.
+ *
+ * Employer contributions are separate transactions and cannot be recovered from
+ * a single deposit split, so the reconstruction omits them.
+ */
+export function reconstructPaycheckInput(
+  legs: LegLike[],
+  meta: { date: string; employer: string; depositAccountId: string; memo?: string | null }
+): PaycheckInput {
+  let grossCents = 0;
+  let grossCategoryId = "";
+  const deductions: PaycheckDeduction[] = [];
+
+  for (const l of legs) {
+    if (l.amountCents > 0) {
+      grossCents += l.amountCents;
+      if (!grossCategoryId && l.categoryId) grossCategoryId = l.categoryId;
+    } else if (l.amountCents < 0) {
+      const magnitude = -l.amountCents;
+      if (l.transferAccountId) {
+        deductions.push({
+          label: l.memo ?? "",
+          amountCents: magnitude,
+          target: "transfer",
+          accountId: l.transferAccountId,
+        });
+      } else {
+        deductions.push({
+          label: l.memo ?? "",
+          amountCents: magnitude,
+          target: "category",
+          categoryId: l.categoryId ?? null,
+        });
+      }
+    }
+  }
+
+  return {
+    date: meta.date,
+    employer: meta.employer,
+    memo: meta.memo ?? null,
+    depositAccountId: meta.depositAccountId,
+    grossCents,
+    grossCategoryId,
+    deductions,
+    employerContributions: [],
+  };
+}

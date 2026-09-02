@@ -18,6 +18,15 @@ interface Props {
   defaultDepositAccountId?: string | null;
   /** Optional prefill (Phase 2: from a parsed PDF). */
   initial?: Partial<PaycheckDraft>;
+  /**
+   * Prefill from a reconstructed paycheck (edit / view of an existing split).
+   * Takes precedence over `initial` and fully seeds fields including targets.
+   */
+  initialInput?: PaycheckInput;
+  /** "create" (default) shows create UI; "edit" reflects updating an existing paycheck. */
+  mode?: "create" | "edit";
+  /** View-only: on the counterparty (TO) side of a paycheck transfer split. */
+  readOnly?: boolean;
   onCancel: () => void;
   /** Called with the built transactions to persist (deposit split + employer contributions). */
   onSubmit: (input: PaycheckInput) => void | Promise<void>;
@@ -60,6 +69,38 @@ function newKey(): string {
   return Math.random().toString(36).slice(2);
 }
 
+/** Convert a reconstructed PaycheckInput into the editable draft (targets encoded). */
+function draftFromInput(input: PaycheckInput): PaycheckDraft {
+  return {
+    date: input.date,
+    employer: input.employer,
+    depositAccountId: input.depositAccountId,
+    gross: input.grossCents ? (input.grossCents / 100).toFixed(2) : "",
+    grossCategoryId: input.grossCategoryId,
+    deductions:
+      input.deductions.length > 0
+        ? input.deductions.map((d) => ({
+            key: newKey(),
+            label: d.label,
+            amount: (d.amountCents / 100).toFixed(2),
+            target:
+              d.target === "transfer" && d.accountId
+                ? `acct:${d.accountId}`
+                : d.categoryId
+                  ? `cat:${d.categoryId}`
+                  : NONE,
+          }))
+        : [{ key: newKey(), label: "", amount: "", target: NONE }],
+    contributions: (input.employerContributions ?? []).map((c) => ({
+      key: newKey(),
+      label: c.label,
+      amount: (c.amountCents / 100).toFixed(2),
+      accountId: c.accountId ?? "",
+      sourceCategoryId: c.sourceCategoryId ?? "",
+    })),
+  };
+}
+
 /**
  * Dedicated paycheck entry. Builds a single split income transaction: +gross to
  * an income category, minus each deduction (routed to an expense category OR a
@@ -71,24 +112,32 @@ export function PaycheckDialog({
   categories,
   defaultDepositAccountId,
   initial,
+  initialInput,
+  mode = "create",
+  readOnly = false,
   onCancel,
   onSubmit,
 }: Props) {
-  const [date, setDate] = useState(initial?.date ?? today());
-  const [employer, setEmployer] = useState(initial?.employer ?? "");
+  // A reconstructed paycheck (edit/view) fully seeds the draft, including targets.
+  const seed: Partial<PaycheckDraft> = initialInput ? draftFromInput(initialInput) : initial ?? {};
+  const [date, setDate] = useState(seed.date ?? today());
+  const [employer, setEmployer] = useState(seed.employer ?? "");
   const [depositAccountId, setDepositAccountId] = useState(
-    initial?.depositAccountId ?? defaultDepositAccountId ?? ""
+    seed.depositAccountId ?? defaultDepositAccountId ?? ""
   );
-  const [gross, setGross] = useState(initial?.gross ?? "");
-  const [grossCategoryId, setGrossCategoryId] = useState(initial?.grossCategoryId ?? "");
+  const [gross, setGross] = useState(seed.gross ?? "");
+  const [grossCategoryId, setGrossCategoryId] = useState(seed.grossCategoryId ?? "");
   const [deductions, setDeductions] = useState<DeductionRow[]>(
-    initial?.deductions ?? [{ key: newKey(), label: "", amount: "", target: NONE }]
+    seed.deductions ?? [{ key: newKey(), label: "", amount: "", target: NONE }]
   );
   const [contributions, setContributions] = useState<ContributionRow[]>(
-    initial?.contributions ?? []
+    seed.contributions ?? []
   );
   const [error, setError] = useState<string | null>(null);
   const [pdfNote, setPdfNote] = useState<string | null>(null);
+  // Employer contributions can't be reconstructed from a single deposit split,
+  // so they're only offered when creating a new paycheck.
+  const showContributions = mode === "create" && !readOnly;
 
   const incomeChoices = useMemo(
     () => categoryOptions(categoriesForDirection(categories, "income")),
@@ -105,6 +154,16 @@ export function PaycheckDialog({
   const netCents = grossCents - totalDeductionsCents;
   const contributionsCents = contributions.reduce((s, c) => s + (parseCents(c.amount) ?? 0), 0);
   const currency = accounts.find((a) => a.id === depositAccountId)?.currency ?? "USD";
+  // Amounts are positive magnitudes; the sign is applied automatically (gross is
+  // income, deductions are subtracted). Flag any negative entry to block saving.
+  const isNeg = (s: string) => {
+    const c = parseCents(s);
+    return c != null && c < 0;
+  };
+  const hasNegative =
+    isNeg(gross) ||
+    deductions.some((d) => isNeg(d.amount)) ||
+    (showContributions && contributions.some((c) => isNeg(c.amount)));
 
   function updateDeduction(key: string, patch: Partial<DeductionRow>) {
     setDeductions((prev) => prev.map((d) => (d.key === key ? { ...d, ...patch } : d)));
@@ -207,32 +266,41 @@ export function PaycheckDialog({
       await onSubmit(input);
     } catch (e) {
       if (e instanceof PaycheckError) setError(e.message);
-      else setError(e instanceof Error ? e.message : "Could not create paycheck.");
+      else setError(e instanceof Error ? e.message : `Could not ${mode === "edit" ? "update" : "create"} paycheck.`);
     }
   }
+
+  const title = readOnly ? "Paycheck (view only)" : mode === "edit" ? "Edit Paycheck" : "New Paycheck";
 
   return (
     <div className="dialog-backdrop" onClick={onCancel}>
       <div className="dialog" style={{ width: 620 }} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <h3>New Paycheck</h3>
-          <button className="secondary" onClick={importFromPdf} title="Extract values from a paycheck-stub PDF to prefill this form.">
-            Import from PDF…
-          </button>
+          <h3>{title}</h3>
+          {mode === "create" && !readOnly && (
+            <button className="secondary" onClick={importFromPdf} title="Extract values from a paycheck-stub PDF to prefill this form.">
+              Import from PDF…
+            </button>
+          )}
         </div>
+        {readOnly && (
+          <div className="account-type" style={{ marginBottom: 4 }}>
+            You must edit this paycheck from the deposit account's ledger.
+          </div>
+        )}
         {pdfNote && <div className="account-type" style={{ marginBottom: 6 }}>{pdfNote}</div>}
 
         <div className="field">
           <label>Pay date</label>
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          <input type="date" value={date} disabled={readOnly} onChange={(e) => setDate(e.target.value)} />
         </div>
         <div className="field">
           <label>Employer</label>
-          <input value={employer} onChange={(e) => setEmployer(e.target.value)} placeholder="Employer name" />
+          <input value={employer} disabled={readOnly} onChange={(e) => setEmployer(e.target.value)} placeholder="Employer name" />
         </div>
         <div className="field">
           <label>Deposit account</label>
-          <select value={depositAccountId} onChange={(e) => setDepositAccountId(e.target.value)}>
+          <select value={depositAccountId} disabled={readOnly} onChange={(e) => setDepositAccountId(e.target.value)}>
             <option value={NONE}>— Choose account —</option>
             {accounts.map((a) => (
               <option key={a.id} value={a.id}>
@@ -243,11 +311,11 @@ export function PaycheckDialog({
         </div>
         <div className="field">
           <label>Gross pay</label>
-          <input value={gross} onChange={(e) => setGross(e.target.value)} placeholder="0.00" style={{ textAlign: "right" }} />
+          <input value={gross} disabled={readOnly} onChange={(e) => setGross(e.target.value)} placeholder="0.00" style={{ textAlign: "right" }} />
         </div>
         <div className="field">
           <label>Gross income category</label>
-          <select value={grossCategoryId} onChange={(e) => setGrossCategoryId(e.target.value)}>
+          <select value={grossCategoryId} disabled={readOnly} onChange={(e) => setGrossCategoryId(e.target.value)}>
             <option value={NONE}>— Choose income category —</option>
             {incomeChoices.map((o) => (
               <option key={o.category.id} value={o.category.id}>
@@ -267,17 +335,20 @@ export function PaycheckDialog({
               <input
                 value={d.label}
                 placeholder="Label (e.g. Federal Tax)"
+                disabled={readOnly}
                 onChange={(e) => updateDeduction(d.key, { label: e.target.value })}
                 style={{ flex: 1.2 }}
               />
               <input
                 value={d.amount}
                 placeholder="0.00"
+                disabled={readOnly}
                 onChange={(e) => updateDeduction(d.key, { amount: e.target.value })}
                 style={{ width: 90, textAlign: "right" }}
               />
               <select
                 value={d.target}
+                disabled={readOnly}
                 onChange={(e) => updateDeduction(d.key, { target: e.target.value })}
                 style={{ flex: 1.4 }}
                 title="Route this deduction to an expense category or transfer it to a tracked account (e.g. a 401k)."
@@ -295,26 +366,31 @@ export function PaycheckDialog({
                     .filter((a) => a.id !== depositAccountId)
                     .map((a) => (
                       <option key={a.id} value={`acct:${a.id}`}>
-                        {a.name}
+                        → {a.name}
                       </option>
                     ))}
                 </optgroup>
               </select>
-              <button
-                className="secondary icon-btn"
-                title="Remove deduction"
-                aria-label="Remove deduction"
-                onClick={() => removeDeduction(d.key)}
-              >
-                ✕
-              </button>
+              {!readOnly && (
+                <button
+                  className="secondary icon-btn"
+                  title="Remove deduction"
+                  aria-label="Remove deduction"
+                  onClick={() => removeDeduction(d.key)}
+                >
+                  ✕
+                </button>
+              )}
             </div>
           ))}
-          <button className="secondary" onClick={addDeduction}>
-            + Add deduction
-          </button>
+          {!readOnly && (
+            <button className="secondary" onClick={addDeduction}>
+              + Add deduction
+            </button>
+          )}
         </div>
 
+        {showContributions && (
         <div className="paycheck-section">
           <div className="paycheck-section-head">
             <strong>Employer contributions</strong>
@@ -376,6 +452,7 @@ export function PaycheckDialog({
             + Add employer contribution
           </button>
         </div>
+        )}
 
         <div className="paycheck-summary">
           <span>Gross: {formatCents(grossCents, currency)}</span>
@@ -388,15 +465,22 @@ export function PaycheckDialog({
           )}
         </div>
 
+        {!readOnly && hasNegative && (
+          <div className="error">
+            Enter positive amounts only — gross is added as income and deductions are subtracted automatically.
+          </div>
+        )}
         {error && <div className="error">{error}</div>}
 
         <div className="dialog-actions">
           <button className="secondary" onClick={onCancel}>
-            Cancel
+            {readOnly ? "Close" : "Cancel"}
           </button>
-          <button onClick={submit} disabled={netCents < 0}>
-            Add paycheck
-          </button>
+          {!readOnly && (
+            <button onClick={submit} disabled={netCents < 0 || hasNegative}>
+              {mode === "edit" ? "Save changes" : "Add paycheck"}
+            </button>
+          )}
         </div>
       </div>
     </div>
