@@ -11,7 +11,7 @@ A cross-platform personal-finance ledger with double-entry accounting, built wit
 ## Features
 
 ### Accounts
-- **Account types** — Checking, Savings, Credit Card, and Loan/Mortgage
+- **Account types** — Checking, Savings, Credit Card, Loan/Mortgage, Investment/Brokerage, and Asset
 - **Opening balances** — Set an opening balance and date; shown as an editable, sortable ledger row
 - **Loan/mortgage fields** — Annual interest rate (basis points, up to 3 decimal places), principal, and term
 - **Liability sign convention** — Credit card and loan ledgers display charges as positive and payments as negative, statement-style, while stored data stays consistent
@@ -24,6 +24,8 @@ A cross-platform personal-finance ledger with double-entry accounting, built wit
 - **Transfers** — Move money between tracked accounts; the ledger auto-labels the payee as "To/From &lt;account&gt;"
 - **Multi-select + Bulk Delete** — Shift-click for contiguous and Cmd/Ctrl-click for discontiguous selection, then right-click to bulk delete with confirmation
 - **Right-click actions** — Copy a field, add a transaction to Recurring Rules, and more
+- **Bulk category** — Right-click a multi-selection to reassign all rows to a category or transfer via a submenu
+- **Undo / Redo** — Session-scoped, transaction-level undo/redo of adds, edits, deletes, and split changes (row-level snapshot journal; capped at 50 steps, cleared when the database changes)
 - **Resizable, persistent columns** — Column widths are saved between sessions
 - **Movable sidebar divider** — Drag to resize the accounts panel; the width persists
 
@@ -32,11 +34,26 @@ A cross-platform personal-finance ledger with double-entry accounting, built wit
 - The ledger's Category cell shows "Split"; the Memo is auto-computed from the leg memos
 - Hovering a split shows each leg on its own line
 - View-only display on the counterparty (TO) side of a split transfer, with clear labeling
+- **Split from anywhere** — Open the split editor from the ledger or from Search results
+- **Loan payment auto-split** — Categorizing a payment to a loan account automatically splits it into interest (charged on the loan's balance as of the payment date) and principal, using the account's annual rate
+- **Mortgage escrow** — Optional third auto-split leg for escrow, routed to a category or another account; interest is still charged on the loan balance and principal is the remainder
+
+### Investments & Assets
+- **Investment/Brokerage accounts** — Track securities alongside cash in the same account
+- **Trades** — Buy/Sell dialog with bidirectional shares ⟷ price ⟷ amount; trade rows in the cash ledger show the security ticker, name, shares, and price
+- **Stock grants & "Add shares"** — Record employer grants (with an income category) and add opening holdings, gifts, or transfers-in without a cash leg
+- **Brokerage fees** — Optional fee expense category on trades
+- **Holdings panel** — Per-account holdings with current valuation
+- **Price fetching** — Opt-in automated quotes from Yahoo Finance (stocks, ETFs, many mutual funds) via a Settings toggle and a Refresh button; unresolved symbols fall back to manual entry, and symbols are only sent to the provider when fetching is enabled
+- **Investment CSV import** — Import 401(k)-style transaction history into trades
+- **Asset accounts** — Track non-security assets (e.g. property, collectibles) by valuation
+- **Net worth** — Per-account worth combines cash balance with the current value of asset holdings
 
 ### Categories
 - **Subcategories** — Parent:Child hierarchy with income / expense / both applicability
 - **Inline rename** — Double-click a category name to edit its base name
 - **Safe delete** — A trash button appears only for categories not used by any transaction, split, rule, or subcategory
+- **Default categories** — A brand-new database is seeded with a starter set of income/expense categories (including Cash)
 - Sorted category pick lists throughout the app
 
 ### Recurring Rules & Forecast
@@ -60,6 +77,7 @@ A cross-platform personal-finance ledger with double-entry accounting, built wit
 ### Search
 - **Search dialog** — Filter across the whole database by account (default All), date range, payee, memo, category, and amount; empty fields are ignored
 - Results open in a ledger-style view (grouped by account) that reuses the same table and inline-edit mechanisms
+- Right-click actions and the Split editor work directly in Search results; scoping to a single account groups results under just that account
 
 ### Import & Export
 - **Import transactions** — CSV (configurable column mapping), OFX/QFX, and QIF
@@ -87,6 +105,7 @@ A database is a folder ("package") containing the SQLite file. From the **File**
 - Light / dark theme
 - Ledger and print/PDF fonts and sizes
 - AI vendor, model, and API keys
+- Opt-in automated price fetching for investment holdings
 - Settings are saved to `~/.budgetlion-settings.json`
 
 ---
@@ -150,16 +169,20 @@ BudgetLion/
 │   ├── db/
 │   │   ├── index.ts          # better-sqlite3 connection + migrations
 │   │   ├── repository.ts     # data-access layer
+│   │   ├── undo.ts           # session-scoped undo/redo snapshot journal
 │   │   ├── manage.ts         # New/Open/Save As/Backup/Restore
 │   │   └── schema.sql        # database schema
 │   ├── ai/                   # AI vendor config + similarity
+│   ├── prices/               # opt-in Yahoo Finance price fetching
 │   ├── dialogs.ts            # native menu + splash/about/license/settings
 │   └── settings.ts           # settings persistence
 ├── src/
 │   ├── App.tsx               # main React app
-│   ├── components/           # ledger grid, dialogs, charts, search, etc.
+│   ├── components/           # ledger grid, dialogs, charts, search,
+│   │                         #   holdings/investment panels, etc.
 │   ├── core/                 # pure logic (balances, aggregate, recurring,
-│   │                         #   dedupe, search, import/export, categories)
+│   │                         #   dedupe, search, import/export, categories,
+│   │                         #   worth, loan payment split)
 │   └── shared/               # shared types + IPC contract
 ├── dialogs/                  # static HTML for splash/about/license/settings
 ├── resources/                # icons + ai-vendors.json
