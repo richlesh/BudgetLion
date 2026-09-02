@@ -139,6 +139,43 @@ export const CategoryAccountEditor = forwardRef(function CategoryAccountEditor(
     stopEditing(true);
   };
 
+  // Latest filtered list + active index for the capture-phase key handler, which
+  // is bound once and would otherwise close over stale state.
+  const stateRef = useRef({ filtered, active });
+  stateRef.current = { filtered, active };
+
+  // Capture-phase native keydown on the input: runs BEFORE AG Grid's grid-level
+  // key handling, so Enter accepts the highlighted option instead of AG Grid
+  // stopping the edit first (which would discard the selection). Arrow keys move
+  // the highlight; Escape cancels.
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    const handler = (e: KeyboardEvent) => {
+      const { filtered: f, active: a } = stateRef.current;
+      if (e.key === "Enter") {
+        e.preventDefault();
+        e.stopPropagation();
+        commit(f[a]?.value);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        cancel();
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        e.stopPropagation();
+        setActive((i) => Math.min(i + 1, stateRef.current.filtered.length - 1));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        e.stopPropagation();
+        setActive((i) => Math.max(i - 1, 0));
+      }
+    };
+    el.addEventListener("keydown", handler, true); // capture phase
+    return () => el.removeEventListener("keydown", handler, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useImperativeHandle(ref, () => ({ getValue: () => undefined }));
 
   return (
@@ -151,23 +188,6 @@ export const CategoryAccountEditor = forwardRef(function CategoryAccountEditor(
         placeholder="Type to filter…"
         autoFocus
         onChange={(e) => setQuery(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") {
-            e.preventDefault();
-            e.stopPropagation();
-            cancel();
-          } else if (e.key === "Enter") {
-            e.preventDefault();
-            e.stopPropagation();
-            commit(filtered[active]?.value);
-          } else if (e.key === "ArrowDown") {
-            e.preventDefault();
-            setActive((i) => Math.min(i + 1, filtered.length - 1));
-          } else if (e.key === "ArrowUp") {
-            e.preventDefault();
-            setActive((i) => Math.max(i - 1, 0));
-          }
-        }}
       />
       <ul className="cat-acct-list" ref={listRef}>
         {filtered.length === 0 && <li className="cat-acct-empty">No matches</li>}
