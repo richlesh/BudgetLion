@@ -79,6 +79,10 @@ export interface ParsedPaycheckDeduction {
 /** Result of importing + parsing a paycheck-stub PDF (Phase 2). */
 export interface ParsedPaycheckResult {
   fileName: string;
+  /** Employer / company name, or null if not confidently found. */
+  employer: string | null;
+  /** Pay date as ISO (YYYY-MM-DD), or null if not found. */
+  date: string | null;
   grossCents: number | null;
   netCents: number | null;
   deductions: ParsedPaycheckDeduction[];

@@ -277,6 +277,8 @@ export function registerIpcHandlers(): void {
     const parsed = parsePaycheckText(text);
     return {
       fileName: basename(filePath),
+      employer: parsed.employer,
+      date: parsed.date,
       grossCents: parsed.grossCents,
       netCents: parsed.netCents,
       deductions: parsed.deductions,

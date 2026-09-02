@@ -8,7 +8,8 @@ import type {
 } from "../shared/types";
 import { formatCents, parseCents } from "../core/money";
 import { categoriesForDirection, categoryOptions } from "../core/categories";
-import { buildPaycheckTransactions, PaycheckError } from "../core/paycheck";
+import { buildPaycheckTransactions, learnPaycheckTargets, normalizeLabel, PaycheckError } from "../core/paycheck";
+import type { LearnedTarget } from "../core/paycheck";
 
 interface Props {
   /** All accounts (deposit target + transfer targets for deductions/contributions). */
@@ -221,6 +222,46 @@ export function PaycheckDialog({
     };
   }
 
+  // Convert a learned target into the dialog's encoded target string.
+  function encodeLearned(t: LearnedTarget): string {
+    if (t.target === "transfer" && t.accountId) return `acct:${t.accountId}`;
+    if (t.target === "category" && t.categoryId) return `cat:${t.categoryId}`;
+    return NONE;
+  }
+
+  // Learn from the last few paychecks of the same employer (same deposit account)
+  // and auto-assign a category/account to any deduction that has no target yet.
+  // Also adopts the prior gross income category when none is chosen. Returns the
+  // number of targets filled. No-op when employer/deposit account are unset.
+  async function applyLearning(overrideEmployer?: string): Promise<number> {
+    const emp = (overrideEmployer ?? employer).trim();
+    if (!emp || !depositAccountId) return 0;
+    let data;
+    try {
+      data = await window.ledger.getAggregateData();
+    } catch {
+      return 0;
+    }
+    const learned = learnPaycheckTargets(data, emp, depositAccountId);
+    if (learned.sampleCount === 0) return 0;
+
+    let filled = 0;
+    setDeductions((prev) =>
+      prev.map((d) => {
+        if (d.target !== NONE) return d; // respect the user's / PDF's explicit target
+        const hit = learned.labelToTarget.get(normalizeLabel(d.label));
+        if (!hit) return d;
+        const enc = encodeLearned(hit);
+        if (enc === NONE) return d;
+        filled++;
+        return { ...d, target: enc };
+      })
+    );
+    // Adopt a prior gross income category if none chosen yet.
+    setGrossCategoryId((cur) => cur || learned.grossCategoryId || cur);
+    return filled;
+  }
+
   // Phase 2: pick a stub PDF, extract + parse it in the main process, and prefill
   // the form. Targets (category/account) are left for the user to assign, since
   // the right mapping is personal. Falls back gracefully when nothing is found.
@@ -230,6 +271,8 @@ export function PaycheckDialog({
     try {
       const res = await window.ledger.importPaycheckPdf();
       if (!res) return; // user canceled
+      if (res.employer) setEmployer(res.employer);
+      if (res.date) setDate(res.date);
       if (res.grossCents != null) setGross((res.grossCents / 100).toFixed(2));
       if (res.deductions.length > 0) {
         setDeductions(
@@ -241,7 +284,7 @@ export function PaycheckDialog({
           }))
         );
       }
-      const found = (res.grossCents != null ? 1 : 0) + res.deductions.length;
+      const found = (res.date ? 1 : 0) + (res.grossCents != null ? 1 : 0) + res.deductions.length;
       if (found === 0) {
         setPdfNote(
           `Couldn't read values from "${res.fileName}". It may be a scanned image; enter the paycheck manually.`
@@ -250,7 +293,14 @@ export function PaycheckDialog({
         const extra = res.unresolvedLabels.length
           ? ` Unrecognized amounts: ${res.unresolvedLabels.join(", ")}.`
           : "";
-        setPdfNote(`Prefilled from "${res.fileName}". Review amounts and assign a category or account to each deduction.${extra}`);
+        // Learn category/account targets from prior paychecks of this employer.
+        const filled = await applyLearning(res.employer ?? undefined);
+        const learnNote = filled > 0
+          ? ` Auto-assigned ${filled} deduction${filled === 1 ? "" : "s"} from your prior paychecks — please verify.`
+          : "";
+        setPdfNote(
+          `Prefilled from "${res.fileName}". Review amounts and assign a category or account to each deduction.${extra}${learnNote}`
+        );
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not read the PDF.");
@@ -296,7 +346,13 @@ export function PaycheckDialog({
         </div>
         <div className="field">
           <label>Employer</label>
-          <input value={employer} disabled={readOnly} onChange={(e) => setEmployer(e.target.value)} placeholder="Employer name" />
+          <input
+            value={employer}
+            disabled={readOnly}
+            onChange={(e) => setEmployer(e.target.value)}
+            onBlur={() => { if (!readOnly) void applyLearning(); }}
+            placeholder="Employer name"
+          />
         </div>
         <div className="field">
           <label>Deposit account</label>

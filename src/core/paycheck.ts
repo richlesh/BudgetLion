@@ -15,11 +15,14 @@
 //   target account/category. These are returned alongside the deposit transaction.
 
 import type {
+  AggregateData,
   EmployerContribution,
   NewSplitInput,
   NewTransactionInput,
   PaycheckDeduction,
   PaycheckInput,
+  Transaction,
+  TransactionSplit,
 } from "../shared/types";
 
 export interface PaycheckBuildResult {
@@ -232,4 +235,106 @@ export function reconstructPaycheckInput(
     deductions,
     employerContributions: [],
   };
+}
+
+/** A learned routing target for a deduction label. */
+export interface LearnedTarget {
+  target: "category" | "transfer";
+  categoryId?: string | null;
+  accountId?: string | null;
+}
+
+/** Result of learning from prior paychecks of the same employer. */
+export interface LearnedPaycheck {
+  /** normalized-label -> most-recent target seen for that deduction. */
+  labelToTarget: Map<string, LearnedTarget>;
+  /** Distinct prior deduction line items (original label + target), newest first. */
+  priorDeductions: Array<{ label: string; target: LearnedTarget }>;
+  /** The gross income category most recently used, if any. */
+  grossCategoryId: string | null;
+  /** How many prior paychecks were examined. */
+  sampleCount: number;
+}
+
+/** Normalize a deduction label for matching (lowercase, collapse spaces/punct). */
+export function normalizeLabel(label: string): string {
+  return label.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+/**
+ * Learn deduction routing from the most recent paychecks of the same employer.
+ *
+ * Scans `data` for transactions whose payee matches `employer` (case-insensitive)
+ * that are paycheck-shaped splits (mixed-sign legs) and deposit into
+ * `depositAccountId`, newest first, up to `maxPaychecks`. From their negative
+ * (deduction) legs it builds a normalized-label -> target map (most recent wins)
+ * and a de-duplicated list of prior deduction line items. Also captures the most
+ * recent gross income category. Pure/framework-agnostic.
+ */
+export function learnPaycheckTargets(
+  data: Pick<AggregateData, "transactions" | "splits">,
+  employer: string,
+  depositAccountId: string,
+  maxPaychecks = 5
+): LearnedPaycheck {
+  const empKey = employer.trim().toLowerCase();
+  const empty: LearnedPaycheck = {
+    labelToTarget: new Map(),
+    priorDeductions: [],
+    grossCategoryId: null,
+    sampleCount: 0,
+  };
+  if (!empKey) return empty;
+
+  const splitsByTx = new Map<string, TransactionSplit[]>();
+  for (const s of data.splits) {
+    if (s.deletedAt != null) continue;
+    const arr = splitsByTx.get(s.transactionId) ?? [];
+    arr.push(s);
+    splitsByTx.set(s.transactionId, arr);
+  }
+
+  // Candidate paycheck transactions for this employer + deposit account.
+  const candidates = data.transactions
+    .filter((tx: Transaction) => {
+      if (tx.deletedAt != null) return false;
+      if ((tx.payee ?? "").trim().toLowerCase() !== empKey) return false;
+      if (tx.toAccountId !== depositAccountId) return false;
+      const legs = splitsByTx.get(tx.id);
+      return isPaycheckSplit(legs);
+    })
+    // Newest first (by date, then createdAt for ties).
+    .sort((a, b) => (a.date !== b.date ? (a.date < b.date ? 1 : -1) : a.createdAt < b.createdAt ? 1 : -1))
+    .slice(0, maxPaychecks);
+
+  const labelToTarget = new Map<string, LearnedTarget>();
+  const priorDeductions: Array<{ label: string; target: LearnedTarget }> = [];
+  const seenPrior = new Set<string>();
+  let grossCategoryId: string | null = null;
+
+  for (const tx of candidates) {
+    const legs = splitsByTx.get(tx.id) ?? [];
+    for (const leg of legs) {
+      if (leg.amountCents > 0) {
+        // Gross income leg — remember the most recent (candidates are newest-first).
+        if (grossCategoryId == null && leg.categoryId) grossCategoryId = leg.categoryId;
+        continue;
+      }
+      if (leg.amountCents >= 0) continue; // skip zero
+      const label = leg.memo ?? "";
+      const key = normalizeLabel(label);
+      if (!key) continue;
+      const target: LearnedTarget = leg.transferAccountId
+        ? { target: "transfer", accountId: leg.transferAccountId }
+        : { target: "category", categoryId: leg.categoryId ?? null };
+      // Most-recent wins (candidates newest-first, so only set once).
+      if (!labelToTarget.has(key)) labelToTarget.set(key, target);
+      if (!seenPrior.has(key)) {
+        seenPrior.add(key);
+        priorDeductions.push({ label, target });
+      }
+    }
+  }
+
+  return { labelToTarget, priorDeductions, grossCategoryId, sampleCount: candidates.length };
 }
