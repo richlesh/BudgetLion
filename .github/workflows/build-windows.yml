@@ -12,7 +12,11 @@ on:
 
 jobs:
   build-windows:
-    runs-on: windows-latest
+    # Pin to windows-2022 (Visual Studio 2022 / 17.x). windows-latest now ships
+    # Visual Studio 2026 (18.x), which node-gyp cannot yet detect ("unknown
+    # version 'undefined'"), breaking the better-sqlite3 native build. See
+    # nodejs/node-gyp#3282. Revisit windows-latest once node-gyp supports VS 2026.
+    runs-on: windows-2022
     permissions:
       id-token: write
       contents: write
