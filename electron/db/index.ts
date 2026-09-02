@@ -313,6 +313,7 @@ function seedDefaultCategories(instance: Database.Database): void {
     applicability: Applic;
     children?: Array<{ name: string; applicability: Applic }>;
   }> = [
+    { name: "Cash", applicability: "both" },
     {
       name: "Fee",
       applicability: "expense",
