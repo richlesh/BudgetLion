@@ -207,7 +207,7 @@ export const CategoryAccountEditor = forwardRef(function CategoryAccountEditor(
             }}
             onMouseEnter={() => setActive(i)}
           >
-            {o.label}
+            {o.group === "Account" ? `→ ${o.label}` : o.label}
             {o.group === "Account" && <span className="cat-acct-tag">account</span>}
           </li>
         ))}
