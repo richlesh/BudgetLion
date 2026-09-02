@@ -760,8 +760,15 @@ export function buildLoanPaymentSplit(txId: string): LoanPaymentSplitResult {
     throw new Error("Auto principal/interest split requires the counterparty to be a loan account.");
   }
 
-  // Loan balance as of the payment date, excluding this payment.
-  const loanTxns = transactionsForAccount(loan.id);
+  // Loan balance as of the payment date, excluding this payment. The loan's
+  // history includes BOTH transactions it directly owns AND transactions whose
+  // transfer-leg splits point at it (e.g. prior loan payments made as splits,
+  // where the loan is the split counterparty rather than the owning from/to).
+  const owned = transactionsForAccount(loan.id);
+  const counterpartyIds = transactionIdsWithTransferSplitTo(loan.id);
+  const ownedIds = new Set(owned.map((t) => t.id));
+  const extra = transactionsByIds(counterpartyIds.filter((id) => !ownedIds.has(id)));
+  const loanTxns = [...owned, ...extra];
   const splitsByTx = splitsForTransactions(loanTxns.map((t) => t.id));
   const balanceAsOf = loanBalanceAsOf(loan, loanTxns, splitsByTx, tx.date, txId);
 
