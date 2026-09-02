@@ -101,8 +101,21 @@ export function searchTransactionIds(data: AggregateData, c: SearchCriteria): Se
  * Account ids (in `data.accounts` order) that have at least one matching
  * transaction, given a precomputed matching-id set. An account "has" a match
  * when a matching transaction touches it (from/to or a transfer-leg split).
+ *
+ * When `scopeAccountId` is provided (the search was restricted to one account),
+ * results are grouped under ONLY that account — the counterparty side of a
+ * transfer in another account is not shown. When null, all touched accounts are
+ * returned (multi-account results).
  */
-export function accountsWithMatches(data: AggregateData, matchingIds: Set<string>): string[] {
+export function accountsWithMatches(
+  data: AggregateData,
+  matchingIds: Set<string>,
+  scopeAccountId: string | null = null
+): string[] {
+  // Single-account search: group everything under just that account.
+  if (scopeAccountId) {
+    return matchingIds.size > 0 ? [scopeAccountId] : [];
+  }
   const splitsByTx = new Map<string, TransactionSplit[]>();
   for (const s of data.splits) {
     if (s.deletedAt != null) continue;

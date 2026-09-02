@@ -37,8 +37,8 @@ interface Props {
 export function SearchResults({ data, criteria, dark, onClose, onReload, onToast, onEditSplit }: Props) {
   const matchingIds = useMemo(() => searchTransactionIds(data, criteria), [data, criteria]);
   const groupAccountIds = useMemo(
-    () => accountsWithMatches(data, matchingIds),
-    [data, matchingIds]
+    () => accountsWithMatches(data, matchingIds, criteria.accountId),
+    [data, matchingIds, criteria.accountId]
   );
 
   const accountById = useMemo(() => {
