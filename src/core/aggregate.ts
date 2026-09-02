@@ -12,6 +12,7 @@
 import type {
   Account,
   AggregateData,
+  Category,
   CategorySpend,
   ChartScope,
   DateRange,
@@ -141,6 +142,168 @@ export function spendingByCategory(
   range: DateRange
 ): CategorySpend[] {
   return categoryFlow(data, scope, range, "expense");
+}
+
+/**
+ * One wedge of a drill-down pie chart.
+ *  - `categoryId` is the category this wedge represents (null = Uncategorized,
+ *    or the synthetic "own spending" wedge of the current parent). It is
+ *    `OTHER_ID` for the synthetic "Other" bucket of small top-level slices.
+ *  - `amountCents` is the rolled-up total for this wedge (the category's own
+ *    spending plus all of its descendants when it is a rollup wedge).
+ *  - `drillable` is true when clicking should descend (into direct children, or
+ *    into the members of the "Other" bucket).
+ */
+export interface PieWedge {
+  categoryId: string | null;
+  categoryName: string;
+  amountCents: number;
+  drillable: boolean;
+}
+
+/**
+ * Sentinel category id for the synthetic "Other" bucket that collects small
+ * top-level slices. Not a real category id (real ids are UUIDs), so it can be
+ * used both as a wedge id and as a drill-path entry.
+ */
+export const OTHER_ID = "__other__";
+
+/** Top-level slices at or below this fraction of the top-level total are pooled into "Other". */
+const OTHER_THRESHOLD = 0.02; // 2%
+
+/**
+ * Build the pie wedges to display for a given drill level from a flat
+ * per-leaf-category breakdown (as produced by `categoryFlow`).
+ *
+ * Rollup semantics:
+ *  - At the top level (`parentId == null`): one wedge per top-level category
+ *    whose subtree carries any spending, each summing its own spending plus all
+ *    descendants. "Uncategorized" is included as its own wedge. Any of these
+ *    slices worth less than 2% of the top-level total are pooled into a single
+ *    drillable "Other" wedge.
+ *  - Drilled into "Other" (`parentId === OTHER_ID`): the individual small
+ *    top-level slices that were pooled, each still drillable if it has children.
+ *  - Drilled into a parent category: a wedge for the parent's OWN direct
+ *    spending (if any), plus one rolled-up wedge per direct child that carries
+ *    spending.
+ *
+ * A category wedge is `drillable` when it has at least one child (with spending)
+ * below it. The parent's own-spending wedge is never drillable.
+ */
+export function pieWedges(
+  flow: CategorySpend[],
+  categories: Category[],
+  parentId: string | null
+): PieWedge[] {
+  const byId = new Map(categories.map((c) => [c.id, c]));
+  // children[parentId] -> direct child category ids
+  const childrenOf = new Map<string | null, string[]>();
+  for (const c of categories) {
+    if (c.deletedAt != null) continue;
+    const key = c.parentId ?? null;
+    const arr = childrenOf.get(key) ?? [];
+    arr.push(c.id);
+    childrenOf.set(key, arr);
+  }
+
+  // Own (leaf) spending directly attributed to each category id.
+  const ownAmount = new Map<string | null, number>();
+  for (const f of flow) ownAmount.set(f.categoryId, (ownAmount.get(f.categoryId) ?? 0) + f.amountCents);
+
+  // Rolled-up total for a category subtree (own + all descendants). Memoized.
+  const subtreeCache = new Map<string, number>();
+  function subtreeTotal(catId: string): number {
+    const cached = subtreeCache.get(catId);
+    if (cached != null) return cached;
+    let total = ownAmount.get(catId) ?? 0;
+    for (const childId of childrenOf.get(catId) ?? []) total += subtreeTotal(childId);
+    subtreeCache.set(catId, total);
+    return total;
+  }
+
+  function hasSpendingBelow(catId: string): boolean {
+    for (const childId of childrenOf.get(catId) ?? []) {
+      if (subtreeTotal(childId) > 0) return true;
+    }
+    return false;
+  }
+
+  /** All top-level rollup wedges (each top-level category subtree + Uncategorized), unsorted. */
+  function topLevelWedges(): PieWedge[] {
+    const out: PieWedge[] = [];
+    for (const catId of childrenOf.get(null) ?? []) {
+      const amt = subtreeTotal(catId);
+      if (amt <= 0) continue;
+      const cat = byId.get(catId);
+      out.push({
+        categoryId: catId,
+        categoryName: cat ? cat.name : "(unknown)",
+        amountCents: amt,
+        drillable: hasSpendingBelow(catId),
+      });
+    }
+    const uncategorized = ownAmount.get(null) ?? 0;
+    if (uncategorized > 0) {
+      out.push({ categoryId: null, categoryName: "Uncategorized", amountCents: uncategorized, drillable: false });
+    }
+    return out;
+  }
+
+  let wedges: PieWedge[];
+
+  if (parentId == null) {
+    // Top level: pool slices under the threshold into a single "Other" wedge.
+    const all = topLevelWedges();
+    const total = all.reduce((s, w) => s + w.amountCents, 0);
+    const cutoff = total * OTHER_THRESHOLD;
+    // Only pool when at least two slices fall below the cutoff — a lone small
+    // slice is clearer shown as itself than hidden behind an "Other" click.
+    const small = all.filter((w) => w.amountCents < cutoff);
+    if (small.length >= 2) {
+      const large = all.filter((w) => w.amountCents >= cutoff);
+      const otherTotal = small.reduce((s, w) => s + w.amountCents, 0);
+      wedges = [
+        ...large,
+        { categoryId: OTHER_ID, categoryName: "Other", amountCents: otherTotal, drillable: true },
+      ];
+    } else {
+      wedges = all;
+    }
+  } else if (parentId === OTHER_ID) {
+    // Drilled into "Other": show the small top-level slices individually.
+    const all = topLevelWedges();
+    const total = all.reduce((s, w) => s + w.amountCents, 0);
+    const cutoff = total * OTHER_THRESHOLD;
+    wedges = all.filter((w) => w.amountCents < cutoff);
+  } else {
+    // Drilled into `parentId`: the parent's own spending + each child subtree.
+    const parent = byId.get(parentId);
+    const own = ownAmount.get(parentId) ?? 0;
+    const out: PieWedge[] = [];
+    if (own > 0) {
+      out.push({
+        categoryId: parentId,
+        categoryName: parent ? parent.name : "(unknown)",
+        amountCents: own,
+        drillable: false,
+      });
+    }
+    for (const childId of childrenOf.get(parentId) ?? []) {
+      const amt = subtreeTotal(childId);
+      if (amt <= 0) continue;
+      const child = byId.get(childId);
+      out.push({
+        categoryId: childId,
+        categoryName: child ? child.name : "(unknown)",
+        amountCents: amt,
+        drillable: hasSpendingBelow(childId),
+      });
+    }
+    wedges = out;
+  }
+
+  wedges.sort((a, b) => b.amountCents - a.amountCents);
+  return wedges;
 }
 
 export function spendingByMonth(

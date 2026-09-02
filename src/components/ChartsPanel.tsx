@@ -3,7 +3,8 @@ import ReactECharts from "echarts-for-react";
 import type { EChartsOption } from "echarts";
 import * as echarts from "echarts";
 import type { Account, AggregateData, ChartScope, DateRange } from "../shared/types";
-import { categoryFlow, spendingByMonth, dataDateBounds, scopeLabel } from "../core/aggregate";
+import { categoryFlow, spendingByMonth, dataDateBounds, scopeLabel, pieWedges, OTHER_ID } from "../core/aggregate";
+import { categoryDisplayName } from "../core/categories";
 import { formatCents } from "../core/money";
 
 interface Props {
@@ -24,6 +25,10 @@ export function ChartsPanel({ account, dark, onClose, onToast }: Props) {
   const [range, setRange] = useState<DateRange>({ start: null, end: null });
   // Pie chart mode: expenses (outflows) or income (inflows).
   const [pieMode, setPieMode] = useState<"expense" | "income">("expense");
+  // Pie drill-down path: category ids from the top level down to the current
+  // level. Empty = top level (top-level categories rolled up). The last id is
+  // the category we're currently drilled into.
+  const [drillPath, setDrillPath] = useState<string[]>([]);
   const pieRef = useRef<ReactECharts>(null);
   const barRef = useRef<ReactECharts>(null);
 
@@ -51,6 +56,31 @@ export function ChartsPanel({ account, dark, onClose, onToast }: Props) {
     [data, scope, range]
   );
 
+  // The category id we're currently drilled into (null = top level).
+  const currentParentId = drillPath.length > 0 ? drillPath[drillPath.length - 1] : null;
+
+  // Reset the drill path whenever the underlying breakdown changes (scope,
+  // range, or expense/income toggle) so we never sit on a now-empty branch.
+  useEffect(() => {
+    setDrillPath([]);
+  }, [scope, range, pieMode]);
+
+  // Rolled-up wedges for the current drill level.
+  const wedges = useMemo(
+    () => (data ? pieWedges(categoryData, data.categories, currentParentId) : []),
+    [data, categoryData, currentParentId]
+  );
+
+  // Breadcrumb labels for the current drill path (full "Parent:Child" names).
+  const breadcrumb = useMemo(() => {
+    if (!data) return [] as string[];
+    return drillPath.map((id) => {
+      if (id === OTHER_ID) return "Other";
+      const cat = data.categories.find((c) => c.id === id);
+      return cat ? categoryDisplayName(cat, data.categories) : "(unknown)";
+    });
+  }, [data, drillPath]);
+
   const currency = account?.currency ?? "USD";
   const textColor = dark ? "#e6e6e6" : "#1e1e1e";
 
@@ -60,15 +90,18 @@ export function ChartsPanel({ account, dark, onClose, onToast }: Props) {
       color: PALETTE,
       textStyle: { color: textColor },
       title: {
-        text: pieMode === "expense" ? "Expenses by Category" : "Income by Category",
+        text:
+          (pieMode === "expense" ? "Expenses by Category" : "Income by Category") +
+          (breadcrumb.length ? ` — ${breadcrumb[breadcrumb.length - 1]}` : ""),
         left: "center",
         textStyle: { color: textColor, fontSize: 14 },
       },
       tooltip: {
         trigger: "item",
         formatter: (p: unknown) => {
-          const d = p as { name: string; value: number; percent: number };
-          return `${d.name}: ${formatCents(d.value, currency)} (${d.percent}%)`;
+          const d = p as { name: string; value: number; percent: number; data?: { drillable?: boolean } };
+          const drill = d.data?.drillable ? "<br/><em>click to drill down</em>" : "";
+          return `${d.name}: ${formatCents(d.value, currency)} (${d.percent}%)${drill}`;
         },
       },
       legend: { bottom: 0, textStyle: { color: textColor }, type: "scroll" },
@@ -77,12 +110,19 @@ export function ChartsPanel({ account, dark, onClose, onToast }: Props) {
           type: "pie",
           radius: ["35%", "65%"],
           center: ["50%", "48%"],
-          data: categoryData.map((c) => ({ name: c.categoryName, value: c.amountCents })),
+          data: wedges.map((w) => ({
+            // A trailing "›" hints that a wedge can be drilled into.
+            name: w.drillable ? `${w.categoryName} ›` : w.categoryName,
+            value: w.amountCents,
+            // Carry the wedge metadata for the click handler and tooltip.
+            categoryId: w.categoryId,
+            drillable: w.drillable,
+          })),
           label: { color: textColor },
         },
       ],
     }),
-    [categoryData, currency, textColor, pieMode]
+    [wedges, currency, textColor, pieMode, breadcrumb]
   );
 
   const barOption: EChartsOption = useMemo(
@@ -161,7 +201,20 @@ export function ChartsPanel({ account, dark, onClose, onToast }: Props) {
     }
   }
 
-  const pieTotal = categoryData.reduce((s, c) => s + c.amountCents, 0);
+  const pieTotal = wedges.reduce((s, w) => s + w.amountCents, 0);
+
+  // Drill into a clicked wedge (only when it has children with spending).
+  function onPieClick(params: unknown): void {
+    const p = params as { data?: { categoryId?: string | null; drillable?: boolean } };
+    const cat = p.data;
+    if (!cat || !cat.drillable || !cat.categoryId) return;
+    setDrillPath((path) => [...path, cat.categoryId as string]);
+  }
+
+  // Pop the drill path back to a given depth (0 = top level).
+  function drillTo(depth: number): void {
+    setDrillPath((path) => path.slice(0, depth));
+  }
 
   return (
     <div className="charts-panel">
@@ -219,12 +272,32 @@ export function ChartsPanel({ account, dark, onClose, onToast }: Props) {
               </button>
               <span className={pieMode === "income" ? "active" : ""}>Income</span>
             </div>
+            {breadcrumb.length > 0 && (
+              <div className="pie-breadcrumb">
+                <button type="button" className="link" onClick={() => drillTo(0)}>
+                  All
+                </button>
+                {breadcrumb.map((label, i) => (
+                  <span key={i}>
+                    <span className="sep"> › </span>
+                    {i < breadcrumb.length - 1 ? (
+                      <button type="button" className="link" onClick={() => drillTo(i + 1)}>
+                        {label}
+                      </button>
+                    ) : (
+                      <span className="current">{label}</span>
+                    )}
+                  </span>
+                ))}
+              </div>
+            )}
             <ReactECharts
               ref={pieRef}
               option={pieOption}
               style={{ height: 320 }}
               notMerge
               theme={undefined}
+              onEvents={{ click: onPieClick }}
             />
             <div className="chart-actions">
               <button className="secondary" onClick={() => exportPng("pie")}>
