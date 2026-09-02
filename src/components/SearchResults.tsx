@@ -297,7 +297,7 @@ export function SearchResults({ data, criteria, dark, onClose, onReload, onToast
     <div className="dialog-backdrop" onClick={onClose}>
       <div
         className="dialog search-results"
-        style={{ width: "min(1100px, 94vw)", maxHeight: "90vh" }}
+        style={{ width: "min(1100px, 94vw)", minHeight: "50vh", maxHeight: "90vh" }}
         onClick={(e) => e.stopPropagation()}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
