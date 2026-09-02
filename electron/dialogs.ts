@@ -244,6 +244,11 @@ export function buildMenu(mainWin: BrowserWindow): void {
           click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-new-transaction"),
         },
         {
+          label: "New Paycheck…",
+          accelerator: "CmdOrCtrl+Shift+P",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-new-paycheck"),
+        },
+        {
           label: "De-Duplicate Transactions",
           click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-dedupe"),
         },

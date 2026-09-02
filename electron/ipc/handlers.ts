@@ -34,6 +34,8 @@ import {
   securityHolding,
 } from "../../src/core/worth.js";
 import { refreshPrices } from "../prices/index.js";
+import { extractPdfText } from "../paycheck/pdfText.js";
+import { parsePaycheckText } from "../../src/core/paycheckParse.js";
 import * as undoJournal from "../db/undo.js";
 import { validateTransaction } from "../../src/core/validation.js";
 import { rowToTransaction } from "../../src/core/import/index.js";
@@ -255,6 +257,31 @@ export function registerIpcHandlers(): void {
     const filePath = filePaths[0];
     const text = readFileSync(filePath, "utf8");
     return { fileName: basename(filePath), text };
+  });
+
+  // ---- Paycheck PDF import (Phase 2) ----
+  ipcMain.handle(IPC.importPaycheckPdf, async () => {
+    const win = BrowserWindow.getFocusedWindow() ?? undefined;
+    const { canceled, filePaths } = await dialog.showOpenDialog(win!, {
+      title: "Import Paycheck Stub (PDF)",
+      properties: ["openFile"],
+      filters: [
+        { name: "PDF", extensions: ["pdf"] },
+        { name: "All Files", extensions: ["*"] },
+      ],
+    });
+    if (canceled || filePaths.length === 0) return null;
+    const filePath = filePaths[0];
+    const bytes = new Uint8Array(readFileSync(filePath));
+    const text = await extractPdfText(bytes);
+    const parsed = parsePaycheckText(text);
+    return {
+      fileName: basename(filePath),
+      grossCents: parsed.grossCents,
+      netCents: parsed.netCents,
+      deductions: parsed.deductions,
+      unresolvedLabels: parsed.unresolvedLabels,
+    };
   });
 
   ipcMain.handle(IPC.commitImport, (_e, accountId: string, rows: ParsedRow[]) => {

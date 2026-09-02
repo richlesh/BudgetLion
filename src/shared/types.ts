@@ -111,6 +111,53 @@ export interface LoanPaymentSplitResult {
   splits: NewSplitInput[];
 }
 
+/**
+ * Where a paycheck deduction (or employer contribution) is routed:
+ *  - "category": a spending category (an expense leg), e.g. Taxes:Federal.
+ *  - "transfer": another tracked account (a transfer leg), e.g. a 401(k)/HSA.
+ * Exactly one of categoryId / accountId is set, matching `target`.
+ */
+export interface PaycheckLineTarget {
+  target: "category" | "transfer";
+  categoryId?: string | null;
+  accountId?: string | null;
+}
+
+/** One withholding/deduction line on a paycheck (a positive magnitude in cents). */
+export interface PaycheckDeduction extends PaycheckLineTarget {
+  label: string; // e.g. "Federal Income Tax", "Health Insurance", "401(k)"
+  amountCents: number; // positive magnitude withheld from gross
+}
+
+/**
+ * An employer-side contribution that does NOT flow through net pay (e.g. an
+ * employer 401(k) match or HSA contribution). Modeled as a SEPARATE transaction,
+ * not a leg of the deposit, because the employee never receives this money as cash.
+ */
+export interface EmployerContribution extends PaycheckLineTarget {
+  label: string;
+  amountCents: number; // positive magnitude the employer contributes
+  /** Source category for the employer's money (income), e.g. "Income:Employer 401k Match". */
+  sourceCategoryId?: string | null;
+}
+
+/** Full input describing a paycheck to be turned into transaction(s). */
+export interface PaycheckInput {
+  date: string; // pay date (ISO 8601)
+  employer: string; // payee
+  memo?: string | null;
+  /** Account the net pay is deposited into (e.g. Checking). */
+  depositAccountId: string;
+  /** Gross pay (positive magnitude in cents) before deductions. */
+  grossCents: number;
+  /** Income category the gross is attributed to (e.g. "Income:Salary"). */
+  grossCategoryId: string;
+  /** Employee-side deductions withheld from gross (taxes, insurance, 401k, ...). */
+  deductions: PaycheckDeduction[];
+  /** Optional employer-side contributions (separate transactions; e.g. 401k match). */
+  employerContributions?: EmployerContribution[];
+}
+
 /** Input shape for creating an account (server fills id/timestamps). */
 export interface NewAccountInput {
   name: string;

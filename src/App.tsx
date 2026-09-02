@@ -16,6 +16,7 @@ import type {
   Transaction,
   TransactionSplit,
   NewTradeInput,
+  PaycheckInput,
 } from "./shared/types";
 import { displaySign, formatCents } from "./core/money";
 import { ledgerToHtml } from "./core/export/html";
@@ -24,6 +25,8 @@ import type { CategoryChoice } from "./components/CategoryAccountEditor";
 import { NewAccountDialog } from "./components/NewAccountDialog";
 import { SplitEditorDialog } from "./components/SplitEditorDialog";
 import { NewTransactionDialog } from "./components/NewTransactionDialog";
+import { PaycheckDialog } from "./components/PaycheckDialog";
+import { buildPaycheckTransactions } from "./core/paycheck";
 import { NewInvestmentDialog } from "./components/NewInvestmentDialog";
 import { HoldingsPanel } from "./components/HoldingsPanel";
 import { CategoriesDialog } from "./components/CategoriesDialog";
@@ -54,6 +57,7 @@ export function App() {
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
   const [showAccountDialog, setShowAccountDialog] = useState(false);
   const [showTxDialog, setShowTxDialog] = useState(false);
+  const [showPaycheckDialog, setShowPaycheckDialog] = useState(false);
   const [holdingsReloadKey, setHoldingsReloadKey] = useState(0);
   // For investment accounts, which entry form to show: a chooser first, then
   // either the trade dialog or the regular cash/transfer transaction dialog.
@@ -399,6 +403,7 @@ export function App() {
         setShowTxDialog(true);
       }
     });
+    window.ledger.onMenuNewPaycheck(() => setShowPaycheckDialog(true));
     window.ledger.onMenuNewAccount(() => setShowAccountDialog(true));
     window.ledger.onMenuNewCategory(() => setShowCategoriesDialog(true));
     window.ledger.onMenuDedupe(() => {
@@ -543,6 +548,29 @@ export function App() {
       setShowTxDialog(false);
       if (selectedId) await refreshLedger(selectedId);
       await refreshAccounts(); // balances change
+    },
+    [selectedId, refreshLedger, refreshAccounts]
+  );
+
+  // Build a paycheck into its transaction(s) and persist them: the net-deposit
+  // split (gross income + deduction legs) plus any separate employer-contribution
+  // transfers. Refresh the ledger + balances afterward and toast on success.
+  const createPaycheck = useCallback(
+    async (input: PaycheckInput) => {
+      const { transactions } = buildPaycheckTransactions(input);
+      for (const tx of transactions) {
+        await window.ledger.createTransaction(tx);
+      }
+      setShowPaycheckDialog(false);
+      // Refresh the deposit account's ledger when it's the one on screen.
+      if (selectedId) await refreshLedger(selectedId);
+      await refreshAccounts();
+      setHoldingsReloadKey((k) => k + 1); // 401k/HSA transfers may change holdings
+      setToast(
+        transactions.length > 1
+          ? `Paycheck added (${transactions.length} transactions).`
+          : "Paycheck added."
+      );
     },
     [selectedId, refreshLedger, refreshAccounts]
   );
@@ -1147,6 +1175,9 @@ export function App() {
               >
                 + New Transaction
               </button>
+              <button className="secondary" onClick={() => setShowPaycheckDialog(true)}>
+                + New Paycheck
+              </button>
             </div>
             {selected.type === "investment" && (
               <HoldingsPanel account={selected} reloadKey={holdingsReloadKey} />
@@ -1242,6 +1273,15 @@ export function App() {
             onCreate={createTransaction}
           />
         )}
+      {showPaycheckDialog && (
+        <PaycheckDialog
+          accounts={accounts}
+          categories={categories}
+          defaultDepositAccountId={selected?.id ?? null}
+          onCancel={() => setShowPaycheckDialog(false)}
+          onSubmit={createPaycheck}
+        />
+      )}
       {showCategoriesDialog && (
         <CategoriesDialog
           categories={categories}

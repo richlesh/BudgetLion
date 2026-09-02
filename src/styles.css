@@ -642,6 +642,79 @@ button.danger {
   transform: translateX(18px);
 }
 
+/* Pie drill-down breadcrumb (All › Insurance › Auto). */
+.pie-breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 2px 0 4px;
+}
+
+.pie-breadcrumb .link {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  margin: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: inherit;
+}
+
+.pie-breadcrumb .link:hover {
+  text-decoration: underline;
+}
+
+.pie-breadcrumb .sep {
+  color: var(--muted);
+}
+
+.pie-breadcrumb .current {
+  color: var(--text);
+  font-weight: 600;
+  padding: 0 2px;
+}
+
+/* Paycheck dialog: grouped deduction / contribution rows. */
+.paycheck-section {
+  margin-top: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.paycheck-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.paycheck-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.paycheck-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+
+.paycheck-summary .net {
+  font-weight: 700;
+  color: var(--text);
+}
+
 /* Search results: each account group's ledger grid gets a bounded height so the
    (flex:1) grid-wrap inside can size itself. */
 .search-grid-box {

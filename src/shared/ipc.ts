@@ -70,6 +70,22 @@ export interface OpenedFile {
   text: string;
 }
 
+/** One parsed deduction line from a paycheck stub (positive magnitude in cents). */
+export interface ParsedPaycheckDeduction {
+  label: string;
+  amountCents: number;
+}
+
+/** Result of importing + parsing a paycheck-stub PDF (Phase 2). */
+export interface ParsedPaycheckResult {
+  fileName: string;
+  grossCents: number | null;
+  netCents: number | null;
+  deductions: ParsedPaycheckDeduction[];
+  /** Recognized labels with no parseable amount (shown as a hint). */
+  unresolvedLabels: string[];
+}
+
 /** Accounts + categories (+ recurring rules) bundle exchanged as JSON. */
 export interface DataBundle {
   accounts: Account[];
@@ -173,6 +189,9 @@ export interface LedgerApi {
   openImportFile(): Promise<OpenedFile | null>;
   commitImport(accountId: string, rows: ParsedRow[]): Promise<number>;
 
+  // Paycheck PDF import (Phase 2): open a stub PDF, extract text, parse it.
+  importPaycheckPdf(): Promise<ParsedPaycheckResult | null>;
+
   // Charts (M3)
   getAggregateData(): Promise<AggregateData>;
 
@@ -227,6 +246,7 @@ export interface LedgerApi {
 
   // Menu events
   onMenuNewTransaction(cb: () => void): void;
+  onMenuNewPaycheck(cb: () => void): void;
   onMenuNewAccount(cb: () => void): void;
   onMenuNewCategory(cb: () => void): void;
   onMenuDedupe(cb: () => void): void;
@@ -288,6 +308,7 @@ export const IPC = {
   getUndoState: "undo:state",
   openImportFile: "import:open",
   commitImport: "import:commit",
+  importPaycheckPdf: "paycheck:import-pdf",
   getAggregateData: "charts:aggregate",
   listRecurringRules: "recurring:list",
   createRecurringRule: "recurring:create",

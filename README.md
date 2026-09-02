@@ -38,6 +38,14 @@ A cross-platform personal-finance ledger with double-entry accounting, built wit
 - **Loan payment auto-split** — Categorizing a payment to a loan account automatically splits it into interest (charged on the loan's balance as of the payment date) and principal, using the account's annual rate
 - **Mortgage escrow** — Optional third auto-split leg for escrow, routed to a category or another account; interest is still charged on the loan balance and principal is the remainder
 
+### Paychecks
+- **Dedicated Paycheck entry** — A "New Paycheck" dialog records a stub as one balanced transaction: gross pay as income, each deduction as its own leg, and the net deposited into an account
+- **Gross-as-income model** — Gross pay is recorded as income and taxes/insurance/retirement are real deduction legs, so they flow into your spending and income charts correctly
+- **Per-deduction routing** — Each deduction goes to an expense category *or* a transfer to a tracked account (your choice), so pre-tax 401(k)/HSA can move into the matching account while taxes book as expenses
+- **Employer contributions** — Optional employer-side contributions (e.g. a 401(k) match) are recorded as separate transfers into the target account, since they don't pass through net pay
+- **Live net readout** — Gross − deductions = net deposit updates as you type, with validation that deductions can't exceed gross
+- **Import from PDF** — Prefill the dialog from a downloaded pay-stub PDF: text is extracted and common labels (gross/net, federal/Social Security/Medicare/state tax, health/dental/vision, 401(k)/HSA/FSA) and amounts are parsed locally (deterministic, no AI or image upload); you review and assign a category or account to each line before saving
+
 ### Investments & Assets
 - **Investment/Brokerage accounts** — Track securities alongside cash in the same account
 - **Trades** — Buy/Sell dialog with bidirectional shares ⟷ price ⟷ amount; trade rows in the cash ledger show the security ticker, name, shares, and price
@@ -202,6 +210,7 @@ BudgetLion/
 - [AG Grid](https://www.ag-grid.com) — the editable ledger grid
 - [Apache ECharts](https://echarts.apache.org) — charts and forecast graphs
 - [PapaParse](https://www.papaparse.com) — CSV parsing
+- [pdf.js](https://mozilla.github.io/pdf.js/) (pdfjs-dist) — local pay-stub PDF text extraction
 - [adm-zip](https://github.com/cthackers/adm-zip) — database backup/restore archives
 
 ---

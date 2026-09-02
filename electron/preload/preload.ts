@@ -77,6 +77,9 @@ const api: LedgerApi = {
   commitImport: (accountId: string, rows: ParsedRow[]) =>
     ipcRenderer.invoke(IPC.commitImport, accountId, rows),
 
+  // Paycheck PDF import (Phase 2)
+  importPaycheckPdf: () => ipcRenderer.invoke(IPC.importPaycheckPdf),
+
   // Charts (M3)
   getAggregateData: () => ipcRenderer.invoke(IPC.getAggregateData),
 
@@ -130,6 +133,9 @@ const api: LedgerApi = {
   },
   onMenuNewTransaction: (cb: () => void) => {
     ipcRenderer.on("menu-new-transaction", () => cb());
+  },
+  onMenuNewPaycheck: (cb: () => void) => {
+    ipcRenderer.on("menu-new-paycheck", () => cb());
   },
   onMenuNewAccount: (cb: () => void) => {
     ipcRenderer.on("menu-new-account", () => cb());
