@@ -80,6 +80,10 @@ function runMigrations(instance: Database.Database): void {
   if (!hasAccountCode) {
     instance.exec("ALTER TABLE accounts ADD COLUMN account_code TEXT");
   }
+  // Mortgage escrow portion of a loan payment (nullable INTEGER cents).
+  if (!cols.some((c) => c.name === "escrow_payment_cents")) {
+    instance.exec("ALTER TABLE accounts ADD COLUMN escrow_payment_cents INTEGER");
+  }
 
   // categories.applicability: 'income' | 'expense' | 'both' (default 'both').
   const catCols = instance
@@ -228,6 +232,7 @@ function runMigrations(instance: Database.Database): void {
           interest_rate_bps     INTEGER,
           principal_cents       INTEGER,
           term_months           INTEGER,
+          escrow_payment_cents  INTEGER,
           created_at            TEXT NOT NULL,
           updated_at            TEXT NOT NULL,
           deleted_at            TEXT
@@ -236,11 +241,11 @@ function runMigrations(instance: Database.Database): void {
       instance.exec(`
         INSERT INTO accounts_new
           (id, name, type, currency, opening_balance_cents, opening_balance_date,
-           account_code, interest_rate_bps, principal_cents, term_months,
+           account_code, interest_rate_bps, principal_cents, term_months, escrow_payment_cents,
            created_at, updated_at, deleted_at)
         SELECT
            id, name, type, currency, opening_balance_cents, opening_balance_date,
-           account_code, interest_rate_bps, principal_cents, term_months,
+           account_code, interest_rate_bps, principal_cents, term_months, escrow_payment_cents,
            created_at, updated_at, deleted_at
         FROM accounts
       `);

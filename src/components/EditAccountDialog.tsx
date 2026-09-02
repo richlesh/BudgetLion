@@ -33,6 +33,11 @@ export function EditAccountDialog({ account, onCancel, onSave }: Props) {
   );
   const [openingDate, setOpeningDate] = useState(account.openingBalanceDate ?? "");
   const [interestRate, setInterestRate] = useState(bpsToPercent(account.interestRateBps));
+  const [escrow, setEscrow] = useState(
+    account.escrowPaymentCents != null
+      ? formatCents(account.escrowPaymentCents, account.currency)
+      : ""
+  );
   const [error, setError] = useState<string | null>(null);
 
   function submit() {
@@ -57,6 +62,8 @@ export function EditAccountDialog({ account, onCancel, onSave }: Props) {
       openingBalanceDate: openingDate || null,
       // Interest rate applies only to liability accounts; cleared otherwise.
       interestRateBps: isLiability(type) ? percentToBps(interestRate) : null,
+      // Escrow applies to a mortgage (loan); cleared for other types, null if blank.
+      escrowPaymentCents: type === "loan" ? parseCents(escrow) : null,
     });
   }
 
@@ -82,6 +89,16 @@ export function EditAccountDialog({ account, onCancel, onSave }: Props) {
           <div className="field">
             <label>Annual interest rate (%)</label>
             <input value={interestRate} onChange={(e) => setInterestRate(e.target.value)} />
+          </div>
+        )}
+        {type === "loan" && (
+          <div className="field">
+            <label>Escrow payment (optional)</label>
+            <input
+              value={escrow}
+              onChange={(e) => setEscrow(e.target.value)}
+              placeholder="monthly escrow, e.g. 350.00"
+            />
           </div>
         )}
         <div className="field">

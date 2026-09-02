@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   interest_rate_bps     INTEGER,          -- annual rate in basis points (nullable)
   principal_cents       INTEGER,          -- original loan principal (nullable)
   term_months           INTEGER,          -- loan term (nullable)
+  escrow_payment_cents  INTEGER,          -- monthly escrow portion for a mortgage payment (nullable)
   created_at            TEXT NOT NULL,
   updated_at            TEXT NOT NULL,
   deleted_at            TEXT

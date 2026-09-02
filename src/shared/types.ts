@@ -29,6 +29,7 @@ export interface Account {
   interestRateBps: number | null; // annual rate in basis points (e.g. 4.25% => 425)
   principalCents: number | null;
   termMonths: number | null;
+  escrowPaymentCents: number | null; // monthly escrow portion of a mortgage payment
   createdAt: string; // ISO 8601
   updatedAt: string; // ISO 8601
   deletedAt: string | null; // soft delete
@@ -103,6 +104,8 @@ export interface NewSplitInput {
 export interface LoanPaymentSplitResult {
   interestCents: number;
   principalCents: number;
+  /** Escrow portion (0 when the loan has no escrow payment set). */
+  escrowCents: number;
   /** The signed split legs (owning-account perspective), summing to the payment. */
   splits: NewSplitInput[];
 }
@@ -118,6 +121,7 @@ export interface NewAccountInput {
   interestRateBps?: number | null;
   principalCents?: number | null;
   termMonths?: number | null;
+  escrowPaymentCents?: number | null;
 }
 
 /** Partial update for an account (id required). Only provided fields change. */
@@ -130,6 +134,7 @@ export interface UpdateAccountInput {
   openingBalanceCents?: number;
   openingBalanceDate?: string | null;
   interestRateBps?: number | null;
+  escrowPaymentCents?: number | null;
 }
 
 // ---- Assets & valuations (Phase 1) ----

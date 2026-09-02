@@ -12,6 +12,7 @@ import { effectOnAccount } from "./balances";
 export interface LoanPaymentSplit {
   interestCents: number;
   principalCents: number;
+  escrowCents: number;
 }
 
 /**
@@ -38,22 +39,31 @@ export function loanBalanceAsOf(
 }
 
 /**
- * Split a payment into interest + principal. `annualRateBps` may be null (no rate
- * set) => zero interest, all principal. Interest is clamped to the payment; the
- * principal is the remainder (never negative).
+ * Split a payment into interest + escrow + principal. Interest is charged on the
+ * loan balance (unaffected by escrow). Escrow is a fixed portion (0/undefined =
+ * none), clamped so interest + escrow never exceed the payment. Principal is the
+ * remainder: payment - interest - escrow (never negative). `annualRateBps` null
+ * => zero interest.
  */
 export function computeLoanPaymentSplit(
   paymentCents: number,
   balanceAsOfCents: number,
-  annualRateBps: number | null
+  annualRateBps: number | null,
+  escrowCents = 0
 ): LoanPaymentSplit {
   const payment = Math.abs(paymentCents);
-  if (!annualRateBps || annualRateBps <= 0 || balanceAsOfCents <= 0) {
-    return { interestCents: 0, principalCents: payment };
+  // Interest on the balance (independent of escrow).
+  let interest = 0;
+  if (annualRateBps && annualRateBps > 0 && balanceAsOfCents > 0) {
+    const monthlyRate = annualRateBps / 10000 / 12;
+    interest = Math.round(balanceAsOfCents * monthlyRate);
   }
-  const monthlyRate = annualRateBps / 10000 / 12;
-  let interest = Math.round(balanceAsOfCents * monthlyRate);
-  if (interest > payment) interest = payment; // never exceed the payment
-  const principal = payment - interest;
-  return { interestCents: interest, principalCents: principal };
+  if (interest > payment) interest = payment;
+
+  // Escrow takes what's left after interest (can't push the total past payment).
+  let escrow = Math.max(0, escrowCents);
+  if (interest + escrow > payment) escrow = payment - interest;
+
+  const principal = payment - interest - escrow;
+  return { interestCents: interest, principalCents: principal, escrowCents: escrow };
 }
