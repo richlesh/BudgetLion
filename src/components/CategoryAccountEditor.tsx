@@ -81,6 +81,10 @@ export const CategoryAccountEditor = forwardRef(function CategoryAccountEditor(
   const committedRef = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
+  const comboRef = useRef<HTMLDivElement>(null);
+  // Upward shift (px) applied when the popup would otherwise bleed off the bottom
+  // of the window (e.g. editing one of the last rows in the ledger).
+  const [shiftUp, setShiftUp] = useState(0);
 
   // Filtered options by case-insensitive substring on the label.
   const filtered = useMemo<Opt[]>(() => {
@@ -103,6 +107,18 @@ export const CategoryAccountEditor = forwardRef(function CategoryAccountEditor(
 
   useEffect(() => {
     inputRef.current?.focus();
+  }, []);
+
+  // After mount, check if the popup overflows the viewport bottom and shift it up
+  // so it stays fully visible.
+  useEffect(() => {
+    const el = comboRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const overflow = rect.bottom - window.innerHeight;
+    if (overflow > 0) {
+      setShiftUp(overflow + 8); // +8 px breathing room
+    }
   }, []);
 
   // Scroll the active option into view as it changes.
@@ -179,7 +195,11 @@ export const CategoryAccountEditor = forwardRef(function CategoryAccountEditor(
   useImperativeHandle(ref, () => ({ getValue: () => undefined }));
 
   return (
-    <div className="cat-acct-combo">
+    <div
+      className="cat-acct-combo"
+      ref={comboRef}
+      style={shiftUp ? { transform: `translateY(-${shiftUp}px)` } : undefined}
+    >
       <input
         ref={inputRef}
         className="cat-acct-input"
