@@ -1,8 +1,10 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { Account, AggregateData, Category, LedgerRow, Transaction, TransactionSplit } from "../shared/types";
 import { buildLedger } from "../core/balances";
 import { LedgerGrid } from "./LedgerGrid";
 import type { CategoryChoice } from "./CategoryAccountEditor";
+import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
+import { categoryOptions } from "../core/categories";
 import type { SearchCriteria } from "../core/search";
 import { searchTransactionIds, accountsWithMatches } from "../core/search";
 
@@ -171,6 +173,121 @@ export function SearchResults({ data, criteria, dark, onClose, onReload, onToast
     [onReload]
   );
 
+  // Context menu (right-click) state for the search grids.
+  const [menu, setMenu] = useState<{ x: number; y: number; items: ContextMenuItem[] } | null>(
+    null
+  );
+
+  // Bulk-apply a category/uncategorized/transfer to the given rows in an account.
+  const bulkSetCategory = useCallback(
+    async (account: Account, ids: string[], choice: CategoryChoice) => {
+      if (choice.kind === "split") return;
+      try {
+        for (const id of ids) {
+          const t = data.transactions.find((tx) => tx.id === id);
+          if (!t) continue;
+          const accountIsFrom = t.fromAccountId === account.id;
+          if (choice.kind === "transfer") {
+            await window.ledger.updateTransaction({
+              id,
+              categoryId: null,
+              fromAccountId: accountIsFrom ? account.id : choice.accountId,
+              toAccountId: accountIsFrom ? choice.accountId : account.id,
+              splits: [],
+            });
+          } else {
+            await window.ledger.updateTransaction({
+              id,
+              categoryId: choice.kind === "category" ? choice.categoryId : null,
+              fromAccountId: accountIsFrom ? account.id : null,
+              toAccountId: accountIsFrom ? null : account.id,
+              splits: [],
+            });
+          }
+        }
+        onReload();
+        onToast(`Updated ${ids.length} transaction(s).`);
+      } catch (e) {
+        onToast(e instanceof Error ? e.message : "Bulk category change failed.");
+      }
+    },
+    [data.transactions, onReload, onToast]
+  );
+
+  const bulkDelete = useCallback(
+    async (ids: string[]) => {
+      for (const id of ids) await window.ledger.deleteTransaction(id);
+      onReload();
+      onToast(`Deleted ${ids.length} transaction(s).`);
+    },
+    [onReload, onToast]
+  );
+
+  // Build the Bulk Category submenu (Uncategorized, disabled Split, categories,
+  // transfer accounts) for an account + selected ids.
+  const bulkCategorySubmenu = useCallback(
+    (account: Account, ids: string[]): ContextMenuItem[] => {
+      const cats: ContextMenuItem[] = categoryOptions(data.categories as Category[]).map((o) => ({
+        label: o.display,
+        onClick: () =>
+          void bulkSetCategory(account, ids, {
+            kind: "category",
+            categoryId: o.category.id,
+            label: o.display,
+          }),
+      }));
+      const accts: ContextMenuItem[] = data.accounts
+        .filter((a) => a.id !== account.id)
+        .map((a) => ({
+          label: `→ ${a.name}`,
+          onClick: () =>
+            void bulkSetCategory(account, ids, { kind: "transfer", accountId: a.id, label: a.name }),
+        }));
+      return [
+        {
+          label: "— Uncategorized —",
+          onClick: () => void bulkSetCategory(account, ids, { kind: "none" }),
+        },
+        { label: "Split… (not available in bulk)", disabled: true },
+        ...cats,
+        ...accts,
+      ];
+    },
+    [data.categories, data.accounts, bulkSetCategory]
+  );
+
+  // Right-click handler for a grid: Copy, Bulk Category, Bulk Delete.
+  const cellContextFor = useCallback(
+    (account: Account) =>
+      (info: {
+        x: number;
+        y: number;
+        headerName: string;
+        displayValue: string;
+        isOpening: boolean;
+        selectedTransactionIds: string[];
+      }) => {
+        const items: ContextMenuItem[] = [];
+        if (info.displayValue) {
+          items.push({
+            label: `Copy ${info.headerName || "field"}`,
+            onClick: () => void navigator.clipboard.writeText(info.displayValue),
+          });
+        }
+        const ids = info.selectedTransactionIds;
+        if (ids.length > 1) {
+          items.push({
+            label: `Bulk Category (${ids.length})`,
+            submenu: bulkCategorySubmenu(account, ids),
+          });
+          items.push({ label: `Bulk Delete (${ids.length})`, onClick: () => void bulkDelete(ids) });
+        }
+        if (items.length === 0) return;
+        setMenu({ x: info.x, y: info.y, items });
+      },
+    [bulkCategorySubmenu, bulkDelete]
+  );
+
   const total = groupAccountIds.reduce(
     (n, aid) => n + rowsForAccount(accountById.get(aid)!).length,
     0
@@ -219,6 +336,7 @@ export function SearchResults({ data, criteria, dark, onClose, onReload, onToast
                       onEditOpening={() => {}}
                       onSetCategoryOrTransfer={setCategoryFor(account)}
                       onDelete={deleteFor()}
+                      onCellContext={cellContextFor(account)}
                     />
                   </div>
                 </div>
@@ -227,6 +345,9 @@ export function SearchResults({ data, criteria, dark, onClose, onReload, onToast
           </div>
         )}
       </div>
+      {menu && (
+        <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />
+      )}
     </div>
   );
 }

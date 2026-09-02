@@ -450,6 +450,11 @@ button.danger {
   flex-direction: column;
 }
 
+.context-menu-row {
+  position: relative;
+  display: flex;
+}
+
 .context-menu-item {
   background: transparent;
   color: var(--text);
@@ -457,11 +462,38 @@ button.danger {
   text-align: left;
   padding: 7px 10px;
   border-radius: 5px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
 }
 
-.context-menu-item:hover {
+.context-menu-item:hover:not(.disabled) {
   background: var(--accent);
   color: white;
+}
+
+.context-menu-item.disabled {
+  color: var(--muted);
+  opacity: 0.55;
+  cursor: default;
+}
+
+.context-menu-caret {
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+/* Side submenu: pops out to the right of its parent row, slightly overlapping. */
+.context-submenu {
+  position: absolute;
+  left: 100%;
+  top: -5px;
+  margin-left: 2px;
+  max-height: 70vh;
+  overflow-y: auto;
 }
 
 /* Forecast ledger: draggable column resize handles. */

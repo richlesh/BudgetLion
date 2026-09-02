@@ -42,6 +42,7 @@ import { ProjectionPanel } from "./components/ProjectionPanel";
 import { RecurringRulesDialog } from "./components/RecurringRulesDialog";
 import { ContextMenu } from "./components/ContextMenu";
 import type { ContextMenuItem } from "./components/ContextMenu";
+import { categoryOptions } from "./core/categories";
 import { ViewAccountDialog } from "./components/ViewAccountDialog";
 import { EditAccountDialog } from "./components/EditAccountDialog";
 
@@ -872,6 +873,76 @@ export function App() {
     []
   );
 
+  // Apply a category / uncategorized / transfer choice to MANY selected rows at
+  // once (Bulk Category). Each row keeps the viewed account's side; the other
+  // side is set/cleared. No loan auto-split in bulk. Split legs are discarded.
+  const bulkSetCategory = useCallback(
+    async (ids: string[], choice: CategoryChoice) => {
+      if (!selected || ids.length === 0) return;
+      if (choice.kind === "split") return; // not supported in bulk
+      try {
+        for (const id of ids) {
+          const t = ledger.find((r) => r.transaction?.id === id)?.transaction;
+          if (!t) continue;
+          const accountIsFrom = t.fromAccountId === selected.id;
+          if (choice.kind === "transfer") {
+            await window.ledger.updateTransaction({
+              id,
+              categoryId: null,
+              fromAccountId: accountIsFrom ? selected.id : choice.accountId,
+              toAccountId: accountIsFrom ? choice.accountId : selected.id,
+              splits: [],
+            });
+          } else {
+            await window.ledger.updateTransaction({
+              id,
+              categoryId: choice.kind === "category" ? choice.categoryId : null,
+              fromAccountId: accountIsFrom ? selected.id : null,
+              toAccountId: accountIsFrom ? null : selected.id,
+              splits: [],
+            });
+          }
+        }
+        await refreshLedger(selected.id);
+        await refreshAccounts();
+        setToast(`Updated ${ids.length} transaction(s).`);
+      } catch (e) {
+        setToast(e instanceof Error ? e.message : "Bulk category change failed.");
+      }
+    },
+    [selected, ledger, refreshLedger, refreshAccounts]
+  );
+
+  // Build the "Bulk Category" submenu: Uncategorized, a disabled Split, then
+  // categories, then transfer accounts — applied to the given selected ids.
+  const buildBulkCategorySubmenu = useCallback(
+    (ids: string[]): ContextMenuItem[] => {
+      const catItems: ContextMenuItem[] = categoryOptions(categories).map((o) => ({
+        label: o.display,
+        onClick: () =>
+          void bulkSetCategory(ids, {
+            kind: "category",
+            categoryId: o.category.id,
+            label: o.display,
+          }),
+      }));
+      const acctItems: ContextMenuItem[] = accounts
+        .filter((a) => a.id !== selected?.id)
+        .map((a) => ({
+          label: `→ ${a.name}`,
+          onClick: () =>
+            void bulkSetCategory(ids, { kind: "transfer", accountId: a.id, label: a.name }),
+        }));
+      return [
+        { label: "— Uncategorized —", onClick: () => void bulkSetCategory(ids, { kind: "none" }) },
+        { label: "Split… (not available in bulk)", disabled: true },
+        ...catItems,
+        ...acctItems,
+      ];
+    },
+    [categories, accounts, selected, bulkSetCategory]
+  );
+
   // Right-click on a ledger cell: offer Copy <field> and Add to Recurring.
   const handleCellContext = useCallback(
     (info: {
@@ -908,9 +979,13 @@ export function App() {
           });
         }
       }
-      // Bulk delete when more than one transaction row is selected.
+      // Bulk actions when more than one transaction row is selected.
       if (info.selectedTransactionIds.length > 1) {
         const ids = info.selectedTransactionIds;
+        items.push({
+          label: `Bulk Category (${ids.length})`,
+          submenu: buildBulkCategorySubmenu(ids),
+        });
         items.push({
           label: `Bulk Delete (${ids.length})`,
           onClick: () => setPendingBulkDelete(ids),
@@ -919,7 +994,7 @@ export function App() {
       if (items.length === 0) return;
       setLedgerMenu({ x: info.x, y: info.y, items });
     },
-    [ledger, seedFromTransaction]
+    [ledger, seedFromTransaction, buildBulkCategorySubmenu]
   );
 
   const confirmDelete = useCallback(async () => {
