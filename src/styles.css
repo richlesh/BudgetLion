@@ -747,3 +747,66 @@ body.dark .amount-neg {
   font-size: 13px;
   margin: 4px 0 12px;
 }
+
+/* ---- Category/Account filter combobox (ledger cell editor) ---- */
+.cat-acct-combo {
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  overflow: hidden;
+  min-width: 240px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+}
+
+.cat-acct-input {
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  padding: 8px 10px;
+  font-size: 14px;
+  outline: none;
+}
+
+.cat-acct-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.cat-acct-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.cat-acct-option.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.cat-acct-tag {
+  font-size: 11px;
+  opacity: 0.6;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.cat-acct-option.active .cat-acct-tag {
+  opacity: 0.85;
+}
+
+.cat-acct-empty {
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--muted);
+}

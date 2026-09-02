@@ -1,10 +1,10 @@
 import {
   forwardRef,
   useEffect,
-  useRef,
-  useImperativeHandle,
   useMemo,
+  useRef,
   useState,
+  useImperativeHandle,
 } from "react";
 import type { Account, Category } from "../shared/types";
 import { categoriesForDirection, categoryDisplayName } from "../core/categories";
@@ -14,6 +14,7 @@ import { categoriesForDirection, categoryDisplayName } from "../core/categories"
  *  - none:     uncategorized single-entry
  *  - category: an income/expense category
  *  - transfer: the counterparty account of a transfer
+ *  - split:    open the split editor
  */
 export type CategoryChoice =
   | { kind: "none" }
@@ -25,22 +26,28 @@ interface EditorParams {
   categories: Category[];
   accounts: Account[]; // should already exclude the current account
   // The cell's current selection, encoded as "none" | "cat:<id>" | "acct:<id>" |
-  // "split", so the list box opens with the existing value selected.
+  // "split", so the list opens with the existing value preselected.
   initialValue?: string;
   // Direction of the row from the account's perspective, used to filter which
   // categories are offered (income vs expense). Undefined = show all.
   direction?: "income" | "expense";
   stopEditing: (cancel?: boolean) => void;
-  // Called with the user's choice. The editor performs the mutation via this
-  // callback and then cancels the edit, so it does not rely on AG Grid writing
-  // an object value back into the string-typed cell.
   onChoose: (choice: CategoryChoice) => void;
 }
 
+/** A flat, filterable option. `group` labels it in the list; `search` is matched. */
+interface Opt {
+  value: string; // "split" | "none" | "cat:<id>" | "acct:<id>"
+  label: string;
+  group: "" | "Category" | "Account";
+}
+
 /**
- * AG Grid React cell editor. Renders a single dropdown with categories at the
- * top, a divider, then the available accounts. Categories set the transaction's
- * income/expense category; accounts turn it into a transfer to/from that account.
+ * A filter-as-you-type combobox cell editor. Shows a text box plus a filtered
+ * list of options (Split, Uncategorized, categories, and transfer accounts).
+ * Typing narrows the list by a case-insensitive substring match on the label
+ * (so account names match too, unlike native grouped-<select> type-ahead).
+ * Nothing is committed until the user presses Enter or clicks an option.
  */
 export const CategoryAccountEditor = forwardRef(function CategoryAccountEditor(
   props: EditorParams,
@@ -48,127 +55,143 @@ export const CategoryAccountEditor = forwardRef(function CategoryAccountEditor(
 ) {
   const { categories, accounts, direction, initialValue, stopEditing, onChoose } = props;
 
-  // Stable option value encoding: "none" | "cat:<id>" | "acct:<id>".
-  const [value, setValue] = useState<string>(initialValue ?? "none");
-  const selectRef = useRef<HTMLSelectElement>(null);
-  // Guard so a choice is committed only once (onClick and onChange can both fire).
-  const committedRef = useRef(false);
+  // Build the flat option list: fixed choices, then categories, then accounts.
+  const allOptions = useMemo<Opt[]>(() => {
+    const cats = (direction ? categoriesForDirection(categories, direction) : categories)
+      .map((c) => ({
+        value: `cat:${c.id}`,
+        label: categoryDisplayName(c, categories),
+        group: "Category" as const,
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+    const accts = accounts
+      .map((a) => ({ value: `acct:${a.id}`, label: a.name, group: "Account" as const }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+    return [
+      { value: "split", label: "Split…", group: "" as const },
+      { value: "none", label: "— Uncategorized —", group: "" as const },
+      ...cats,
+      ...accts,
+    ];
+  }, [categories, accounts, direction]);
 
-  // A list-box <select size> doesn't always reflect a React-controlled `value`
-  // as the highlighted row on first mount (it can appear to select the first
-  // option). Force the DOM selection to the initial value and scroll it into
-  // view once mounted.
+  const [query, setQuery] = useState("");
+  // Highlighted index into the FILTERED list.
+  const [active, setActive] = useState(0);
+  const committedRef = useRef(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+
+  // Filtered options by case-insensitive substring on the label.
+  const filtered = useMemo<Opt[]>(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return allOptions;
+    return allOptions.filter((o) => o.label.toLowerCase().includes(q));
+  }, [allOptions, query]);
+
+  // Keep the active index in range as the filter changes; default to the option
+  // matching initialValue when the query is empty.
   useEffect(() => {
-    const el = selectRef.current;
-    if (!el) return;
-    el.value = initialValue ?? "none";
-    const selected = el.selectedOptions[0];
-    if (selected && typeof selected.scrollIntoView === "function") {
-      selected.scrollIntoView({ block: "nearest" });
+    if (query.trim() === "" && initialValue) {
+      const idx = filtered.findIndex((o) => o.value === initialValue);
+      setActive(idx >= 0 ? idx : 0);
+    } else {
+      setActive(0);
     }
-    // Run once on mount for this editor instance.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, filtered.length]);
+
+  useEffect(() => {
+    inputRef.current?.focus();
   }, []);
 
-  // Categories filtered by row direction (if known), with Parent:Child labels.
-  const catOptions = useMemo(() => {
-    const list = direction ? categoriesForDirection(categories, direction) : categories;
-    return list
-      .map((c) => ({ id: c.id, label: categoryDisplayName(c, categories) }))
-      .sort((a, b) => a.label.localeCompare(b.label));
-  }, [categories, direction]);
+  // Scroll the active option into view as it changes.
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const el = list.querySelector<HTMLElement>(`[data-idx="${active}"]`);
+    el?.scrollIntoView({ block: "nearest" });
+  }, [active]);
 
   const decode = (v: string): CategoryChoice => {
     if (v === "split") return { kind: "split" };
     if (v.startsWith("cat:")) {
       const id = v.slice(4);
       const cat = categories.find((c) => c.id === id);
-      const label = cat ? categoryDisplayName(cat, categories) : "";
-      return { kind: "category", categoryId: id, label };
+      return { kind: "category", categoryId: id, label: cat ? categoryDisplayName(cat, categories) : "" };
     }
     if (v.startsWith("acct:")) {
       const id = v.slice(5);
-      const label = accounts.find((a) => a.id === id)?.name ?? "";
-      return { kind: "transfer", accountId: id, label };
+      return { kind: "transfer", accountId: id, label: accounts.find((a) => a.id === id)?.name ?? "" };
     }
     return { kind: "none" };
   };
 
-  useImperativeHandle(ref, () => ({
-    // We commit via onChoose and cancel the edit, so the cell value is unchanged.
-    getValue: () => undefined,
-  }));
-
-  const commit = (v: string) => {
-    if (committedRef.current) return;
+  const commit = (v: string | undefined) => {
+    if (committedRef.current || v == null) return;
     committedRef.current = true;
-    setValue(v);
     onChoose(decode(v));
-    // Cancel so AG Grid doesn't overwrite the (string) cell value; the grid will
-    // refresh from fresh data after the mutation persists.
+    stopEditing(true); // commit via onChoose; don't let AG Grid write the cell
+  };
+
+  const cancel = () => {
+    committedRef.current = true;
     stopEditing(true);
   };
 
-  const dividerLabel = useMemo(() => "──────────", []);
-
-  // Show as an open list box (size > 1) so it's tall and easy to use inside the
-  // grid cell, instead of the tiny native dropdown. Height tracks the number of
-  // rows, capped so it never gets unwieldy.
-  const rowCount =
-    2 /* Split + Uncategorized */ +
-    catOptions.length +
-    1 /* divider */ +
-    accounts.length;
-  const listSize = Math.min(Math.max(rowCount, 6), 16);
+  useImperativeHandle(ref, () => ({ getValue: () => undefined }));
 
   return (
-    <select
-      className="cat-acct-editor"
-      ref={selectRef}
-      size={listSize}
-      value={value}
-      autoFocus
-      onChange={(e) => commit(e.target.value)}
-      onClick={(e) => {
-        // In a list box, clicking an option that is already selected does NOT
-        // fire onChange. Commit on click of any enabled option so choices like
-        // "Split" work even when they're the current selection.
-        const target = e.target as HTMLElement;
-        if (target instanceof HTMLOptionElement && !target.disabled) {
-          commit(target.value);
-        }
-      }}
-      onKeyDown={(e) => {
-        if (e.key === "Escape") {
-          e.preventDefault();
-          e.stopPropagation();
-          // Block any later commit and cancel the edit (no category change).
-          committedRef.current = true;
-          stopEditing(true);
-        }
-        else if (e.key === "Enter") {
-          e.preventDefault();
-          commit((e.currentTarget as HTMLSelectElement).value);
-        }
-      }}
-    >
-      <option value="split">Split…</option>
-      <option value="none">— Uncategorized —</option>
-      <optgroup label="Categories">
-        {catOptions.map((c) => (
-          <option key={c.id} value={`cat:${c.id}`}>
-            {c.label}
-          </option>
+    <div className="cat-acct-combo">
+      <input
+        ref={inputRef}
+        className="cat-acct-input"
+        type="text"
+        value={query}
+        placeholder="Type to filter…"
+        autoFocus
+        onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            cancel();
+          } else if (e.key === "Enter") {
+            e.preventDefault();
+            e.stopPropagation();
+            commit(filtered[active]?.value);
+          } else if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setActive((i) => Math.min(i + 1, filtered.length - 1));
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setActive((i) => Math.max(i - 1, 0));
+          }
+        }}
+      />
+      <ul className="cat-acct-list" ref={listRef}>
+        {filtered.length === 0 && <li className="cat-acct-empty">No matches</li>}
+        {filtered.map((o, i) => (
+          <li
+            key={o.value}
+            data-idx={i}
+            className={
+              "cat-acct-option" +
+              (i === active ? " active" : "") +
+              (o.group === "Account" ? " is-account" : "")
+            }
+            // Use onMouseDown so the click registers before the input blurs.
+            onMouseDown={(e) => {
+              e.preventDefault();
+              commit(o.value);
+            }}
+            onMouseEnter={() => setActive(i)}
+          >
+            {o.label}
+            {o.group === "Account" && <span className="cat-acct-tag">account</span>}
+          </li>
         ))}
-      </optgroup>
-      <option disabled>{dividerLabel}</option>
-      <optgroup label="Transfer to/from account">
-        {accounts.map((a) => (
-          <option key={a.id} value={`acct:${a.id}`}>
-            {a.name}
-          </option>
-        ))}
-      </optgroup>
-    </select>
+      </ul>
+    </div>
   );
 });
