@@ -277,7 +277,26 @@ export function buildMenu(mainWin: BrowserWindow): void {
         isMac ? { role: "close" } : { role: "quit" },
       ],
     },
-    { role: "editMenu" },
+    {
+      label: "Edit",
+      submenu: [
+        {
+          label: "Undo",
+          accelerator: "CmdOrCtrl+Z",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-undo"),
+        },
+        {
+          label: "Redo",
+          accelerator: "CmdOrCtrl+Shift+Z",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-redo"),
+        },
+        { type: "separator" },
+        { role: "cut" },
+        { role: "copy" },
+        { role: "paste" },
+        { role: "selectAll" },
+      ],
+    },
     {
       label: "View",
       submenu: [

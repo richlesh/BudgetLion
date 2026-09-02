@@ -34,6 +34,7 @@ import { MICRO } from "../../src/shared/types.js";
 import { tradeCashCents } from "../../src/core/worth.js";
 import { loanBalanceAsOf, computeLoanPaymentSplit } from "../../src/core/loanSplit.js";
 import { getDb } from "./index.js";
+import { withUndo } from "./undo.js";
 
 // ---- Row shapes (snake_case, as stored) ----
 
@@ -281,7 +282,10 @@ export function createTransaction(input: NewTransactionInput): Transaction {
       );
     }
   });
-  run();
+  withUndo("Add transaction", [], () => {
+    run();
+    return [row.id]; // newly created transaction id for the snapshot
+  });
   return toTransaction(row);
 }
 
@@ -345,13 +349,34 @@ export function updateTransaction(input: UpdateTransactionInput): void {
       }
     }
   });
-  run();
+  withUndo("Edit transaction", [input.id], () => {
+    run();
+  });
 }
 
 /** Soft delete so the deletion can sync. */
 export function deleteTransaction(id: string): void {
   const db = getDb();
   const ts = now();
+  // Affected transaction ids: this one plus any sibling legs of a linked
+  // investment lot (so the undo snapshot covers the whole cascade at the
+  // transaction level).
+  const siblingRows = db
+    .prepare(
+      `SELECT cash_txn_id, income_txn_id, fee_txn_id FROM investment_transactions
+        WHERE deleted_at IS NULL AND (cash_txn_id = ? OR income_txn_id = ? OR fee_txn_id = ?)`
+    )
+    .all(id, id, id) as Array<{
+    cash_txn_id: string | null;
+    income_txn_id: string | null;
+    fee_txn_id: string | null;
+  }>;
+  const affectedTxIds = new Set<string>([id]);
+  for (const r of siblingRows) {
+    for (const legId of [r.cash_txn_id, r.income_txn_id, r.fee_txn_id]) {
+      if (legId) affectedTxIds.add(legId);
+    }
+  }
   const run = db.transaction(() => {
     db.prepare("UPDATE transactions SET deleted_at = ?, updated_at = ? WHERE id = ?").run(ts, ts, id);
     db.prepare(
@@ -386,7 +411,26 @@ export function deleteTransaction(id: string): void {
       }
     }
   });
-  run();
+  withUndo("Delete transaction", Array.from(affectedTxIds), () => {
+    run();
+  });
+}
+
+/** Delete many transactions as a SINGLE undo step. */
+export function bulkDeleteTransactions(ids: string[]): void {
+  if (ids.length === 0) return;
+  withUndo(`Delete ${ids.length} transactions`, ids, () => {
+    for (const id of ids) deleteTransaction(id); // nested: folded into this entry
+  });
+}
+
+/** Apply a set of transaction updates as a SINGLE undo step (e.g. Bulk Category). */
+export function bulkUpdateTransactions(updates: UpdateTransactionInput[]): void {
+  if (updates.length === 0) return;
+  const ids = updates.map((u) => u.id);
+  withUndo(`Update ${updates.length} transactions`, ids, () => {
+    for (const u of updates) updateTransaction(u); // nested: folded into this entry
+  });
 }
 
 // ---- Transaction splits ----
@@ -556,11 +600,12 @@ export function createTransactionsBulk(inputs: NewTransactionInput[]): number {
   );
 
   const run = db.transaction((rows: NewTransactionInput[]) => {
-    let count = 0;
+    const ids: string[] = [];
     for (const input of rows) {
       const ts = now();
+      const id = randomUUID();
       insert.run({
-        id: randomUUID(),
+        id,
         date: input.date,
         payee: input.payee ?? null,
         memo: input.memo ?? null,
@@ -574,12 +619,19 @@ export function createTransactionsBulk(inputs: NewTransactionInput[]): number {
         updated_at: ts,
         deleted_at: null,
       });
-      count++;
+      ids.push(id);
     }
-    return count;
+    return ids;
   });
 
-  return run(inputs);
+  // Whole bulk import is a single undo step.
+  let count = 0;
+  withUndo("Import transactions", [], () => {
+    const ids = run(inputs);
+    count = ids.length;
+    return ids;
+  });
+  return count;
 }
 
 // ---- Categories ----

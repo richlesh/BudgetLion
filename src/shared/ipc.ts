@@ -94,6 +94,14 @@ export interface AccountProjection {
   forecast: ForecastPoint[];
 }
 
+/** Undo/redo availability + labels for the next actions. */
+export interface UndoState {
+  canUndo: boolean;
+  canRedo: boolean;
+  undoLabel: string | null;
+  redoLabel: string | null;
+}
+
 export interface LedgerApi {
   // Accounts
   listAccounts(): Promise<Account[]>;
@@ -151,6 +159,15 @@ export interface LedgerApi {
   deleteTransaction(id: string): Promise<void>;
   /** Auto-compute a principal/interest split for a loan-payment transfer. */
   buildLoanPaymentSplit(txId: string): Promise<LoanPaymentSplitResult>;
+  /** Delete many transactions as a single undo step. */
+  bulkDeleteTransactions(ids: string[]): Promise<void>;
+  /** Apply many transaction updates as a single undo step (e.g. Bulk Category). */
+  bulkUpdateTransactions(updates: UpdateTransactionInput[]): Promise<void>;
+
+  // Undo / redo (transaction-level, in-memory, session-scoped)
+  undo(): Promise<boolean>;
+  redo(): Promise<boolean>;
+  getUndoState(): Promise<UndoState>;
 
   // Import (M5)
   openImportFile(): Promise<OpenedFile | null>;
@@ -222,6 +239,8 @@ export interface LedgerApi {
   onMenuToggleForecast(cb: () => void): void;
   onMenuRecurring(cb: () => void): void;
   onMenuSearch(cb: () => void): void;
+  onMenuUndo(cb: () => void): void;
+  onMenuRedo(cb: () => void): void;
   // Database management menu events.
   onMenuDbNew(cb: () => void): void;
   onMenuDbOpen(cb: () => void): void;
@@ -262,6 +281,11 @@ export const IPC = {
   updateTransaction: "tx:update",
   deleteTransaction: "tx:delete",
   buildLoanPaymentSplit: "tx:loan-split",
+  bulkDeleteTransactions: "tx:bulk-delete",
+  bulkUpdateTransactions: "tx:bulk-update",
+  undo: "undo:do",
+  redo: "undo:redo",
+  getUndoState: "undo:state",
   openImportFile: "import:open",
   commitImport: "import:commit",
   getAggregateData: "charts:aggregate",

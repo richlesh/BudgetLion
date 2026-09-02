@@ -421,6 +421,20 @@ export function App() {
       setShowRecurring(true);
     });
     window.ledger.onMenuSearch(() => setShowSearchDialog(true));
+    window.ledger.onMenuUndo(async () => {
+      const ok = await window.ledger.undo();
+      if (selectedRef.current) await refreshLedger(selectedRef.current.id);
+      await refreshAccounts();
+      setHoldingsReloadKey((k) => k + 1);
+      setToast(ok ? "Undone." : "Nothing to undo.");
+    });
+    window.ledger.onMenuRedo(async () => {
+      const ok = await window.ledger.redo();
+      if (selectedRef.current) await refreshLedger(selectedRef.current.id);
+      await refreshAccounts();
+      setHoldingsReloadKey((k) => k + 1);
+      setToast(ok ? "Redone." : "Nothing to redo.");
+    });
     window.ledger.onMenuImportData(() => void doImportData());
     window.ledger.onMenuExportData(() => void doExportData());
     window.ledger.onMenuDbNew(() => void handleDbSwitch(() => window.ledger.dbNew(), "New database"));
@@ -881,28 +895,32 @@ export function App() {
       if (!selected || ids.length === 0) return;
       if (choice.kind === "split") return; // not supported in bulk
       try {
-        for (const id of ids) {
+        const updates = ids.flatMap((id) => {
           const t = ledger.find((r) => r.transaction?.id === id)?.transaction;
-          if (!t) continue;
+          if (!t) return [];
           const accountIsFrom = t.fromAccountId === selected.id;
           if (choice.kind === "transfer") {
-            await window.ledger.updateTransaction({
-              id,
-              categoryId: null,
-              fromAccountId: accountIsFrom ? selected.id : choice.accountId,
-              toAccountId: accountIsFrom ? choice.accountId : selected.id,
-              splits: [],
-            });
-          } else {
-            await window.ledger.updateTransaction({
+            return [
+              {
+                id,
+                categoryId: null,
+                fromAccountId: accountIsFrom ? selected.id : choice.accountId,
+                toAccountId: accountIsFrom ? choice.accountId : selected.id,
+                splits: [],
+              },
+            ];
+          }
+          return [
+            {
               id,
               categoryId: choice.kind === "category" ? choice.categoryId : null,
               fromAccountId: accountIsFrom ? selected.id : null,
               toAccountId: accountIsFrom ? null : selected.id,
               splits: [],
-            });
-          }
-        }
+            },
+          ];
+        });
+        await window.ledger.bulkUpdateTransactions(updates);
         await refreshLedger(selected.id);
         await refreshAccounts();
         setToast(`Updated ${ids.length} transaction(s).`);
@@ -1011,9 +1029,7 @@ export function App() {
     if (!selected || !pendingBulkDelete || pendingBulkDelete.length === 0) return;
     const ids = pendingBulkDelete;
     setPendingBulkDelete(null);
-    for (const id of ids) {
-      await window.ledger.deleteTransaction(id);
-    }
+    await window.ledger.bulkDeleteTransactions(ids);
     await refreshLedger(selected.id);
     await refreshAccounts();
     setHoldingsReloadKey((k) => k + 1);

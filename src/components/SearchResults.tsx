@@ -183,28 +183,32 @@ export function SearchResults({ data, criteria, dark, onClose, onReload, onToast
     async (account: Account, ids: string[], choice: CategoryChoice) => {
       if (choice.kind === "split") return;
       try {
-        for (const id of ids) {
+        const updates = ids.flatMap((id) => {
           const t = data.transactions.find((tx) => tx.id === id);
-          if (!t) continue;
+          if (!t) return [];
           const accountIsFrom = t.fromAccountId === account.id;
           if (choice.kind === "transfer") {
-            await window.ledger.updateTransaction({
-              id,
-              categoryId: null,
-              fromAccountId: accountIsFrom ? account.id : choice.accountId,
-              toAccountId: accountIsFrom ? choice.accountId : account.id,
-              splits: [],
-            });
-          } else {
-            await window.ledger.updateTransaction({
+            return [
+              {
+                id,
+                categoryId: null,
+                fromAccountId: accountIsFrom ? account.id : choice.accountId,
+                toAccountId: accountIsFrom ? choice.accountId : account.id,
+                splits: [],
+              },
+            ];
+          }
+          return [
+            {
               id,
               categoryId: choice.kind === "category" ? choice.categoryId : null,
               fromAccountId: accountIsFrom ? account.id : null,
               toAccountId: accountIsFrom ? null : account.id,
               splits: [],
-            });
-          }
-        }
+            },
+          ];
+        });
+        await window.ledger.bulkUpdateTransactions(updates);
         onReload();
         onToast(`Updated ${ids.length} transaction(s).`);
       } catch (e) {
@@ -216,7 +220,7 @@ export function SearchResults({ data, criteria, dark, onClose, onReload, onToast
 
   const bulkDelete = useCallback(
     async (ids: string[]) => {
-      for (const id of ids) await window.ledger.deleteTransaction(id);
+      await window.ledger.bulkDeleteTransactions(ids);
       onReload();
       onToast(`Deleted ${ids.length} transaction(s).`);
     },

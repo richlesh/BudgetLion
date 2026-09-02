@@ -20,6 +20,7 @@ import {
   setDatabaseDir,
 } from "./index.js";
 import { loadSettings, saveSettings } from "../settings.js";
+import { clearUndo } from "./undo.js";
 import type { DbOpResult } from "../../src/shared/ipc.js";
 
 /** Current database display name ("Default" for the OS default location). */
@@ -50,6 +51,7 @@ function displayName(dir: string): string {
 function activate(dir: string): string {
   setDatabaseDir(dir);
   getDb(); // open (creates the file if new)
+  clearUndo(); // undo history is per-database and session-scoped
   const s = loadSettings();
   saveSettings({ ...s, currentDbDir: dir });
   const name = displayName(dir);

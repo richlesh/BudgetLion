@@ -64,6 +64,13 @@ const api: LedgerApi = {
   deleteTransaction: (id: string) => ipcRenderer.invoke(IPC.deleteTransaction, id),
   buildLoanPaymentSplit: (txId: string) =>
     ipcRenderer.invoke(IPC.buildLoanPaymentSplit, txId),
+  bulkDeleteTransactions: (ids: string[]) =>
+    ipcRenderer.invoke(IPC.bulkDeleteTransactions, ids),
+  bulkUpdateTransactions: (updates: UpdateTransactionInput[]) =>
+    ipcRenderer.invoke(IPC.bulkUpdateTransactions, updates),
+  undo: () => ipcRenderer.invoke(IPC.undo),
+  redo: () => ipcRenderer.invoke(IPC.redo),
+  getUndoState: () => ipcRenderer.invoke(IPC.getUndoState),
 
   // Import (M5)
   openImportFile: (): Promise<OpenedFile | null> => ipcRenderer.invoke(IPC.openImportFile),
@@ -159,6 +166,12 @@ const api: LedgerApi = {
   },
   onMenuSearch: (cb: () => void) => {
     ipcRenderer.on("menu-search", () => cb());
+  },
+  onMenuUndo: (cb: () => void) => {
+    ipcRenderer.on("menu-undo", () => cb());
+  },
+  onMenuRedo: (cb: () => void) => {
+    ipcRenderer.on("menu-redo", () => cb());
   },
   onMenuDbNew: (cb: () => void) => {
     ipcRenderer.on("menu-db-new", () => cb());

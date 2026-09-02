@@ -34,6 +34,7 @@ import {
   securityHolding,
 } from "../../src/core/worth.js";
 import { refreshPrices } from "../prices/index.js";
+import * as undoJournal from "../db/undo.js";
 import { validateTransaction } from "../../src/core/validation.js";
 import { rowToTransaction } from "../../src/core/import/index.js";
 import { balanceForecast, projectLedger, addMonthsISO } from "../../src/core/recurring.js";
@@ -183,6 +184,19 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC.buildLoanPaymentSplit, (_e, txId: string) =>
     repo.buildLoanPaymentSplit(txId)
   );
+
+  // Bulk transaction ops (single undo step each).
+  ipcMain.handle(IPC.bulkDeleteTransactions, (_e, ids: string[]) =>
+    repo.bulkDeleteTransactions(ids)
+  );
+  ipcMain.handle(IPC.bulkUpdateTransactions, (_e, updates: UpdateTransactionInput[]) =>
+    repo.bulkUpdateTransactions(updates)
+  );
+
+  // Undo / redo.
+  ipcMain.handle(IPC.undo, () => undoJournal.undo());
+  ipcMain.handle(IPC.redo, () => undoJournal.redo());
+  ipcMain.handle(IPC.getUndoState, () => undoJournal.undoState());
 
   // ---- Charts (M3) ----
 
