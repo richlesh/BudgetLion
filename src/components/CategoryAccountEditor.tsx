@@ -109,16 +109,34 @@ export const CategoryAccountEditor = forwardRef(function CategoryAccountEditor(
     inputRef.current?.focus();
   }, []);
 
-  // After mount, check if the popup overflows the viewport bottom and shift it up
-  // so it stays fully visible.
+  // After mount, if the popup would extend past the bottom of the window, shift
+  // it up just enough to sit flush with the bottom (with a small margin), never
+  // pushing its top off the top of the window. Measured in rAF so AG Grid has
+  // finished positioning the popup before we read its rect.
   useEffect(() => {
-    const el = comboRef.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    const overflow = rect.bottom - window.innerHeight;
-    if (overflow > 0) {
-      setShiftUp(overflow + 8); // +8 px breathing room
-    }
+    let raf = 0;
+    const measure = () => {
+      const el = comboRef.current;
+      if (!el) return;
+      // Read the UNSHIFTED position: temporarily clear any transform so the rect
+      // reflects AG Grid's placement, then compute the exact shift needed.
+      const prev = el.style.transform;
+      el.style.transform = "";
+      const rect = el.getBoundingClientRect();
+      el.style.transform = prev;
+
+      const margin = 8;
+      const overflowBottom = rect.bottom - (window.innerHeight - margin);
+      if (overflowBottom > 0) {
+        // Don't push the top above the window; cap the shift at rect.top - margin.
+        const maxShift = Math.max(0, rect.top - margin);
+        setShiftUp(Math.min(overflowBottom, maxShift));
+      } else {
+        setShiftUp(0);
+      }
+    };
+    raf = requestAnimationFrame(measure);
+    return () => cancelAnimationFrame(raf);
   }, []);
 
   // Scroll the active option into view as it changes.
