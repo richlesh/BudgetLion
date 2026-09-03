@@ -205,6 +205,50 @@ export function updateAccount(input: UpdateAccountInput): void {
   db.prepare(`UPDATE accounts SET ${fields.join(", ")} WHERE id = @id`).run(params);
 }
 
+/**
+ * True when an account has NO content other than its (synthetic) opening
+ * balance: no non-deleted transactions on either side, no transfer-split legs
+ * pointing at it, and no non-deleted assets/holdings. Such an "empty" account is
+ * safe to delete.
+ */
+export function accountIsEmpty(accountId: string): boolean {
+  const db = getDb();
+  const txn = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM transactions
+        WHERE deleted_at IS NULL AND (from_account_id = ? OR to_account_id = ?)`
+    )
+    .get(accountId, accountId) as { n: number };
+  if (txn.n > 0) return false;
+  const legs = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM transaction_splits
+        WHERE deleted_at IS NULL AND transfer_account_id = ?`
+    )
+    .get(accountId) as { n: number };
+  if (legs.n > 0) return false;
+  const assets = db
+    .prepare("SELECT COUNT(*) AS n FROM assets WHERE deleted_at IS NULL AND account_id = ?")
+    .get(accountId) as { n: number };
+  return assets.n === 0;
+}
+
+/**
+ * Soft-delete an empty account. Throws if the account still has content
+ * (transactions, transfer-split legs, or assets) so callers can't orphan data.
+ */
+export function deleteAccount(accountId: string): void {
+  if (!accountIsEmpty(accountId)) {
+    throw new Error("Only empty accounts (no transactions or holdings) can be deleted.");
+  }
+  const db = getDb();
+  db.prepare("UPDATE accounts SET deleted_at = ?, updated_at = ? WHERE id = ?").run(
+    now(),
+    now(),
+    accountId
+  );
+}
+
 // ---- Transactions ----
 
 /** All non-deleted transactions touching a given account (either side). */

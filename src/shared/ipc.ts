@@ -156,6 +156,10 @@ export interface LedgerApi {
   listAccounts(): Promise<Account[]>;
   createAccount(input: NewAccountInput): Promise<Account>;
   updateAccount(input: UpdateAccountInput): Promise<void>;
+  /** True when an account has no transactions (beyond opening) or holdings. */
+  accountIsEmpty(accountId: string): Promise<boolean>;
+  /** Soft-delete an empty account (throws if it still has content). */
+  deleteAccount(accountId: string): Promise<void>;
   getAllBalances(): Promise<AccountBalance[]>;
   /** Net worth per account (cash + asset holdings). */
   getAllWorth(): Promise<AccountWorth[]>;
@@ -312,6 +316,8 @@ export const IPC = {
   listAccounts: "accounts:list",
   createAccount: "accounts:create",
   updateAccount: "accounts:update",
+  accountIsEmpty: "accounts:is-empty",
+  deleteAccount: "accounts:delete",
   getAllBalances: "accounts:balances",
   getAllWorth: "accounts:worth",
   listAssets: "assets:list",

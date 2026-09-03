@@ -4,6 +4,7 @@ import "ag-grid-community/styles/ag-theme-alpine.css";
 import type {
   Account,
   AccountBalance,
+  AccountWorth,
   Category,
   LedgerRow,
   NewAccountInput,
@@ -29,6 +30,11 @@ import { PaycheckDialog } from "./components/PaycheckDialog";
 import { buildPaycheckTransactions, isPaycheckSplit, reconstructPaycheckInput } from "./core/paycheck";
 import { NewInvestmentDialog } from "./components/NewInvestmentDialog";
 import { HoldingsPanel } from "./components/HoldingsPanel";
+import { AssetHoldingsPanel } from "./components/AssetHoldingsPanel";
+import { AssetRecordDialog, type AssetRecordSubmit } from "./components/AssetRecordDialog";
+import { mergeAssetMeta } from "./core/assetRecord";
+import { MICRO } from "./shared/types";
+import type { Asset } from "./shared/types";
 import { CategoriesDialog } from "./components/CategoriesDialog";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { DedupeDialog } from "./components/DedupeDialog";
@@ -52,12 +58,16 @@ import { EditAccountDialog } from "./components/EditAccountDialog";
 export function App() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [balances, setBalances] = useState<AccountBalance[]>([]);
+  const [worth, setWorth] = useState<AccountWorth[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
   const [showAccountDialog, setShowAccountDialog] = useState(false);
   const [showTxDialog, setShowTxDialog] = useState(false);
   const [showPaycheckDialog, setShowPaycheckDialog] = useState(false);
+  // Asset-account record entry (Buy/Sell/Lost) + the account's held items.
+  const [showAssetRecord, setShowAssetRecord] = useState(false);
+  const [heldAssets, setHeldAssets] = useState<Asset[]>([]);
   const [holdingsReloadKey, setHoldingsReloadKey] = useState(0);
   // For investment accounts, which entry form to show: a chooser first, then
   // either the trade dialog or the regular cash/transfer transaction dialog.
@@ -108,9 +118,10 @@ export function App() {
   // for this de-dupe pass. Null = no prompt showing.
   const [dedupeAskAI, setDedupeAskAI] = useState(false);
   // Right-click account context menu + view/edit account dialogs.
-  const [accountMenu, setAccountMenu] = useState<{ x: number; y: number; account: Account } | null>(
+  const [accountMenu, setAccountMenu] = useState<{ x: number; y: number; account: Account; canDelete: boolean } | null>(
     null
   );
+  const [pendingAccountDelete, setPendingAccountDelete] = useState<Account | null>(null);
   const [viewAccount, setViewAccount] = useState<Account | null>(null);
   const [editAccount, setEditAccount] = useState<Account | null>(null);
   // Split editor: transaction id + its signed total on the selected account + seed legs.
@@ -150,6 +161,14 @@ export function App() {
     return m;
   }, [balances]);
 
+  // Net worth per account (cash + holdings); used for investment/asset accounts
+  // in the sidebar so a pure-holdings account shows its value, not $0 cash.
+  const worthMap = useMemo(() => {
+    const m = new Map<string, number>();
+    worth.forEach((w) => m.set(w.accountId, w.worthCents));
+    return m;
+  }, [worth]);
+
   // Distinct prior payees and memos from the current account's ledger, most
   // recent first, for the New Transaction autocomplete. Sourced from the loaded
   // ledger rows (transactions in the selected account).
@@ -180,12 +199,14 @@ export function App() {
   }, [ledger]);
 
   const refreshAccounts = useCallback(async () => {
-    const [list, bals] = await Promise.all([
+    const [list, bals, worths] = await Promise.all([
       window.ledger.listAccounts(),
       window.ledger.getAllBalances(),
+      window.ledger.getAllWorth(),
     ]);
     setAccounts(list);
     setBalances(bals);
+    setWorth(worths);
     setSelectedId((cur) => cur ?? list[0]?.id ?? null);
   }, []);
 
@@ -583,6 +604,67 @@ export function App() {
     [selectedId, refreshLedger, refreshAccounts]
   );
 
+  // Open the asset-record dialog, loading the account's currently-held items
+  // (non-deleted assets) for the Sell/Lost pickers.
+  const openAssetRecord = useCallback(async () => {
+    if (!selected) return;
+    setHeldAssets(await window.ledger.listAssets(selected.id));
+    setShowAssetRecord(true);
+  }, [selected]);
+
+  // Persist a Buy/Sell/Lost asset record. Asset accounts are pure holdings (no
+  // cash): Buy creates an item + seeds a valuation at the purchase price; Sell/
+  // Lost record the disposal in metadata then soft-delete the item so it leaves
+  // holdings (Lost = $0). Refresh holdings + net worth afterward.
+  const createAssetRecord = useCallback(
+    async (rec: AssetRecordSubmit) => {
+      if (!selected) return;
+      try {
+        if (rec.action === "buy") {
+          const metadata = mergeAssetMeta(null, {
+            model: rec.model || null,
+            serial: rec.serial || null,
+            status: "held",
+            purchasePriceCents: rec.purchasePriceCents,
+            purchaseDate: rec.purchaseDate,
+          });
+          const asset = await window.ledger.createAsset({
+            accountId: selected.id,
+            name: rec.description,
+            assetClass: rec.assetClass,
+            metadata,
+          });
+          // Seed a valuation at the purchase price on the purchase date so the
+          // item shows a market value immediately (editable via Edit Valuations).
+          await window.ledger.recordValuation({
+            assetId: asset.id,
+            asOfDate: rec.purchaseDate,
+            valueMicros: rec.purchasePriceCents * MICRO,
+            source: "purchase",
+          });
+          setToast(`Added ${rec.description}.`);
+        } else {
+          // Sell or Lost: record disposal detail, then soft-delete the item.
+          const item = heldAssets.find((a) => a.id === rec.assetId);
+          const metadata = mergeAssetMeta(item?.metadata, {
+            status: rec.action === "lost" ? "lost" : "sold",
+            salePriceCents: rec.salePriceCents,
+            saleDate: rec.saleDate,
+          });
+          await window.ledger.updateAsset({ id: rec.assetId, metadata });
+          await window.ledger.deleteAsset(rec.assetId);
+          setToast(rec.action === "lost" ? "Item marked lost." : "Sale recorded.");
+        }
+        setShowAssetRecord(false);
+        await refreshAccounts(); // net worth changes
+        setHoldingsReloadKey((k) => k + 1);
+      } catch (e) {
+        setToast(e instanceof Error ? e.message : "Could not save the asset record.");
+      }
+    },
+    [selected, heldAssets, refreshAccounts]
+  );
+
   // Record an investment trade (buy/sell/dividend/reinvest). Creates the linked
   // cash transaction in the main process; refresh ledger + balances afterward.
   const recordTrade = useCallback(
@@ -648,6 +730,21 @@ export function App() {
     },
     [refreshAccounts, refreshLedger, selectedId]
   );
+
+  // Delete an empty account (confirmed). Clears selection if it was selected.
+  const deleteAccountConfirmed = useCallback(async () => {
+    const acct = pendingAccountDelete;
+    if (!acct) return;
+    setPendingAccountDelete(null);
+    try {
+      await window.ledger.deleteAccount(acct.id);
+      if (selectedId === acct.id) setSelectedId(null);
+      await refreshAccounts();
+      setToast(`Deleted account “${acct.name}”.`);
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : "Could not delete the account.");
+    }
+  }, [pendingAccountDelete, selectedId, refreshAccounts]);
 
   const handleEdit = useCallback(
     async (
@@ -1183,7 +1280,10 @@ export function App() {
       <aside className="sidebar">
         <h1>BudgetLion</h1>
         {accounts.map((a) => {
-          const bal = balanceMap.get(a.id);
+          // Investment/asset accounts display their net worth (cash + holdings);
+          // other accounts display their cash balance.
+          const valued = a.type === "investment" || a.type === "asset";
+          const bal = valued ? worthMap.get(a.id) : balanceMap.get(a.id);
           return (
             <div
               key={a.id}
@@ -1192,7 +1292,10 @@ export function App() {
               onContextMenu={(e) => {
                 e.preventDefault();
                 setSelectedId(a.id);
-                setAccountMenu({ x: e.clientX, y: e.clientY, account: a });
+                const { clientX, clientY } = e;
+                void window.ledger.accountIsEmpty(a.id).then((empty) =>
+                  setAccountMenu({ x: clientX, y: clientY, account: a, canDelete: empty })
+                );
               }}
             >
               <div className="account-main">
@@ -1276,9 +1379,17 @@ export function App() {
               <button className="secondary" onClick={() => setShowPaycheckDialog(true)}>
                 + New Paycheck
               </button>
+              {selected.type === "asset" && (
+                <button onClick={() => void openAssetRecord()}>
+                  + New Asset Record
+                </button>
+              )}
             </div>
             {selected.type === "investment" && (
               <HoldingsPanel account={selected} reloadKey={holdingsReloadKey} dark={dark} />
+            )}
+            {selected.type === "asset" && (
+              <AssetHoldingsPanel account={selected} reloadKey={holdingsReloadKey} dark={dark} />
             )}
             {showCharts && (
               <ChartsPanel
@@ -1297,7 +1408,7 @@ export function App() {
                 onColumnWidthsChange={handleForecastColumnWidthsChange}
               />
             )}
-            {ledger.length === 0 ? (
+            {selected.type === "asset" ? null : ledger.length === 0 ? (
               <div className="empty">No transactions yet. Add one to get started.</div>
             ) : (
               <LedgerGrid
@@ -1378,6 +1489,14 @@ export function App() {
           defaultDepositAccountId={selected?.id ?? null}
           onCancel={() => setShowPaycheckDialog(false)}
           onSubmit={createPaycheck}
+        />
+      )}
+      {showAssetRecord && selected && (
+        <AssetRecordDialog
+          account={selected}
+          heldItems={heldAssets}
+          onCancel={() => setShowAssetRecord(false)}
+          onSubmit={createAssetRecord}
         />
       )}
       {showCategoriesDialog && (
@@ -1465,8 +1584,20 @@ export function App() {
           items={[
             { label: "View", onClick: () => setViewAccount(accountMenu.account) },
             { label: "Edit", onClick: () => setEditAccount(accountMenu.account) },
+            ...(accountMenu.canDelete
+              ? [{ label: "Delete", onClick: () => setPendingAccountDelete(accountMenu.account) }]
+              : []),
           ]}
           onClose={() => setAccountMenu(null)}
+        />
+      )}
+      {pendingAccountDelete && (
+        <ConfirmDialog
+          title="Delete account?"
+          message={`Delete the empty account “${pendingAccountDelete.name}”? This can’t be undone.`}
+          confirmLabel="Delete"
+          onConfirm={deleteAccountConfirmed}
+          onCancel={() => setPendingAccountDelete(null)}
         />
       )}
       {viewAccount && (

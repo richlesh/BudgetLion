@@ -21,6 +21,7 @@ import {
 } from "./index.js";
 import { loadSettings, saveSettings } from "../settings.js";
 import { clearUndo } from "./undo.js";
+import { exportData } from "./repository.js";
 import type { DbOpResult } from "../../src/shared/ipc.js";
 
 /** Current database display name ("Default" for the OS default location). */
@@ -186,10 +187,21 @@ export async function dbBackup(): Promise<DbOpResult> {
   if (canceled || !filePath) return { ok: false, canceled: true };
   const dir = currentDatabaseDir();
   try {
+    // Capture the accounts/categories/recurring-rules JSON while the DB is still
+    // open, so the backup ZIP also contains a portable data export.
+    let bundleJson: string | null = null;
+    try {
+      bundleJson = JSON.stringify(exportData(), null, 2);
+    } catch {
+      bundleJson = null; // best-effort; still back up the raw db files
+    }
     closeDb();
     const zip = new AdmZip();
     for (const f of dbFilesIn(dir)) {
       zip.addLocalFile(f);
+    }
+    if (bundleJson != null) {
+      zip.addFile("budgetlion-data.json", Buffer.from(bundleJson, "utf8"));
     }
     zip.writeZip(filePath);
     return { ok: true, name: basename(dir) };

@@ -64,6 +64,8 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC.updateAccount, (_e, input: UpdateAccountInput) =>
     repo.updateAccount(input)
   );
+  ipcMain.handle(IPC.accountIsEmpty, (_e, accountId: string) => repo.accountIsEmpty(accountId));
+  ipcMain.handle(IPC.deleteAccount, (_e, accountId: string) => repo.deleteAccount(accountId));
 
   ipcMain.handle(IPC.getAllBalances, (): AccountBalance[] => {
     const accounts = repo.listAccounts();
