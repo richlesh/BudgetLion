@@ -34,6 +34,8 @@ import {
   securityHolding,
 } from "../../src/core/worth.js";
 import { refreshPrices } from "../prices/index.js";
+import { backfillMonthlyHistory } from "../prices/index.js";
+import { lookupSymbols } from "../prices/index.js";
 import { extractPdfText } from "../paycheck/pdfText.js";
 import { parsePaycheckText } from "../../src/core/paycheckParse.js";
 import * as undoJournal from "../db/undo.js";
@@ -122,7 +124,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC.listInvestmentTxns, (_e, accountId: string) =>
     repo.investmentTxnsForAccount(accountId)
   );
-  // Security holdings for an account: shares, cost basis, market value per security.
+  // Security holdings for an account: shares and market value per security.
   ipcMain.handle(IPC.getSecurityHoldings, (_e, accountId: string): SecurityHolding[] => {
     const assets = repo.listAssets(accountId).filter((a) => a.assetClass === "security");
     const valuationsByAsset = repo.allValuationsByAsset();
@@ -141,6 +143,23 @@ export function registerIpcHandlers(): void {
       .filter((a) => a.assetClass === "security" && a.symbol);
     return refreshPrices(assets.map((a) => ({ assetId: a.id, symbol: a.symbol as string })));
   });
+
+  ipcMain.handle(IPC.backfillPriceHistory, async (_e, assetId: string) => {
+    const asset = repo.listAssets().find((a) => a.id === assetId);
+    if (!asset) return { resolved: false, added: 0, error: "Asset not found." };
+    if (!asset.symbol) return { resolved: false, added: 0, error: "This holding has no ticker symbol." };
+    // Earliest lot date = when the security was first owned.
+    const lots = repo.investmentTxnsForAsset(assetId).filter((l) => l.deletedAt == null);
+    if (lots.length === 0) return { resolved: false, added: 0, error: "No transactions for this holding yet." };
+    const startDate = lots.reduce((min, l) => (l.date < min ? l.date : min), lots[0].date);
+    const existingDates = repo
+      .valuationsForAsset(assetId)
+      .filter((v) => v.deletedAt == null)
+      .map((v) => v.asOfDate);
+    return backfillMonthlyHistory({ assetId, symbol: asset.symbol, startDate, existingDates });
+  });
+
+  ipcMain.handle(IPC.lookupSecuritySymbol, (_e, query: string) => lookupSymbols(query));
 
   ipcMain.handle(IPC.listCategories, () => repo.listCategories());
   ipcMain.handle(IPC.createCategory, (_e, input: NewCategoryInput) =>
@@ -283,6 +302,7 @@ export function registerIpcHandlers(): void {
       netCents: parsed.netCents,
       deductions: parsed.deductions,
       unresolvedLabels: parsed.unresolvedLabels,
+      rawText: text,
     };
   });
 

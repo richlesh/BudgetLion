@@ -835,6 +835,98 @@ button.danger {
   color: var(--muted);
 }
 
+/* Symbol column: keep tickers from getting cramped. */
+.holdings-table td.holdings-symbol {
+  white-space: nowrap;
+  min-width: 72px;
+}
+
+/* Symbol lookup (name -> ticker) inline editor + results dropdown. */
+.holdings-symbol-edit {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.holdings-lookup-list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 20;
+  margin: 2px 0 0;
+  padding: 4px 0;
+  list-style: none;
+  min-width: 260px;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+}
+.holdings-lookup-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+.holdings-lookup-item:hover {
+  background: var(--accent);
+  color: #fff;
+}
+.holdings-lookup-type {
+  opacity: 0.6;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+/* Inline per-share price editor: closing date + price + save. */
+.holdings-price-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  justify-content: flex-end;
+}
+.holdings-price-edit input[type="date"] {
+  font: inherit;
+  padding: 1px 3px;
+}
+
+/* Inline editor for a holding's ticker/description (double-click to edit). */
+.holdings-edit {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 2px 4px;
+  font: inherit;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  outline: none;
+}
+
+/* Faint "+ ticker" affordance shown for holdings without a symbol. */
+.holdings-add-ticker {
+  color: var(--muted);
+  opacity: 0.6;
+  font-weight: 600;
+  cursor: pointer;
+}
+.holdings-add-ticker:hover {
+  opacity: 1;
+  color: var(--accent);
+}
+
+/* Double-clickable symbol/description cells hint interactivity subtly. */
+.holdings-table td [title^="Double-click"] {
+  cursor: pointer;
+}
+
 /* Gain/loss (and ledger) amount colors. */
 .amount-pos {
   color: #15803d;

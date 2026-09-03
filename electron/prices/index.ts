@@ -126,3 +126,174 @@ export async function refreshPrices(
 
   return results;
 }
+
+/** Normalize an ISO date/timestamp to the first of its month (YYYY-MM-01). */
+function toMonthStart(iso: string): string {
+  return `${iso.slice(0, 7)}-01`;
+}
+
+/** One monthly historical price point. */
+export interface MonthlyPrice {
+  /** First of the month (YYYY-MM-01). */
+  date: string;
+  /** Per-share price in cents. */
+  priceCents: number;
+}
+
+/**
+ * Fetch monthly historical closing prices for a symbol from `startISO` to now,
+ * one point per month, via Yahoo's chart endpoint (interval=1mo). Returns points
+ * keyed to the FIRST of each month. Null when the symbol can't be resolved;
+ * throws on transport/HTTP errors.
+ */
+async function fetchYahooMonthly(symbol: string, startISO: string): Promise<MonthlyPrice[] | null> {
+  const sym = symbol.trim().toUpperCase();
+  const period1 = Math.floor(new Date(`${startISO}T00:00:00Z`).getTime() / 1000);
+  const period2 = Math.floor(Date.now() / 1000);
+  const url =
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}` +
+    `?interval=1mo&period1=${period1}&period2=${period2}`;
+  const res = await fetch(url, {
+    redirect: "follow",
+    headers: { "User-Agent": "Mozilla/5.0", Accept: "application/json" },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = (await res.json()) as {
+    chart?: {
+      result?: Array<{
+        timestamp?: number[];
+        indicators?: { quote?: Array<{ close?: Array<number | null> }>; adjclose?: Array<{ adjclose?: Array<number | null> }> };
+      }> | null;
+      error?: unknown;
+    };
+  };
+  if (data.chart?.error) return null;
+  const r = data.chart?.result?.[0];
+  const ts = r?.timestamp;
+  const closes = r?.indicators?.adjclose?.[0]?.adjclose ?? r?.indicators?.quote?.[0]?.close;
+  if (!ts || !closes) return [];
+  const out: MonthlyPrice[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < ts.length; i++) {
+    const price = closes[i];
+    if (price == null || !Number.isFinite(price)) continue;
+    const isoTs = new Date(ts[i] * 1000).toISOString().slice(0, 10);
+    const monthStart = toMonthStart(isoTs);
+    if (seen.has(monthStart)) continue; // one point per month
+    seen.add(monthStart);
+    out.push({ date: monthStart, priceCents: Math.round(price * 100) });
+  }
+  return out;
+}
+
+/** Result of a monthly-history backfill for one asset. */
+export interface BackfillResult {
+  resolved: boolean;
+  /** Number of month rows added (existing dates are left untouched). */
+  added: number;
+  error?: string;
+}
+
+/**
+ * Backfill monthly historical valuations (source 'yahoo') for a tickered asset,
+ * one per month from `startDate` to now, WITHOUT overwriting dates that already
+ * have a valuation (so manual entries and prior fills are preserved). Gated on
+ * the opt-in price-fetch setting.
+ */
+export async function backfillMonthlyHistory(input: {
+  assetId: string;
+  symbol: string;
+  startDate: string;
+  existingDates: string[];
+}): Promise<BackfillResult> {
+  const settings = loadSettings();
+  if (!settings.priceFetchEnabled) {
+    return { resolved: false, added: 0, error: "Price fetching is disabled in Settings." };
+  }
+  if (!input.symbol.trim()) {
+    return { resolved: false, added: 0, error: "This holding has no ticker symbol." };
+  }
+  let monthly: MonthlyPrice[] | null;
+  try {
+    monthly = await fetchYahooMonthly(input.symbol, toMonthStart(input.startDate));
+  } catch (err) {
+    return { resolved: false, added: 0, error: err instanceof Error ? err.message : String(err) };
+  }
+  if (monthly == null) {
+    return { resolved: false, added: 0, error: "No historical data available for this symbol." };
+  }
+  const have = new Set(input.existingDates);
+  let added = 0;
+  for (const p of monthly) {
+    if (have.has(p.date)) continue; // don't overwrite manual/existing months
+    recordValuation({
+      assetId: input.assetId,
+      asOfDate: p.date,
+      valueMicros: p.priceCents * MICRO,
+      source: "yahoo",
+    });
+    added++;
+  }
+  return { resolved: true, added };
+}
+
+/** One symbol-search match (name -> ticker). */
+export interface SymbolMatch {
+  symbol: string;
+  name: string;
+  exchange: string;
+  /** Yahoo quoteType, e.g. EQUITY, ETF, MUTUALFUND, INDEX. */
+  type: string;
+}
+
+/** Result of a name→symbol lookup. */
+export interface SymbolLookupResult {
+  resolved: boolean;
+  results: SymbolMatch[];
+  error?: string;
+}
+
+/**
+ * Look up ticker symbols by security/fund NAME via Yahoo's search endpoint. Used
+ * to help the user find the symbol for a holding (stocks, ETFs, mutual funds).
+ * Gated on the opt-in price-fetch setting, since it sends the query to Yahoo.
+ */
+export async function lookupSymbols(query: string): Promise<SymbolLookupResult> {
+  const settings = loadSettings();
+  if (!settings.priceFetchEnabled) {
+    return { resolved: false, results: [], error: "Price fetching is disabled in Settings." };
+  }
+  const q = query.trim();
+  if (!q) return { resolved: false, results: [], error: "Enter a name to search." };
+  const url =
+    `https://query1.finance.yahoo.com/v1/finance/search` +
+    `?q=${encodeURIComponent(q)}&quotesCount=10&newsCount=0`;
+  try {
+    const res = await fetch(url, {
+      redirect: "follow",
+      headers: { "User-Agent": "Mozilla/5.0", Accept: "application/json" },
+    });
+    if (!res.ok) return { resolved: false, results: [], error: `HTTP ${res.status}` };
+    const data = (await res.json()) as {
+      quotes?: Array<{
+        symbol?: string;
+        shortname?: string;
+        longname?: string;
+        exchange?: string;
+        quoteType?: string;
+      }>;
+    };
+    const results: SymbolMatch[] = (data.quotes ?? [])
+      .filter((qt) => !!qt.symbol)
+      .map((qt) => ({
+        symbol: qt.symbol as string,
+        name: qt.shortname ?? qt.longname ?? "",
+        exchange: qt.exchange ?? "",
+        type: qt.quoteType ?? "",
+      }));
+    return { resolved: true, results };
+  } catch (err) {
+    return { resolved: false, results: [], error: err instanceof Error ? err.message : String(err) };
+  }
+}

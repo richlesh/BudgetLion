@@ -51,6 +51,8 @@ const api: LedgerApi = {
 
   // Phase 2: automated price fetching
   refreshPrices: (accountId?: string) => ipcRenderer.invoke(IPC.refreshPrices, accountId),
+  backfillPriceHistory: (assetId: string) => ipcRenderer.invoke(IPC.backfillPriceHistory, assetId),
+  lookupSecuritySymbol: (query: string) => ipcRenderer.invoke(IPC.lookupSecuritySymbol, query),
   listCategories: () => ipcRenderer.invoke(IPC.listCategories),
   createCategory: (input: NewCategoryInput) => ipcRenderer.invoke(IPC.createCategory, input),
   updateCategory: (input: UpdateCategoryInput) => ipcRenderer.invoke(IPC.updateCategory, input),

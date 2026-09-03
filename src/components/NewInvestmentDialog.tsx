@@ -138,8 +138,8 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
 
   function submit() {
     setError(null);
-    if (creatingNew && !newSymbol.trim()) {
-      setError("Enter a ticker symbol (or pick an existing security).");
+    if (creatingNew && !newName.trim() && !newSymbol.trim()) {
+      setError("Enter a security name (a ticker symbol is optional).");
       return;
     }
     const feesCents = Math.max(0, parseCents(fees) ?? 0);
@@ -176,7 +176,8 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
         ? {
             newAsset: {
               name: newName.trim() || newSymbol.trim().toUpperCase(),
-              symbol: newSymbol.trim().toUpperCase(),
+              // Optional ticker: null when left blank (non-market-priced assets).
+              symbol: newSymbol.trim() ? newSymbol.trim().toUpperCase() : null,
               assetClass: "security",
             },
           }
@@ -251,11 +252,7 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
             </div>
             <div className="field">
               <label>
-                {action === "grant"
-                  ? "Grant price per share"
-                  : isAdd
-                    ? "Cost basis per share (optional)"
-                    : "Price per share"}
+                {action === "grant" ? "Grant price per share" : "Price per Share"}
               </label>
               <input
                 value={priceDisplay}
@@ -266,7 +263,7 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
               />
             </div>
             <div className="field">
-              <label>{isAdd ? "Total cost basis (optional)" : "Amount (shares × price)"}</label>
+              <label>{isAdd ? "Amount (shares × price) (optional)" : "Amount (shares × price)"}</label>
               <input
                 value={amountDisplay}
                 onChange={(e) => {
@@ -307,7 +304,7 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
         <div className="field">
           <label>Fee category (optional — expense)</label>
           <select value={feeCategoryId} onChange={(e) => setFeeCategoryId(e.target.value)}>
-            <option value="">— Add to cost basis (not categorized) —</option>
+            <option value="">— Not categorized —</option>
             {expenseCategoryChoices.map((o) => (
               <option key={o.category.id} value={o.category.id}>
                 {o.display}

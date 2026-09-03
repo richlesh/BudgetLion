@@ -324,6 +324,16 @@ export function updateTransaction(input: UpdateTransactionInput): void {
 
   const run = db.transaction(() => {
     db.prepare(`UPDATE transactions SET ${fields.join(", ")} WHERE id = @id`).run(params);
+    // If the date changed and this transaction is a leg of an investment lot,
+    // keep the lot's own date in sync (share-as-of/history read the lot date).
+    if (input.date !== undefined) {
+      db.prepare(
+        `UPDATE investment_transactions
+            SET date = @date, updated_at = @ts
+          WHERE deleted_at IS NULL
+            AND (cash_txn_id = @id OR income_txn_id = @id OR fee_txn_id = @id)`
+      ).run({ date: input.date, ts, id: input.id });
+    }
     if (wantsSplits) {
       if (makeSplit) {
         // Read back the effective from/to/amount to compute the owning signed total.
@@ -1622,6 +1632,11 @@ export function recordTrade(input: NewTradeInput): InvestmentTransaction {
       const intoAccount = tradeCents > 0;
       const category = input.action === "div" ? input.categoryId ?? null : null;
       cashTxnId = insertCashTxn(tradeCents, intoAccount, label, category);
+    } else if (input.action === "add") {
+      // 'Add shares' has no cash movement, but we record a $0 cash transaction so
+      // the opening/gift/transfer-in appears as a ledger line (with the security
+      // + shares in its memo). It contributes 0 to the account balance.
+      cashTxnId = insertCashTxn(0, true, label, null);
     }
     // Fee leg (Option A): a separate categorized expense when a fee category is set.
     let feeTxnId: string | null = null;
@@ -1660,7 +1675,8 @@ export function recordTrade(input: NewTradeInput): InvestmentTransaction {
           @fees_cents, @cash_cents, @cash_txn_id, @income_txn_id, @fee_txn_id, @memo, @created_at, @updated_at, @deleted_at)`
     ).run(row);
 
-    // 5. Upsert a valuation at the trade price (buy/sell/reinvest carry a price).
+    // 5. Upsert a valuation at the trade price on the transaction date, for any
+    //    action that carries a per-share price (buy/sell/reinvest/grant/add).
     if (priceMicros > 0) {
       recordValuation({
         assetId,

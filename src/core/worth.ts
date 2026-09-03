@@ -138,7 +138,7 @@ export function totalNetWorthCents(worths: AccountWorth[]): number {
   return worths.reduce((sum, w) => sum + w.worthCents, 0);
 }
 
-// ---- Investment transactions (Option A): shares & cost basis from lots ----
+// ---- Investment transactions (Option A): shares from lots ----
 
 /**
  * Net shares (in micro-units) held for a security, as the signed sum of its
@@ -150,39 +150,14 @@ export function sharesMicroFromLots(lots: InvestmentTransaction[]): number {
 }
 
 /**
- * Average-cost basis (in cents) of the shares still held. Buys and reinvestments
- * add cost (shares*price + fees); sells remove cost proportionally at the running
- * average; cash dividends don't affect basis. Lots are processed in date order.
+ * Net shares (micro-units) held AS OF `isoDate` — the signed sum of lots dated on
+ * or before that date. Used to value a position at a historical price point.
  */
-export function costBasisFromLots(lots: InvestmentTransaction[]): number {
-  const ordered = lots
-    .filter((l) => l.deletedAt == null)
-    .slice()
-    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-  let shares = 0; // micro-units
-  let basis = 0; // cents
-  for (const l of ordered) {
-    if (l.action === "buy" || l.action === "reinvest" || l.action === "grant" || l.action === "add") {
-      // Cost of acquired shares = shares*price + fees. When fees were expensed to
-      // a category (feeTxnId set, Option A), they are NOT capitalized into basis.
-      const capitalizedFees = l.feeTxnId ? 0 : l.feesCents;
-      const cost = Math.round((l.quantityMicro * l.priceMicros) / (MICRO * MICRO)) + capitalizedFees;
-      shares += l.quantityMicro;
-      basis += cost;
-    } else if (l.action === "sell") {
-      const sold = -l.quantityMicro; // quantityMicro is negative for sells
-      const avgPerMicro = shares > 0 ? basis / shares : 0;
-      const removed = Math.round(avgPerMicro * sold);
-      shares -= sold;
-      basis -= removed;
-      if (shares <= 0) {
-        shares = 0;
-        basis = 0;
-      }
-    }
-    // 'div' (cash): no share/basis change.
-  }
-  return Math.max(0, basis);
+export function sharesMicroAsOf(lots: InvestmentTransaction[], isoDate: string): number {
+  return lots.reduce(
+    (s, l) => (l.deletedAt == null && l.date <= isoDate ? s + l.quantityMicro : s),
+    0
+  );
 }
 
 /**
@@ -200,7 +175,6 @@ export function securityHolding(
   return {
     asset,
     sharesMicro,
-    costBasisCents: costBasisFromLots(lots),
     latestValuation: latest,
     marketValueCents,
   };

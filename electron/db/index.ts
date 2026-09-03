@@ -211,6 +211,60 @@ function runMigrations(instance: Database.Database): void {
       )
       .run({ ts });
   }
+
+  // One-time (idempotent) backfill: give existing 'Add shares' lots a $0 cash
+  // transaction so they appear as a ledger line (with security + shares in the
+  // memo). Only fills lots with no cash_txn_id, so it's safe to re-run.
+  if (invTableExists.n > 0) {
+    const ts = new Date().toISOString();
+    const orphanAdds = instance
+      .prepare(
+        `SELECT id, account_id, date FROM investment_transactions
+          WHERE deleted_at IS NULL AND action = 'add' AND cash_txn_id IS NULL`
+      )
+      .all() as Array<{ id: string; account_id: string; date: string }>;
+    if (orphanAdds.length > 0) {
+      const insertTxn = instance.prepare(
+        `INSERT INTO transactions
+           (id, date, payee, memo, amount_cents, from_account_id, to_account_id,
+            category_id, cleared, import_id, created_at, updated_at, deleted_at)
+         VALUES (@id, @date, 'Add shares', NULL, 0, NULL, @to, NULL, 0, NULL, @ts, @ts, NULL)`
+      );
+      const linkLot = instance.prepare(
+        "UPDATE investment_transactions SET cash_txn_id = @cash, updated_at = @ts WHERE id = @id"
+      );
+      const run = instance.transaction(() => {
+        for (const lot of orphanAdds) {
+          const cashId = randomUUID();
+          insertTxn.run({ id: cashId, date: lot.date, to: lot.account_id, ts });
+          linkLot.run({ cash: cashId, id: lot.id, ts });
+        }
+      });
+      run();
+    }
+  }
+  // One-time (idempotent) sync: align each investment lot's date to its linked
+  // cash transaction's date when they diverged (older builds didn't propagate a
+  // ledger date edit to the lot, which threw off shares-as-of / history charts).
+  if (invTableExists.n > 0) {
+    const ts = new Date().toISOString();
+    instance
+      .prepare(
+        `UPDATE investment_transactions
+            SET date = (SELECT t.date FROM transactions t WHERE t.id = investment_transactions.cash_txn_id),
+                updated_at = @ts
+          WHERE deleted_at IS NULL
+            AND cash_txn_id IS NOT NULL
+            AND EXISTS (
+              SELECT 1 FROM transactions t
+               WHERE t.id = investment_transactions.cash_txn_id
+                 AND t.deleted_at IS NULL
+                 AND t.date <> investment_transactions.date
+            )`
+      )
+      .run({ ts });
+  }
+
   const accountsSql = (
     instance
       .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'accounts'")

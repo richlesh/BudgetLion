@@ -319,8 +319,9 @@ export interface NewTradeInput {
   accountId: string;
   /** Existing asset to trade. Provide this OR `newAsset` to create one inline. */
   assetId?: string;
-  /** Inline security creation (used when assetId is not given). */
-  newAsset?: { name: string; symbol: string; assetClass?: AssetClass };
+  /** Inline security creation (used when assetId is not given). `symbol` is the
+   *  ticker (null/omitted for assets without one, e.g. private funds). */
+  newAsset?: { name: string; symbol?: string | null; assetClass?: AssetClass };
   date: string;
   action: InvestmentAction;
   /** Share count in human units (e.g. 12.5). Ignored/zero for cash 'div'. */
@@ -353,12 +354,11 @@ export interface NewTradeInput {
 
 /**
  * Computed holding for a security, derived from its investment-transaction lots:
- * total shares, average cost basis, and market value at the latest valuation.
+ * total shares and market value at the latest valuation.
  */
 export interface SecurityHolding {
   asset: Asset;
   sharesMicro: number; // net shares x1e6 from all lots
-  costBasisCents: number; // total cost of shares still held (avg-cost method)
   latestValuation: AssetValuation | null;
   marketValueCents: number; // sharesMicro * latest price
 }

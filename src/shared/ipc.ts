@@ -70,6 +70,30 @@ export interface OpenedFile {
   text: string;
 }
 
+/** Result of backfilling monthly historical prices for a tickered asset. */
+export interface BackfillHistoryResult {
+  resolved: boolean;
+  /** Number of month rows added (existing/manual dates are preserved). */
+  added: number;
+  error?: string;
+}
+
+/** One symbol-search match from a name→ticker lookup. */
+export interface SymbolMatch {
+  symbol: string;
+  name: string;
+  exchange: string;
+  /** Yahoo quoteType, e.g. EQUITY, ETF, MUTUALFUND, INDEX. */
+  type: string;
+}
+
+/** Result of a name→symbol lookup. */
+export interface SymbolLookupResult {
+  resolved: boolean;
+  results: SymbolMatch[];
+  error?: string;
+}
+
 /** One parsed deduction line from a paycheck stub (positive magnitude in cents). */
 export interface ParsedPaycheckDeduction {
   label: string;
@@ -88,6 +112,11 @@ export interface ParsedPaycheckResult {
   deductions: ParsedPaycheckDeduction[];
   /** Recognized labels with no parseable amount (shown as a hint). */
   unresolvedLabels: string[];
+  /**
+   * The raw extracted PDF text, so the renderer can match against employers the
+   * user has used before (which the main process doesn't have on hand).
+   */
+  rawText: string;
 }
 
 /** Accounts + categories (+ recurring rules) bundle exchanged as JSON. */
@@ -154,7 +183,7 @@ export interface LedgerApi {
   deleteInvestmentTxn(id: string): Promise<void>;
   /** Investment transactions for an account. */
   listInvestmentTxns(accountId: string): Promise<InvestmentTransaction[]>;
-  /** Per-security holdings for an account: shares, cost basis, market value. */
+  /** Per-security holdings for an account: shares and market value. */
   getSecurityHoldings(accountId: string): Promise<SecurityHolding[]>;
   /** Import normalized investment-history rows as trades. Returns trade count. */
   commitInvestmentImport(accountId: string, rows: InvestmentImportRow[]): Promise<number>;
@@ -162,6 +191,10 @@ export interface LedgerApi {
   // Phase 2: automated price fetching (opt-in)
   /** Fetch prices for an account's security symbols (or all when omitted). */
   refreshPrices(accountId?: string): Promise<PriceFetchResult[]>;
+  /** Backfill monthly historical prices for a tickered asset from first-owned to now. */
+  backfillPriceHistory(assetId: string): Promise<BackfillHistoryResult>;
+  /** Look up ticker symbols by security/fund name (opt-in; sends the query to Yahoo). */
+  lookupSecuritySymbol(query: string): Promise<SymbolLookupResult>;
 
   // Categories
   listCategories(): Promise<Category[]>;
@@ -295,6 +328,8 @@ export const IPC = {
   getSecurityHoldings: "invtx:holdings",
   commitInvestmentImport: "invtx:import",
   refreshPrices: "prices:refresh",
+  backfillPriceHistory: "prices:backfill-history",
+  lookupSecuritySymbol: "prices:lookup-symbol",
   listCategories: "categories:list",
   createCategory: "categories:create",
   updateCategory: "categories:update",
