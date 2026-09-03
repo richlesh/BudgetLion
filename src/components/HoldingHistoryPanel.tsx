@@ -10,6 +10,9 @@ interface Props {
   holding: SecurityHolding;
   currency: string;
   dark: boolean;
+  /** When true, always chart Total Value and hide the Share Price/Total toggle
+   *  (used for asset accounts, which hold a single item). */
+  valueOnly?: boolean;
   onClose: () => void;
 }
 
@@ -51,10 +54,10 @@ function rangeStartISO(key: RangeKey): string | null {
  * don't reconstruct historical share counts), so it reflects "what the position
  * would be worth at each historical price."
  */
-export function HoldingHistoryPanel({ holding, currency, dark, onClose }: Props) {
+export function HoldingHistoryPanel({ holding, currency, dark, valueOnly = false, onClose }: Props) {
   const [valuations, setValuations] = useState<AssetValuation[]>([]);
   const [lots, setLots] = useState<InvestmentTransaction[]>([]);
-  const [metric, setMetric] = useState<Metric>("price");
+  const [metric, setMetric] = useState<Metric>(valueOnly ? "value" : "price");
   const [range, setRange] = useState<RangeKey>("1y");
   const [filling, setFilling] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
@@ -112,13 +115,14 @@ export function HoldingHistoryPanel({ holding, currency, dark, onClose }: Props)
         pts.push([v.asOfDate, Math.round(priceCents)]);
         shares.push(0);
       } else {
-        const sharesMicro = sharesMicroAsOf(lots, v.asOfDate);
+        // No lots (a physical asset item) => constant quantity from the holding.
+        const sharesMicro = lots.length > 0 ? sharesMicroAsOf(lots, v.asOfDate) : holding.sharesMicro;
         pts.push([v.asOfDate, Math.round((sharesMicro * v.valueMicros) / (MICRO * MICRO))]);
         shares.push(sharesMicro / MICRO);
       }
     }
     return { points: pts, sharesByIndex: shares };
-  }, [valuations, metric, lots, range]);
+  }, [valuations, metric, lots, range, holding]);
 
   const title = holding.asset.symbol
     ? `${holding.asset.symbol} — ${holding.asset.name}`
@@ -140,7 +144,7 @@ export function HoldingHistoryPanel({ holding, currency, dark, onClose }: Props)
           const arr = params as Array<{ axisValue: string; value: number; dataIndex: number }>;
           const p = arr[0];
           const base = `${p.axisValue}<br/>${formatCents(p.value, currency)}`;
-          if (metric !== "value") return base;
+          if (metric !== "value" || valueOnly) return base;
           const sh = sharesByIndex[p.dataIndex] ?? 0;
           // Trim trailing zeros from the share count.
           const shStr = Number(sh.toFixed(6)).toString();
@@ -169,7 +173,7 @@ export function HoldingHistoryPanel({ holding, currency, dark, onClose }: Props)
         },
       ],
     }),
-    [points, sharesByIndex, metric, textColor, currency]
+    [points, sharesByIndex, metric, textColor, currency, valueOnly]
   );
 
   return (
@@ -187,20 +191,22 @@ export function HoldingHistoryPanel({ holding, currency, dark, onClose }: Props)
         </div>
 
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 18, flexWrap: "wrap" }}>
-          <div className="pie-mode-toggle">
-            <span className={metric === "price" ? "active" : ""}>Share Price</span>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={metric === "value"}
-              aria-label="Toggle between share price and total value"
-              className={"switch" + (metric === "value" ? " on" : "")}
-              onClick={() => setMetric((m) => (m === "price" ? "value" : "price"))}
-            >
-              <span className="switch-knob" />
-            </button>
-            <span className={metric === "value" ? "active" : ""}>Total Value</span>
-          </div>
+          {!valueOnly && (
+            <div className="pie-mode-toggle">
+              <span className={metric === "price" ? "active" : ""}>Share Price</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={metric === "value"}
+                aria-label="Toggle between share price and total value"
+                className={"switch" + (metric === "value" ? " on" : "")}
+                onClick={() => setMetric((m) => (m === "price" ? "value" : "price"))}
+              >
+                <span className="switch-knob" />
+              </button>
+              <span className={metric === "value" ? "active" : ""}>Total Value</span>
+            </div>
+          )}
           <label className="chart-ctl">
             Range
             <select value={range} onChange={(e) => setRange(e.target.value as RangeKey)}>
@@ -226,7 +232,7 @@ export function HoldingHistoryPanel({ holding, currency, dark, onClose }: Props)
         ) : (
           <ReactECharts option={option} style={{ height: 340 }} notMerge />
         )}
-        {metric === "value" && points.length > 0 && (
+        {metric === "value" && !valueOnly && points.length > 0 && (
           <div className="account-type" style={{ marginTop: 6 }}>
             Total Value = each date&rsquo;s price &times; shares held as of that date.
           </div>

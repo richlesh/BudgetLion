@@ -48,12 +48,14 @@ export function NewAccountDialog({ categories, accounts, onCancel, onCreate }: P
     // flip the entered sign to match the storage convention. This mirrors the
     // display-side sign flip in the ledger grid.
     const cents = entered * displaySign(type);
+    // Asset accounts are pure holdings (no cash): never carry an opening balance.
+    const isAsset = type === "asset";
     onCreate({
       name: name.trim(),
       type,
       accountCode: accountCode.trim() || null,
-      openingBalanceCents: cents,
-      openingBalanceDate: openingDate || null,
+      openingBalanceCents: isAsset ? 0 : cents,
+      openingBalanceDate: isAsset ? null : openingDate || null,
       // Interest rate applies only to liability accounts; stored in basis points.
       interestRateBps: isLiability(type) ? percentToBps(interestRate) : null,
       // Escrow applies to a mortgage (loan); blank => null.
@@ -130,18 +132,22 @@ export function NewAccountDialog({ categories, accounts, onCancel, onCreate }: P
             placeholder="e.g. bank account number or external id"
           />
         </div>
-        <div className="field">
-          <label>Opening balance</label>
-          <input value={opening} onChange={(e) => setOpening(e.target.value)} />
-        </div>
-        <div className="field">
-          <label>Opening balance date</label>
-          <input
-            type="date"
-            value={openingDate}
-            onChange={(e) => setOpeningDate(e.target.value)}
-          />
-        </div>
+        {type !== "asset" && (
+          <>
+            <div className="field">
+              <label>Opening balance</label>
+              <input value={opening} onChange={(e) => setOpening(e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Opening balance date</label>
+              <input
+                type="date"
+                value={openingDate}
+                onChange={(e) => setOpeningDate(e.target.value)}
+              />
+            </div>
+          </>
+        )}
         {error && <div className="error">{error}</div>}
         <div className="dialog-actions">
           <button className="secondary" onClick={onCancel}>
