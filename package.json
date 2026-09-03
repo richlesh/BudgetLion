@@ -1,7 +1,7 @@
 {
   "name": "budgetlion",
   "productName": "BudgetLion",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "BudgetLion - Personal finance ledger with double-entry accounting",
   "main": "dist-electron/electron/main/main.js",
   "type": "module",
