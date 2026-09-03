@@ -42,6 +42,14 @@ function firstAmountCents(s: string): number | null {
   return negative ? -cents : cents;
 }
 
+/** True when a line begins with a money value (a value column, not a label row),
+ *  e.g. "5,000.00 90,000.00" or "$5,000.00". Used to attach an amount from the
+ *  line following a label that had no amount of its own. A leading letter (a
+ *  label) makes it false. */
+function startsWithMoney(s: string): boolean {
+  return /^\s*\(?\$?\s*-?\d/.test(s);
+}
+
 /** Every money-looking token on a line, as {cents, isPercent, raw}. */
 interface MoneyToken {
   cents: number; // positive magnitude in cents
@@ -152,27 +160,44 @@ const DATE_LABELS: Array<{ re: RegExp; priority: number }> = [
 /** Lines we never treat as an employer name (labels, totals, boilerplate). */
 const EMPLOYER_SKIP = /\b(pay|earnings|gross|net|tax|deduction|employee|ssn|social|medicare|federal|state|hours|rate|period|advice|check|deposit|statement|date|ytd|current|address|direct|routing|account\s*number)\b/i;
 
+/** Looks like a phone number (so we never treat it as a company name). */
+function looksLikePhone(s: string): boolean {
+  const digits = s.replace(/\D/g, "");
+  return digits.length >= 7 && /[\d().\-\s]/.test(s) && /\d[\d().\-\s]{6,}\d/.test(s);
+}
+
 /**
- * Extract the employer/company name. Prefers an explicit "Employer:"/"Company:"
- * label; otherwise falls back to the first header line that reads like a company
- * name (has letters, isn't a known label/amount/date, and isn't the employee).
+ * Extract the employer/company name.
+ *
+ * 1) An explicit "Employer:" / "Company:" / "Employer Name:" field. The label
+ *    must be followed directly by a separator, so "Employer Phone Number: ..."
+ *    (a different field that merely starts with "Employer") does NOT match.
+ * 2) Otherwise the first header line that reads like a company name — top-left of
+ *    the stub — skipping known labels, addresses, phone numbers, and number-heavy
+ *    lines (dates/amounts/ids).
  */
 function extractEmployer(lines: string[]): string | null {
-  // 1) Explicit label anywhere.
+  // 1) Explicit label: "Employer" / "Company" optionally "Name", then a separator.
   for (const line of lines) {
-    const m = line.match(/\b(employer|company|company\s*name)\s*[:#-]?\s*(.+)$/i);
-    if (m) {
-      const name = m[2].trim();
-      if (name && !EMPLOYER_SKIP.test(name)) return name.replace(/\s{2,}/g, " ");
-    }
+    const m = line.match(/^\s*(employer|company)(\s+name)?\s*[:#-]\s*(.+)$/i);
+    if (!m) continue;
+    const name = m[3].trim();
+    if (!name) continue;
+    if (EMPLOYER_SKIP.test(name)) continue; // e.g. an "Employer Address:" value
+    if (looksLikePhone(name)) continue; // e.g. "Employer Phone Number: 555-..."
+    if (!/[A-Za-z]/.test(name)) continue;
+    return name.replace(/\s{2,}/g, " ");
   }
   // 2) Heuristic: first few lines, pick the first that looks like a company name.
   for (const line of lines.slice(0, 6)) {
     const l = line.trim();
     if (l.length < 2 || l.length > 60) continue;
     if (EMPLOYER_SKIP.test(l)) continue;
+    if (looksLikePhone(l)) continue;
     if (!/[A-Za-z]/.test(l)) continue; // must have letters
     if (/\d{2,}/.test(l)) continue; // skip lines dominated by numbers (dates/amounts/ids)
+    // Skip lines that are clearly a street address (start with a house number).
+    if (/^\d+\s+\S/.test(l)) continue;
     return l.replace(/\s{2,}/g, " ");
   }
   return null;
@@ -180,8 +205,8 @@ function extractEmployer(lines: string[]): string | null {
 
 /** Known label patterns → a normalized display label. Order matters (specific first). */
 const LABEL_PATTERNS: Array<{ re: RegExp; label: string; kind: "gross" | "net" | "deduction" }> = [
-  { re: /\bgross\s*(pay|earnings|wages)?\b/i, label: "Gross Pay", kind: "gross" },
-  { re: /\bnet\s*(pay|check|deposit)\b/i, label: "Net Pay", kind: "net" },
+  { re: /\b(gross\s*(pay|earnings|wages|income)?|total\s*(gross|earnings|pay|wages)|current\s*(gross|earnings)|taxable\s*gross|gross\s*amount)\b/i, label: "Gross Pay", kind: "gross" },
+  { re: /\b(net\s*(pay|check|deposit|amount|earnings)?|take[-\s]*home(\s*pay)?|net\s*direct\s*deposit)\b/i, label: "Net Pay", kind: "net" },
   { re: /\bfed(eral)?\s*(income)?\s*(tax|w\/?h|withhold\w*)\b/i, label: "Federal Income Tax", kind: "deduction" },
   { re: /\b(social\s*security|oasdi|fica[-\s/]*ss|fica[-\s/]*oasdi|ss[-\s/]*ee|oasdi[-\s/]*ee)\b/i, label: "Social Security", kind: "deduction" },
   { re: /\b(medicare|fica[-\s/]*med|med[-\s/]*ee|hi[-\s/]*ee)\b/i, label: "Medicare", kind: "deduction" },
@@ -231,7 +256,8 @@ export function parsePaycheckText(text: string): ParsedPaycheck {
     }
   }
 
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     for (const p of LABEL_PATTERNS) {
       const m = p.re.exec(line);
       if (!m) continue;
@@ -243,9 +269,24 @@ export function parsePaycheckText(text: string): ParsedPaycheck {
       // Gross/net take the first amount; deductions use a rate-aware picker so a
       // leading rate column (e.g. Social Security 6.20 310.00) isn't mistaken for
       // the withholding amount.
-      const amt = p.kind === "deduction" ? pickDeductionAmount(afterLabel) : firstAmountCents(afterLabel);
+      const pick = (s: string) => (p.kind === "deduction" ? pickDeductionAmount(s) : firstAmountCents(s));
+      let amt = pick(afterLabel);
+      // Column layout fallback: if the label line carries no amount, look at the
+      // next line(s) — but only when that line STARTS with a money value (a value
+      // column), so we don't steal a different labeled row's amount.
       if (amt == null) {
-        // Label present but amount not on this line — note it once.
+        for (let j = i + 1; j < lines.length && j <= i + 2; j++) {
+          const next = lines[j];
+          if (!startsWithMoney(next)) break; // a labeled line — stop looking
+          const nextAmt = pick(next);
+          if (nextAmt != null) {
+            amt = nextAmt;
+            break;
+          }
+        }
+      }
+      if (amt == null) {
+        // Label present but amount not on this or the next line — note it once.
         if (!unresolvedLabels.includes(p.label)) unresolvedLabels.push(p.label);
         continue;
       }
@@ -268,4 +309,45 @@ export function parsePaycheckText(text: string): ParsedPaycheck {
     deductions,
     unresolvedLabels: unresolvedLabels.filter((l) => !resolved.has(l)),
   };
+}
+
+/** Build a tolerant regex that matches a specific label's words in order,
+ *  allowing arbitrary separators between words (spaces, punctuation). */
+function labelRegex(label: string): RegExp | null {
+  const words = label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter((w) => w.length > 0)
+    .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  if (words.length === 0) return null;
+  return new RegExp("\\b" + words.join("[^A-Za-z0-9]{0,3}") + "\\b", "i");
+}
+
+/**
+ * Find the (current-period) amount for a SPECIFIC label in the stub text, in
+ * positive cents, or null. Uses the same rate-aware picker and next-line
+ * fallback as the main parser, so it works for column layouts too. Used to look
+ * up amounts for line items templated from a prior paycheck.
+ */
+export function amountForLabel(text: string, label: string): number | null {
+  const re = labelRegex(label);
+  if (!re) return null;
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
+  for (let i = 0; i < lines.length; i++) {
+    const m = re.exec(lines[i]);
+    if (!m) continue;
+    const after = lines[i].slice((m.index ?? 0) + m[0].length);
+    let amt = pickDeductionAmount(after);
+    if (amt == null) {
+      for (let j = i + 1; j < lines.length && j <= i + 2; j++) {
+        if (!startsWithMoney(lines[j])) break;
+        const a = pickDeductionAmount(lines[j]);
+        if (a != null) { amt = a; break; }
+      }
+    }
+    if (amt != null) return Math.abs(amt);
+  }
+  return null;
 }

@@ -244,6 +244,63 @@ export interface LearnedTarget {
   accountId?: string | null;
 }
 
+/** The structure of a prior paycheck, used as a template for a new import. */
+export interface PaycheckTemplate {
+  grossCategoryId: string | null;
+  /** Deduction line items from the prior paycheck: label + its routing target. */
+  deductions: Array<{ label: string; target: LearnedTarget }>;
+}
+
+/**
+ * The MOST RECENT paycheck (same employer + deposit account) as a template: its
+ * gross income category and its deduction legs (label from memo + target). Used
+ * to seed a new import with the same line items — the caller looks up each
+ * label's amount in the imported stub and defaults to $0 when not found. Returns
+ * null when the user has no prior paycheck for this employer.
+ */
+export function lastPaycheckTemplate(
+  data: Pick<AggregateData, "transactions" | "splits">,
+  employer: string,
+  depositAccountId: string
+): PaycheckTemplate | null {
+  const empKey = employer.trim().toLowerCase();
+  if (!empKey) return null;
+
+  const splitsByTx = new Map<string, TransactionSplit[]>();
+  for (const s of data.splits) {
+    if (s.deletedAt != null) continue;
+    const arr = splitsByTx.get(s.transactionId) ?? [];
+    arr.push(s);
+    splitsByTx.set(s.transactionId, arr);
+  }
+
+  const latest = data.transactions
+    .filter((tx: Transaction) => {
+      if (tx.deletedAt != null) return false;
+      if ((tx.payee ?? "").trim().toLowerCase() !== empKey) return false;
+      if (tx.toAccountId !== depositAccountId) return false;
+      return isPaycheckSplit(splitsByTx.get(tx.id));
+    })
+    .sort((a, b) => (a.date !== b.date ? (a.date < b.date ? 1 : -1) : a.createdAt < b.createdAt ? 1 : -1))[0];
+
+  if (!latest) return null;
+
+  const legs = splitsByTx.get(latest.id) ?? [];
+  let grossCategoryId: string | null = null;
+  const deductions: Array<{ label: string; target: LearnedTarget }> = [];
+  for (const leg of legs) {
+    if (leg.amountCents > 0) {
+      if (grossCategoryId == null && leg.categoryId) grossCategoryId = leg.categoryId;
+    } else if (leg.amountCents < 0) {
+      const target: LearnedTarget = leg.transferAccountId
+        ? { target: "transfer", accountId: leg.transferAccountId }
+        : { target: "category", categoryId: leg.categoryId ?? null };
+      deductions.push({ label: leg.memo ?? "", target });
+    }
+  }
+  return { grossCategoryId, deductions };
+}
+
 /** Result of learning from prior paychecks of the same employer. */
 export interface LearnedPaycheck {
   /** normalized-label -> most-recent target seen for that deduction. */
@@ -337,4 +394,78 @@ export function learnPaycheckTargets(
   }
 
   return { labelToTarget, priorDeductions, grossCategoryId, sampleCount: candidates.length };
+}
+
+/**
+ * Distinct employer names the user has used on prior paychecks (payees of
+ * paycheck-shaped split transactions), newest first. Used to recognize the
+ * employer on an imported stub and disambiguate multiple employers.
+ */
+export function knownPaycheckEmployers(
+  data: Pick<AggregateData, "transactions" | "splits">
+): string[] {
+  const splitsByTx = new Map<string, TransactionSplit[]>();
+  for (const s of data.splits) {
+    if (s.deletedAt != null) continue;
+    const arr = splitsByTx.get(s.transactionId) ?? [];
+    arr.push(s);
+    splitsByTx.set(s.transactionId, arr);
+  }
+  const seen = new Set<string>();
+  const employers: string[] = [];
+  const txs = [...data.transactions]
+    .filter((t) => t.deletedAt == null && (t.payee ?? "").trim() !== "")
+    .sort((a, b) => (a.date !== b.date ? (a.date < b.date ? 1 : -1) : a.createdAt < b.createdAt ? 1 : -1));
+  for (const tx of txs) {
+    if (!isPaycheckSplit(splitsByTx.get(tx.id))) continue;
+    const name = (tx.payee ?? "").trim();
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    employers.push(name);
+  }
+  return employers;
+}
+
+/** Normalize a company name for loose matching: lowercase, drop punctuation and
+ *  common suffixes (Inc/LLC/Corp/Co/Ltd/LP/PLC), collapse whitespace. */
+function normalizeCompany(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[.,]/g, " ")
+    .replace(/\b(inc|llc|l\.?l\.?c|corp|corporation|co|company|ltd|limited|lp|llp|plc)\b/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+/**
+ * Find which of the user's known employers appears in the stub text. Tries an
+ * exact case-insensitive substring first, then a normalized (suffix-stripped)
+ * match. When several match, the LONGEST known name wins (most specific), which
+ * disambiguates when the person has multiple employers. Returns the known
+ * employer's original name, or null.
+ */
+export function matchKnownEmployer(text: string, knownEmployers: string[]): string | null {
+  if (!text || knownEmployers.length === 0) return null;
+  const hay = text.toLowerCase();
+  const hayNorm = normalizeCompany(text);
+
+  let best: string | null = null;
+  let bestScore = 0;
+  for (const emp of knownEmployers) {
+    const name = emp.trim();
+    if (name.length < 2) continue;
+    let score = 0;
+    if (hay.includes(name.toLowerCase())) {
+      score = name.length + 1000; // exact substring beats normalized
+    } else {
+      const norm = normalizeCompany(name);
+      if (norm.length >= 2 && hayNorm.includes(norm)) score = norm.length;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      best = emp;
+    }
+  }
+  return best;
 }

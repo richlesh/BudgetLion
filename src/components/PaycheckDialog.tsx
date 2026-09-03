@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import type {
   Account,
+  AggregateData,
   Category,
   EmployerContribution,
   PaycheckDeduction,
@@ -8,8 +9,9 @@ import type {
 } from "../shared/types";
 import { formatCents, parseCents } from "../core/money";
 import { categoriesForDirection, categoryOptions } from "../core/categories";
-import { buildPaycheckTransactions, learnPaycheckTargets, normalizeLabel, PaycheckError } from "../core/paycheck";
+import { buildPaycheckTransactions, learnPaycheckTargets, normalizeLabel, knownPaycheckEmployers, matchKnownEmployer, lastPaycheckTemplate, PaycheckError } from "../core/paycheck";
 import type { LearnedTarget } from "../core/paycheck";
+import { amountForLabel } from "../core/paycheckParse";
 
 interface Props {
   /** All accounts (deposit target + transfer targets for deductions/contributions). */
@@ -233,14 +235,16 @@ export function PaycheckDialog({
   // and auto-assign a category/account to any deduction that has no target yet.
   // Also adopts the prior gross income category when none is chosen. Returns the
   // number of targets filled. No-op when employer/deposit account are unset.
-  async function applyLearning(overrideEmployer?: string): Promise<number> {
+  async function applyLearning(overrideEmployer?: string, preloaded?: AggregateData): Promise<number> {
     const emp = (overrideEmployer ?? employer).trim();
     if (!emp || !depositAccountId) return 0;
-    let data;
-    try {
-      data = await window.ledger.getAggregateData();
-    } catch {
-      return 0;
+    let data = preloaded;
+    if (!data) {
+      try {
+        data = await window.ledger.getAggregateData();
+      } catch {
+        return 0;
+      }
     }
     const learned = learnPaycheckTargets(data, emp, depositAccountId);
     if (learned.sampleCount === 0) return 0;
@@ -271,21 +275,68 @@ export function PaycheckDialog({
     try {
       const res = await window.ledger.importPaycheckPdf();
       if (!res) return; // user canceled
-      if (res.employer) setEmployer(res.employer);
+
+      // Prefer an employer the user has used before, recognized in the stub text
+      // — this disambiguates multiple employers and beats the positional guess.
+      let data: AggregateData | undefined;
+      try {
+        data = await window.ledger.getAggregateData();
+      } catch {
+        data = undefined;
+      }
+      const known = data ? matchKnownEmployer(res.rawText, knownPaycheckEmployers(data)) : null;
+      const resolvedEmployer = known ?? res.employer ?? "";
+      if (resolvedEmployer) setEmployer(resolvedEmployer);
       if (res.date) setDate(res.date);
-      if (res.grossCents != null) setGross((res.grossCents / 100).toFixed(2));
-      if (res.deductions.length > 0) {
-        setDeductions(
-          res.deductions.map((d) => ({
+
+      // Prefer the LAST paycheck from this employer as a template: recreate all of
+      // its line items (gross category + each deduction with its destination), and
+      // look up each amount in the imported stub — defaulting to $0 when missing.
+      const template =
+        data && resolvedEmployer && depositAccountId
+          ? lastPaycheckTemplate(data, resolvedEmployer, depositAccountId)
+          : null;
+
+      let templateNote = "";
+      if (template) {
+        // Gross: prior gross category; amount from PDF or 0.
+        if (template.grossCategoryId) setGrossCategoryId(template.grossCategoryId);
+        setGross(((res.grossCents ?? 0) / 100).toFixed(2));
+        // Deductions: one row per prior leg, amount looked up by its label.
+        const rows = template.deductions.map((d) => {
+          const cents = amountForLabel(res.rawText, d.label) ?? 0;
+          return {
             key: newKey(),
             label: d.label,
-            amount: (d.amountCents / 100).toFixed(2),
-            target: NONE, // user assigns a category or account
-          }))
-        );
+            amount: (cents / 100).toFixed(2),
+            target: encodeLearned(d.target),
+          };
+        });
+        setDeductions(rows.length > 0 ? rows : [{ key: newKey(), label: "", amount: "", target: NONE }]);
+        const missing = template.deductions.filter((d) => amountForLabel(res.rawText, d.label) == null).length;
+        templateNote =
+          ` Rebuilt ${rows.length} line item${rows.length === 1 ? "" : "s"} from your last ${resolvedEmployer} paycheck` +
+          (missing > 0 ? ` (${missing} defaulted to $0 — fill them in).` : ".");
+      } else {
+        // No prior paycheck: fall back to the generic parser output + learning.
+        if (res.grossCents != null) setGross((res.grossCents / 100).toFixed(2));
+        if (res.deductions.length > 0) {
+          setDeductions(
+            res.deductions.map((d) => ({
+              key: newKey(),
+              label: d.label,
+              amount: (d.amountCents / 100).toFixed(2),
+              target: NONE,
+            }))
+          );
+        }
       }
-      const found = (res.date ? 1 : 0) + (res.grossCents != null ? 1 : 0) + res.deductions.length;
-      if (found === 0) {
+
+      const found =
+        (res.date ? 1 : 0) +
+        (res.grossCents != null ? 1 : 0) +
+        (template ? template.deductions.length : res.deductions.length);
+      if (found === 0 && !template) {
         setPdfNote(
           `Couldn't read values from "${res.fileName}". It may be a scanned image; enter the paycheck manually.`
         );
@@ -293,13 +344,24 @@ export function PaycheckDialog({
         const extra = res.unresolvedLabels.length
           ? ` Unrecognized amounts: ${res.unresolvedLabels.join(", ")}.`
           : "";
-        // Learn category/account targets from prior paychecks of this employer.
-        const filled = await applyLearning(res.employer ?? undefined);
+        // Without a template, learn category/account targets from prior paychecks.
+        const filled = template ? 0 : await applyLearning(resolvedEmployer || undefined, data);
+        const empNote = known ? ` Recognized employer "${known}".` : "";
         const learnNote = filled > 0
           ? ` Auto-assigned ${filled} deduction${filled === 1 ? "" : "s"} from your prior paychecks — please verify.`
           : "";
+        // If gross wasn't recognized, hint at it and dump the extracted text to
+        // the console so its exact wording can be diagnosed.
+        const grossNote =
+          res.grossCents == null
+            ? " Couldn't find gross pay — enter it manually (see console for the extracted text)."
+            : "";
+        if (res.grossCents == null) {
+          // eslint-disable-next-line no-console
+          console.log("[Paycheck import] extracted PDF text:\n" + res.rawText);
+        }
         setPdfNote(
-          `Prefilled from "${res.fileName}". Review amounts and assign a category or account to each deduction.${extra}${learnNote}`
+          `Prefilled from "${res.fileName}".${empNote}${templateNote} Review amounts and assign a category or account to each deduction.${extra}${grossNote}${learnNote}`
         );
       }
     } catch (e) {
@@ -477,7 +539,7 @@ export function PaycheckDialog({
                   .filter((a) => a.id !== depositAccountId)
                   .map((a) => (
                     <option key={a.id} value={a.id}>
-                      {a.name}
+                      → {a.name}
                     </option>
                   ))}
               </select>
