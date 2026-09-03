@@ -82,9 +82,6 @@ export const CategoryAccountEditor = forwardRef(function CategoryAccountEditor(
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const comboRef = useRef<HTMLDivElement>(null);
-  // Upward shift (px) applied when the popup would otherwise bleed off the bottom
-  // of the window (e.g. editing one of the last rows in the ledger).
-  const [shiftUp, setShiftUp] = useState(0);
 
   // Filtered options by case-insensitive substring on the label.
   const filtered = useMemo<Opt[]>(() => {
@@ -109,33 +106,32 @@ export const CategoryAccountEditor = forwardRef(function CategoryAccountEditor(
     inputRef.current?.focus();
   }, []);
 
-  // After mount, if the popup would extend past the bottom of the window, shift
-  // it up just enough to sit flush with the bottom (with a small margin), never
-  // pushing its top off the top of the window. Measured in rAF so AG Grid has
-  // finished positioning the popup before we read its rect.
+  // After mount, if the popup would extend past the bottom of the window, move
+  // AG Grid's popup wrapper up so the popup's bottom aligns with the window
+  // bottom (minus a small margin). We reposition the WRAPPER (.ag-popup-editor)
+  // rather than transform our inner element, so we don't compound with AG Grid's
+  // own placement. Measured in rAF so layout has settled first.
   useEffect(() => {
-    let raf = 0;
-    const measure = () => {
+    const raf = requestAnimationFrame(() => {
       const el = comboRef.current;
       if (!el) return;
-      // Read the UNSHIFTED position: temporarily clear any transform so the rect
-      // reflects AG Grid's placement, then compute the exact shift needed.
-      const prev = el.style.transform;
-      el.style.transform = "";
-      const rect = el.getBoundingClientRect();
-      el.style.transform = prev;
-
+      // AG Grid renders popup cell editors inside a `.ag-popup-editor` wrapper
+      // that it positions absolutely. Fall back to our own element if not found.
+      const wrapper =
+        (el.closest(".ag-popup-editor") as HTMLElement | null) ?? el;
       const margin = 8;
+      const rect = el.getBoundingClientRect();
       const overflowBottom = rect.bottom - (window.innerHeight - margin);
-      if (overflowBottom > 0) {
-        // Don't push the top above the window; cap the shift at rect.top - margin.
-        const maxShift = Math.max(0, rect.top - margin);
-        setShiftUp(Math.min(overflowBottom, maxShift));
-      } else {
-        setShiftUp(0);
-      }
-    };
-    raf = requestAnimationFrame(measure);
+      if (overflowBottom <= 0) return; // fits; leave AG Grid's placement alone
+
+      // Current wrapper top (from its computed style) minus the overflow, clamped
+      // so the popup's top never goes above the top margin.
+      const wrapRect = wrapper.getBoundingClientRect();
+      const desiredWrapTop = Math.max(margin, wrapRect.top - overflowBottom);
+      const delta = desiredWrapTop - wrapRect.top; // <= 0 (moving up)
+      const curTop = parseFloat(wrapper.style.top || "0") || 0;
+      wrapper.style.top = `${curTop + delta}px`;
+    });
     return () => cancelAnimationFrame(raf);
   }, []);
 
@@ -213,11 +209,7 @@ export const CategoryAccountEditor = forwardRef(function CategoryAccountEditor(
   useImperativeHandle(ref, () => ({ getValue: () => undefined }));
 
   return (
-    <div
-      className="cat-acct-combo"
-      ref={comboRef}
-      style={shiftUp ? { transform: `translateY(-${shiftUp}px)` } : undefined}
-    >
+    <div className="cat-acct-combo" ref={comboRef}>
       <input
         ref={inputRef}
         className="cat-acct-input"

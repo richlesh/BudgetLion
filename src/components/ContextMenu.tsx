@@ -106,6 +106,30 @@ function MenuRow({ item, onClose }: { item: ContextMenuItem; onClose: () => void
 /** A popup menu anchored at (x, y) with optional hierarchical submenus.
  * Closes on outside click or Escape. */
 export function ContextMenu({ x, y, items, onClose }: Props) {
+  const menuRef = useRef<HTMLDivElement>(null);
+  // Clamp the menu to the viewport: if it would run off the bottom (e.g. a tall
+  // menu opened on a bottom row) shift it up so its bottom is flush with the
+  // window; likewise for the right edge. Cap the height so it scrolls if needed.
+  const [pos, setPos] = useState<{ left: number; top: number; maxHeight: number } | null>(null);
+  useLayoutEffect(() => {
+    const el = menuRef.current;
+    if (!el) return;
+    const margin = 6;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const w = el.offsetWidth || 200;
+    const h = el.scrollHeight;
+    const maxHeight = vh - 2 * margin;
+    const height = Math.min(h, maxHeight);
+    let top = y;
+    if (top + height > vh - margin) top = Math.max(margin, vh - margin - height);
+    if (top < margin) top = margin;
+    let left = x;
+    if (left + w > vw - margin) left = Math.max(margin, vw - margin - w);
+    if (left < margin) left = margin;
+    setPos({ left, top, maxHeight });
+  }, [x, y, items]);
+
   useEffect(() => {
     const close = () => onClose();
     const onKey = (e: KeyboardEvent) => {
@@ -126,7 +150,17 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
   }, [onClose]);
 
   return (
-    <div className="context-menu" style={{ left: x, top: y }} role="menu">
+    <div
+      ref={menuRef}
+      className="context-menu"
+      style={
+        pos
+          ? { left: pos.left, top: pos.top, maxHeight: pos.maxHeight, overflowY: "auto" }
+          : // Pre-measure render: place at the requested point, hidden to avoid a flash.
+            { left: x, top: y, visibility: "hidden" }
+      }
+      role="menu"
+    >
       {items.map((it) => (
         <MenuRow key={it.label} item={it} onClose={onClose} />
       ))}

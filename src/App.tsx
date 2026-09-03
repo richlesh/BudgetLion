@@ -1043,6 +1043,32 @@ export function App() {
   );
 
   // Right-click on a ledger cell: offer Copy <field> and Add to Recurring.
+  // Move a transaction to another account: replace the CURRENT (owning) account
+  // on whichever side it occupies (from/to) with the target account, leaving the
+  // amount, sign, category/splits, and counterparty untouched. The row leaves
+  // this ledger and appears in the target account's ledger.
+  const moveTransaction = useCallback(
+    async (txId: string, targetAccountId: string) => {
+      if (!selected) return;
+      const t = ledger.find((r) => r.transaction?.id === txId)?.transaction;
+      if (!t) return;
+      const patch: { id: string; fromAccountId?: string | null; toAccountId?: string | null } = { id: txId };
+      if (t.fromAccountId === selected.id) patch.fromAccountId = targetAccountId;
+      else if (t.toAccountId === selected.id) patch.toAccountId = targetAccountId;
+      else return; // current account isn't the owning side; nothing to move
+      try {
+        await window.ledger.updateTransaction(patch);
+        await refreshLedger(selected.id);
+        await refreshAccounts();
+        const name = accounts.find((a) => a.id === targetAccountId)?.name ?? "account";
+        setToast(`Moved transaction to ${name}.`);
+      } catch (e) {
+        setToast(e instanceof Error ? e.message : "Could not move the transaction.");
+      }
+    },
+    [selected, ledger, accounts, refreshLedger, refreshAccounts]
+  );
+
   const handleCellContext = useCallback(
     (info: {
       x: number;
@@ -1076,6 +1102,25 @@ export function App() {
               setShowRecurring(true);
             },
           });
+          // "Move to account…" — reassign the transaction to another account.
+          // Only when the current account is the owning side, it isn't an
+          // investment-trade row (moving would desync the holding), and there's
+          // somewhere to move it. Exclude the current account and the transfer
+          // counterparty (to avoid a from==to self-transfer).
+          const isOwner = t.fromAccountId === selected?.id || t.toAccountId === selected?.id;
+          const counterpartyId = t.fromAccountId === selected?.id ? t.toAccountId : t.fromAccountId;
+          if (isOwner && !row?.trade) {
+            const targets = accounts.filter((a) => a.id !== selected?.id && a.id !== counterpartyId);
+            if (targets.length > 0) {
+              items.push({
+                label: "Move to account…",
+                submenu: targets.map((a) => ({
+                  label: a.name,
+                  onClick: () => void moveTransaction(t.id, a.id),
+                })),
+              });
+            }
+          }
         }
       }
       // Bulk actions when more than one transaction row is selected.
@@ -1093,7 +1138,7 @@ export function App() {
       if (items.length === 0) return;
       setLedgerMenu({ x: info.x, y: info.y, items });
     },
-    [ledger, seedFromTransaction, buildBulkCategorySubmenu]
+    [ledger, seedFromTransaction, buildBulkCategorySubmenu, moveTransaction, accounts, selected]
   );
 
   const confirmDelete = useCallback(async () => {
@@ -1233,7 +1278,7 @@ export function App() {
               </button>
             </div>
             {selected.type === "investment" && (
-              <HoldingsPanel account={selected} reloadKey={holdingsReloadKey} />
+              <HoldingsPanel account={selected} reloadKey={holdingsReloadKey} dark={dark} />
             )}
             {showCharts && (
               <ChartsPanel

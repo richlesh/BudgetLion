@@ -316,19 +316,40 @@ export function SearchResults({ data, criteria, dark, onClose, onReload, onToast
         {total === 0 ? (
           <div className="empty">No transactions match your search.</div>
         ) : (
-          <div style={{ overflow: "auto", display: "flex", flexDirection: "column", gap: 16 }}>
+          <div
+            style={{
+              overflow: "auto",
+              display: "flex",
+              flexDirection: "column",
+              gap: 16,
+              flex: 1,
+              minHeight: 0,
+            }}
+          >
             {groupAccountIds.map((aid) => {
               const account = accountById.get(aid)!;
               const rows = rowsForAccount(account);
               if (rows.length === 0) return null;
+              // With a single account group, let the table fill the available
+              // dialog height (so a one-row result still has a tall grid and the
+              // right-click menu has room). With multiple groups, size each to its
+              // content (capped) so they stack and the region scrolls.
+              const single = groupAccountIds.length === 1;
               return (
-                <div key={aid}>
+                <div
+                  key={aid}
+                  style={single ? { flex: 1, display: "flex", flexDirection: "column", minHeight: 0 } : undefined}
+                >
                   <div className="account-type" style={{ marginBottom: 4 }}>
                     {account.name} · {rows.length} match{rows.length === 1 ? "" : "es"}
                   </div>
                   <div
                     className="search-grid-box"
-                    style={{ height: Math.min(360, 84 + rows.length * 34) }}
+                    style={
+                      single
+                        ? { flex: 1, minHeight: 0 }
+                        : { height: Math.min(360, 84 + rows.length * 34) }
+                    }
                   >
                     <LedgerGrid
                       account={account}
