@@ -16,6 +16,7 @@ A cross-platform personal-finance ledger with double-entry accounting, built wit
 - **Loan/mortgage fields** — Annual interest rate (basis points, up to 3 decimal places), principal, and term
 - **Liability sign convention** — Credit card and loan ledgers display charges as positive and payments as negative, statement-style, while stored data stays consistent
 - **Balances** — Running balance per row and current balance per account in the sidebar
+- **Delete empty accounts** — Right-click an account to delete it, available only when it has no transactions or holdings
 
 ### Ledger
 - **Fast, editable grid** — Inline editing of date, payee, memo, amount, and category (powered by AG Grid)
@@ -23,7 +24,7 @@ A cross-platform personal-finance ledger with double-entry accounting, built wit
 - **Category / transfer picker** — A single popup lists income/expense categories (filtered by the transaction's direction) plus other accounts for transfers; keyboard navigable with the current value preselected
 - **Transfers** — Move money between tracked accounts; the ledger auto-labels the payee as "To/From &lt;account&gt;"
 - **Multi-select + Bulk Delete** — Shift-click for contiguous and Cmd/Ctrl-click for discontiguous selection, then right-click to bulk delete with confirmation
-- **Right-click actions** — Copy a field, add a transaction to Recurring Rules, and more
+- **Right-click actions** — Copy a field, add a transaction to Recurring Rules, move a transaction to another account, and more
 - **Bulk category** — Right-click a multi-selection to reassign all rows to a category or transfer via a submenu
 - **Undo / Redo** — Session-scoped, transaction-level undo/redo of adds, edits, deletes, and split changes (row-level snapshot journal; capped at 50 steps, cleared when the database changes)
 - **Resizable, persistent columns** — Column widths are saved between sessions
@@ -45,17 +46,22 @@ A cross-platform personal-finance ledger with double-entry accounting, built wit
 - **Employer contributions** — Optional employer-side contributions (e.g. a 401(k) match) are recorded as separate transfers into the target account, since they don't pass through net pay
 - **Live net readout** — Gross − deductions = net deposit updates as you type, with validation that deductions can't exceed gross
 - **Import from PDF** — Prefill the dialog from a downloaded pay-stub PDF: text is extracted and common labels (gross/net, federal/Social Security/Medicare/state tax, health/dental/vision, 401(k)/HSA/FSA) and amounts are parsed locally (deterministic, no AI or image upload); you review and assign a category or account to each line before saving
+- **Edit a paycheck** — Double-click a paycheck's split in the ledger (or Search) to reopen it in the Paycheck editor; the counterparty side opens read-only
 
 ### Investments & Assets
 - **Investment/Brokerage accounts** — Track securities alongside cash in the same account
 - **Trades** — Buy/Sell dialog with bidirectional shares ⟷ price ⟷ amount; trade rows in the cash ledger show the security ticker, name, shares, and price
-- **Stock grants & "Add shares"** — Record employer grants (with an income category) and add opening holdings, gifts, or transfers-in without a cash leg
+- **Stock grants & "Add shares"** — Record employer grants (with an income category) and add opening holdings, gifts, or transfers-in; "Add shares" appears as its own ledger line
 - **Brokerage fees** — Optional fee expense category on trades
-- **Holdings panel** — Per-account holdings with current valuation
+- **Holdings panel** — Per-account holdings with per-share price and market value; double-click the ticker or description to edit them inline
+- **Manual prices** — Double-click a holding's Price cell to enter a per-share price as of a closing date; market value updates from the latest valuation
 - **Price fetching** — Opt-in automated quotes from Yahoo Finance (stocks, ETFs, many mutual funds) via a Settings toggle and a Refresh button; unresolved symbols fall back to manual entry, and symbols are only sent to the provider when fetching is enabled
+- **Symbol lookup** — Find a security's ticker by name (opt-in Yahoo search) from the holding's Symbol cell
+- **Price history** — Right-click a holding for a History chart with a Share Price ⟷ Total Value toggle and a date-range selector; "Fill monthly history" backfills monthly closes for tickered holdings, and Total Value uses the shares held as of each date
+- **Valuations editor** — Right-click a holding to add, edit, or delete its stored valuations (date + per-share price)
 - **Investment CSV import** — Import 401(k)-style transaction history into trades
-- **Asset accounts** — Track non-security assets (e.g. property, collectibles) by valuation
-- **Net worth** — Per-account worth combines cash balance with the current value of asset holdings
+- **Asset accounts** — Track physical assets (property, vehicles, collectibles) as pure holdings (no cash). A "New Asset" dialog records Buy/Sell/Lost items with description, model number, serial number, and purchase/sale price; the holdings view shows Description, Model, Serial, Purchase Price, Purchased date, and Market Value, each editable by double-click
+- **Net worth** — Per-account worth combines cash balance with the current value of holdings; investment/asset accounts show their worth in the sidebar
 
 ### Categories
 - **Subcategories** — Parent:Child hierarchy with income / expense / both applicability
@@ -75,6 +81,10 @@ A cross-platform personal-finance ledger with double-entry accounting, built wit
 - **Monthly bar chart** — Spending vs. income by month
 - **Scope & date range** — Chart a single account or all accounts over any date range
 - **Export** — Export any chart as PNG or SVG
+
+### Net Worth Report
+- **View → Net Worth Report** — A one-page summary grouping accounts into Assets and Liabilities, with per-account values, subtotals, and total net worth (cash + holdings), sorted by account type then name
+- **Printable** — Print the report to paper or PDF
 
 ### De-Duplicate Transactions
 - Finds likely duplicate transactions in an account (same date, amount, and from/to accounts — transposed matches allowed for transfers)
@@ -100,7 +110,7 @@ A database is a folder ("package") containing the SQLite file. From the **File**
 - **New DB…** — create and open a new empty database
 - **Open…** — open an existing database folder; **Open Default DB** opens the default location
 - **Save As…** — copy the current database to a new location and switch to it
-- **Backup…** — write a ZIP archive of the current database
+- **Backup…** — write a ZIP archive of the current database (also includes a JSON export of accounts, categories, and recurring rules)
 - **Restore…** — expand a backup ZIP into a new location and open it
 - The last-opened database is reopened on launch, and its name is shown in the title bar
 

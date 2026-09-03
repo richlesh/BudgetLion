@@ -298,6 +298,7 @@ export interface LedgerApi {
   onMenuExportData(cb: () => void): void;
   onMenuToggleCharts(cb: () => void): void;
   onMenuToggleForecast(cb: () => void): void;
+  onMenuNetWorthReport(cb: () => void): void;
   onMenuRecurring(cb: () => void): void;
   onMenuSearch(cb: () => void): void;
   onMenuUndo(cb: () => void): void;

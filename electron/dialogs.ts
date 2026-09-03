@@ -316,6 +316,10 @@ export function buildMenu(mainWin: BrowserWindow): void {
           click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-toggle-forecast"),
         },
         {
+          label: "Net Worth Report…",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-net-worth-report"),
+        },
+        {
           label: "Recurring Rules…",
           accelerator: "CmdOrCtrl+R",
           click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-recurring"),

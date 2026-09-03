@@ -171,6 +171,9 @@ const api: LedgerApi = {
   onMenuToggleForecast: (cb: () => void) => {
     ipcRenderer.on("menu-toggle-forecast", () => cb());
   },
+  onMenuNetWorthReport: (cb: () => void) => {
+    ipcRenderer.on("menu-net-worth-report", () => cb());
+  },
   onMenuRecurring: (cb: () => void) => {
     ipcRenderer.on("menu-recurring", () => cb());
   },

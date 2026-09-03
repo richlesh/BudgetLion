@@ -31,6 +31,7 @@ import { buildPaycheckTransactions, isPaycheckSplit, reconstructPaycheckInput } 
 import { NewInvestmentDialog } from "./components/NewInvestmentDialog";
 import { HoldingsPanel } from "./components/HoldingsPanel";
 import { AssetHoldingsPanel } from "./components/AssetHoldingsPanel";
+import { NetWorthReport } from "./components/NetWorthReport";
 import { AssetRecordDialog, type AssetRecordSubmit } from "./components/AssetRecordDialog";
 import { mergeAssetMeta } from "./core/assetRecord";
 import { MICRO } from "./shared/types";
@@ -67,6 +68,7 @@ export function App() {
   const [showPaycheckDialog, setShowPaycheckDialog] = useState(false);
   // Asset-account record entry (Buy/Sell/Lost) + the account's held items.
   const [showAssetRecord, setShowAssetRecord] = useState(false);
+  const [showNetWorth, setShowNetWorth] = useState(false);
   const [heldAssets, setHeldAssets] = useState<Asset[]>([]);
   const [holdingsReloadKey, setHoldingsReloadKey] = useState(0);
   // For investment accounts, which entry form to show: a chooser first, then
@@ -450,6 +452,7 @@ export function App() {
     window.ledger.onMenuPrint(() => doPrint());
     window.ledger.onMenuToggleCharts(() => setShowCharts((v) => !v));
     window.ledger.onMenuToggleForecast(() => setShowProjection((v) => !v));
+    window.ledger.onMenuNetWorthReport(() => setShowNetWorth(true));
     window.ledger.onMenuRecurring(() => {
       setRecurringSeed(null);
       setShowRecurring(true);
@@ -1368,21 +1371,24 @@ export function App() {
               <button className="secondary" onClick={doPrint}>
                 Print…
               </button>
-              <button
-                onClick={() => {
-                  setInvTxMode("choose");
-                  setShowTxDialog(true);
-                }}
-              >
-                + New Transaction
-              </button>
-              <button className="secondary" onClick={() => setShowPaycheckDialog(true)}>
-                + New Paycheck
-              </button>
-              {selected.type === "asset" && (
+              {selected.type === "asset" ? (
                 <button onClick={() => void openAssetRecord()}>
-                  + New Asset Record
+                  + New Asset
                 </button>
+              ) : (
+                <>
+                  <button
+                    onClick={() => {
+                      setInvTxMode("choose");
+                      setShowTxDialog(true);
+                    }}
+                  >
+                    + New Transaction
+                  </button>
+                  <button className="secondary" onClick={() => setShowPaycheckDialog(true)}>
+                    + New Paycheck
+                  </button>
+                </>
               )}
             </div>
             {selected.type === "investment" && (
@@ -1499,6 +1505,7 @@ export function App() {
           onSubmit={createAssetRecord}
         />
       )}
+      {showNetWorth && <NetWorthReport onClose={() => setShowNetWorth(false)} />}
       {showCategoriesDialog && (
         <CategoriesDialog
           categories={categories}

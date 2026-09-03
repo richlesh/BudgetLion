@@ -841,6 +841,20 @@ button.danger {
   min-width: 72px;
 }
 
+/* Net Worth Report: section headers + total line. */
+.nwr-section {
+  font-size: 14px;
+  font-weight: 700;
+  margin: 12px 0 4px;
+}
+.nwr-net {
+  font-size: 18px;
+  font-weight: 800;
+  margin-top: 12px;
+  text-align: right;
+  color: var(--text);
+}
+
 /* Symbol lookup (name -> ticker) inline editor + results dropdown. */
 .holdings-symbol-edit {
   position: relative;
