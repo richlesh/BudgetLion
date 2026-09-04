@@ -43,10 +43,12 @@ export function bpsToPercent(bps: number | null | undefined): string {
 
 /** Format integer cents as a currency string, e.g. 123456 -> "$1,234.56". */
 export function formatCents(cents: number, currency = "USD", locale = "en-US"): string {
+  // Avoid "-$0.00": a value that rounds to zero cents (incl. -0) displays as $0.00.
+  const dollars = Math.round(cents) === 0 ? 0 : cents / 100;
   return new Intl.NumberFormat(locale, {
     style: "currency",
     currency,
-  }).format(cents / 100);
+  }).format(dollars);
 }
 
 /**
