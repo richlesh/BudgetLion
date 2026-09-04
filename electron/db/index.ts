@@ -69,30 +69,6 @@ export function getDb(): Database.Database {
  * before altering, so running it repeatedly is safe.
  */
 function runMigrations(instance: Database.Database): void {
-  // transactions.reconciled: per-side reconcile bitmask (1 from, 2 to, 3 both).
-  // Add the column if missing, then reset all reconcile flags to 0 (per request;
-  // there is no meaningful reconcile data to preserve yet).
-  const txCols = instance
-    .prepare("PRAGMA table_info(transactions)")
-    .all() as Array<{ name: string }>;
-  if (txCols.length > 0 && !txCols.some((c) => c.name === "reconciled")) {
-    instance.exec("ALTER TABLE transactions ADD COLUMN reconciled INTEGER NOT NULL DEFAULT 0");
-  }
-  if (txCols.length > 0) {
-    instance.exec("UPDATE transactions SET reconciled = 0");
-  }
-
-  // transaction_splits.reconciled: per-transfer-leg counterparty reconcile flag.
-  const splitCols = instance
-    .prepare("PRAGMA table_info(transaction_splits)")
-    .all() as Array<{ name: string }>;
-  if (splitCols.length > 0 && !splitCols.some((c) => c.name === "reconciled")) {
-    instance.exec("ALTER TABLE transaction_splits ADD COLUMN reconciled INTEGER NOT NULL DEFAULT 0");
-  }
-  if (splitCols.length > 0) {
-    instance.exec("UPDATE transaction_splits SET reconciled = 0");
-  }
-
   const cols = instance
     .prepare("PRAGMA table_info(accounts)")
     .all() as Array<{ name: string }>;
