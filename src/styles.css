@@ -840,6 +840,30 @@ body.dark .reconcile-table tbody tr:nth-child(even) td {
   background-color: #2b2d31;
 }
 
+/* Make the reconcile table's scroll container use the active color scheme so its
+   scrollbar matches (dark in dark mode). Explicit per-theme + a webkit fallback. */
+.reconcile-scroll {
+  color-scheme: light;
+}
+body.dark .reconcile-scroll {
+  color-scheme: dark;
+}
+body.dark .reconcile-scroll::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+body.dark .reconcile-scroll::-webkit-scrollbar-track {
+  background: var(--panel);
+}
+body.dark .reconcile-scroll::-webkit-scrollbar-thumb {
+  background: #4a4d52;
+  border-radius: 6px;
+  border: 3px solid var(--panel);
+}
+body.dark .reconcile-scroll::-webkit-scrollbar-thumb:hover {
+  background: #5a5e64;
+}
+
 .holdings-status {
   margin-top: 8px;
   font-size: 12px;
