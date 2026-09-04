@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type {
   Account,
   CsvColumnMapping,
@@ -44,6 +44,14 @@ export function ImportDialog({ account, accounts, onCancel, onDone }: Props) {
   const [descPick, setDescPick] = useState<string>("");
   // When true, show a "notation looks off" confirmation before committing.
   const [notationWarn, setNotationWarn] = useState(false);
+  // Which parsed-row indices are checked for import (default: all). Keyed by the
+  // index into `rows` (previewRows preserves that order 1:1).
+  const [checked, setChecked] = useState<Set<number>>(new Set());
+
+  // Default every row to checked whenever the parsed rows change.
+  useEffect(() => {
+    setChecked(new Set(rows.map((_, i) => i)));
+  }, [rows]);
 
   // Accounts other than the import target, that could be a transfer counterparty.
   const otherAccounts = useMemo(
@@ -210,7 +218,7 @@ export function ImportDialog({ account, accounts, onCancel, onDone }: Props) {
   function notationLooksWrong(): boolean {
     let neg = 0;
     let pos = 0;
-    for (const r of resolveRows(rows)) {
+    for (const r of checkedResolvedRows()) {
       if (r.amountCents < 0) neg++;
       else if (r.amountCents > 0) pos++;
     }
@@ -228,12 +236,17 @@ export function ImportDialog({ account, accounts, onCancel, onDone }: Props) {
     void commit();
   }
 
+  // Resolved rows the user has kept checked, in original order.
+  function checkedResolvedRows(): ParsedRow[] {
+    return resolveRows(rows).filter((_, i) => checked.has(i));
+  }
+
   async function commit() {
     setNotationWarn(false);
     setBusy(true);
     setError(null);
     try {
-      const count = await window.ledger.commitImport(account.id, resolveRows(rows));
+      const count = await window.ledger.commitImport(account.id, checkedResolvedRows());
       onDone(count);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -434,6 +447,20 @@ export function ImportDialog({ account, accounts, onCancel, onDone }: Props) {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                 <thead>
                   <tr>
+                    <th style={{ ...thStyle, width: 28, textAlign: "center" }}>
+                      <input
+                        type="checkbox"
+                        aria-label="Select all"
+                        checked={rows.length > 0 && checked.size === rows.length}
+                        ref={(el) => {
+                          if (el) el.indeterminate = checked.size > 0 && checked.size < rows.length;
+                        }}
+                        onChange={(e) =>
+                          setChecked(e.target.checked ? new Set(rows.map((_, i) => i)) : new Set())
+                        }
+                        style={{ width: "auto" }}
+                      />
+                    </th>
                     <th style={thStyle}>Date</th>
                     <th style={thStyle}>Payee</th>
                     <th style={{ ...thStyle, textAlign: "right" }}>Amount</th>
@@ -442,6 +469,22 @@ export function ImportDialog({ account, accounts, onCancel, onDone }: Props) {
                 <tbody>
                   {previewRows.slice(0, 500).map((p, i) => (
                     <tr key={i} style={{ opacity: p.duplicate ? 0.5 : 1 }}>
+                      <td style={{ ...tdStyle, textAlign: "center" }}>
+                        <input
+                          type="checkbox"
+                          aria-label="Import this row"
+                          checked={checked.has(i)}
+                          onChange={(e) =>
+                            setChecked((prev) => {
+                              const next = new Set(prev);
+                              if (e.target.checked) next.add(i);
+                              else next.delete(i);
+                              return next;
+                            })
+                          }
+                          style={{ width: "auto" }}
+                        />
+                      </td>
                       <td style={tdStyle}>{p.row.date}</td>
                       <td style={tdStyle}>{p.row.payee ?? ""}</td>
                       <td style={{ ...tdStyle, textAlign: "right" }} className={p.row.amountCents < 0 ? "neg" : ""}>
@@ -476,8 +519,8 @@ export function ImportDialog({ account, accounts, onCancel, onDone }: Props) {
             </>
           )}
           {stage === "preview" && (
-            <button onClick={attemptCommit} disabled={busy}>
-              {busy ? "Importing…" : `Import ${rows.length} transaction(s)`}
+            <button onClick={attemptCommit} disabled={busy || checked.size === 0}>
+              {busy ? "Importing…" : `Import ${checked.size} transaction(s)`}
             </button>
           )}
         </div>
