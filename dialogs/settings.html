@@ -78,17 +78,6 @@
         <div class="field" style="flex:2"><label>Print / PDF Font</label><select id="print-font"></select></div>
         <div class="field" style="flex:1"><label>Size</label><select id="print-font-size"></select></div>
       </div>
-
-      <!-- Investments -->
-      <div class="section-title">Investments</div>
-      <div class="field" style="flex-direction:row; align-items:center; gap:8px;">
-        <input id="price-fetch-enabled" type="checkbox" style="width:auto;">
-        <label for="price-fetch-enabled" style="margin:0;">Fetch security prices online (Yahoo Finance)</label>
-      </div>
-      <div style="font-size:12px; color:#999;">
-        Off by default. When enabled, ticker symbols for your holdings are sent to
-        the price provider to look up quotes. Mutual funds may need manual prices.
-      </div>
     </div>
 
     <!-- Right column: AI Assistant -->
@@ -142,6 +131,17 @@
       <!-- Generic (YAML) -->
       <div id="generic-yaml-section" style="display:none;">
         <div class="field"><label>API Key / Token</label><input id="generic-yaml-api-key" type="password" placeholder="Enter API key or token…"></div>
+      </div>
+
+      <!-- Investments -->
+      <div class="section-title">Investments</div>
+      <div class="field" style="flex-direction:row; align-items:center; gap:8px;">
+        <input id="price-fetch-enabled" type="checkbox" style="width:auto;">
+        <label for="price-fetch-enabled" style="margin:0;">Fetch security prices online (Yahoo Finance)</label>
+      </div>
+      <div style="font-size:12px; color:#999;">
+        Off by default. When enabled, ticker symbols for your holdings are sent to
+        the price provider to look up quotes. Mutual funds may need manual prices.
       </div>
     </div>
   </div>
