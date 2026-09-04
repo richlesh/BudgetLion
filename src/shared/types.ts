@@ -95,6 +95,8 @@ export interface TransactionSplit {
   categoryId: string | null;
   transferAccountId: string | null;
   memo: string | null;
+  /** For transfer legs: whether the counterparty (transferAccountId) side is reconciled (0/1). */
+  reconciled: number;
   createdAt: string;
   updatedAt: string;
   deletedAt: string | null;

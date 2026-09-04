@@ -82,6 +82,17 @@ function runMigrations(instance: Database.Database): void {
     instance.exec("UPDATE transactions SET reconciled = 0");
   }
 
+  // transaction_splits.reconciled: per-transfer-leg counterparty reconcile flag.
+  const splitCols = instance
+    .prepare("PRAGMA table_info(transaction_splits)")
+    .all() as Array<{ name: string }>;
+  if (splitCols.length > 0 && !splitCols.some((c) => c.name === "reconciled")) {
+    instance.exec("ALTER TABLE transaction_splits ADD COLUMN reconciled INTEGER NOT NULL DEFAULT 0");
+  }
+  if (splitCols.length > 0) {
+    instance.exec("UPDATE transaction_splits SET reconciled = 0");
+  }
+
   const cols = instance
     .prepare("PRAGMA table_info(accounts)")
     .all() as Array<{ name: string }>;

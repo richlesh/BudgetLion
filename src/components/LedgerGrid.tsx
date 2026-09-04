@@ -285,6 +285,16 @@ export function LedgerGrid({
     [nameById, accountNameById, account.currency]
   );
 
+  // True when the account has ANY reconciled transaction (owned side or a split
+  // transfer leg targeting it). Used to lock/color the synthetic opening row.
+  const accountHasReconciled = useMemo(
+    () =>
+      rows.some(
+        (r) => r.kind === "transaction" && r.transaction && isReconciledForAccount(r.transaction, account.id, r.splits)
+      ),
+    [rows, account.id]
+  );
+
   const rowData: GridRow[] = useMemo(
     () =>
       rows.map((r) => {
@@ -303,8 +313,8 @@ export function LedgerGrid({
             isForeignSplit: false,
             splitTooltip: "",
             isTrade: false,
-            reconciled: false,
-            reconcileLocked: false,
+            reconciled: accountHasReconciled,
+            reconcileLocked: accountHasReconciled,
           };
         }
         const t = r.transaction!;
@@ -325,11 +335,11 @@ export function LedgerGrid({
             !!r.isSplit && t.fromAccountId !== account.id && t.toAccountId !== account.id,
           splitTooltip: splitTooltipFor(r),
           isTrade: !!r.trade,
-          reconciled: isReconciledForAccount(t, account.id),
-          reconcileLocked: isReconciledEitherSide(t),
+          reconciled: isReconciledForAccount(t, account.id, r.splits),
+          reconcileLocked: isReconciledEitherSide(t, r.splits),
         };
       }),
-    [rows, categoryFor, splitTooltipFor, sign, payeeFor, memoFor, account.openingBalanceDate, account.createdAt]
+    [rows, categoryFor, splitTooltipFor, sign, payeeFor, memoFor, account.openingBalanceDate, account.createdAt, account.id, accountHasReconciled]
   );
 
   const money = useCallback(

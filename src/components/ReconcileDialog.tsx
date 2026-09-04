@@ -50,7 +50,7 @@ export function ReconcileDialog({ account, rows, categories, onCancel, onReconci
   const unreconciled = useMemo(
     () =>
       rows.filter(
-        (r) => r.kind === "transaction" && r.transaction && !isReconciledForAccount(r.transaction, account.id)
+        (r) => r.kind === "transaction" && r.transaction && !isReconciledForAccount(r.transaction, account.id, r.splits)
       ),
     [rows, account.id]
   );
@@ -104,7 +104,7 @@ export function ReconcileDialog({ account, rows, categories, onCancel, onReconci
       if (r.kind === "opening") continue;
       const t = r.transaction;
       if (!t) continue;
-      if (isReconciledForAccount(t, account.id)) cents += r.signedAmountCents;
+      if (isReconciledForAccount(t, account.id, r.splits)) cents += r.signedAmountCents;
       else if (checked.has(t.id)) cents += r.signedAmountCents;
     }
     cents += adjSigned(interest, "interest") + adjSigned(fees, "fees") + adjSigned(adjustment, "adjustment");

@@ -497,6 +497,16 @@ function assertNotReconciled(db: ReturnType<typeof getDb>, ids: string[]): void 
   if (row.n > 0) {
     throw new Error("Reconciled transactions can't be deleted. Un-reconcile them first.");
   }
+  // Also block when a split transfer leg (counterparty side) is reconciled.
+  const legRow = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM transaction_splits
+        WHERE deleted_at IS NULL AND reconciled != 0 AND transaction_id IN (${placeholders})`
+    )
+    .get(...ids) as { n: number };
+  if (legRow.n > 0) {
+    throw new Error("Reconciled transactions can't be deleted. Un-reconcile them first.");
+  }
 }
 
 /**
@@ -511,13 +521,22 @@ export function setTransactionsReconciled(ids: string[], accountId: string, reco
   withUndo(reconciled ? "Reconcile transactions" : "Un-reconcile transactions", ids, () => {
     const sel = db.prepare("SELECT from_account_id, to_account_id, reconciled FROM transactions WHERE id = ?");
     const upd = db.prepare("UPDATE transactions SET reconciled = ?, updated_at = ? WHERE id = ?");
+    const legUpd = db.prepare(
+      `UPDATE transaction_splits SET reconciled = ?, updated_at = ?
+        WHERE transaction_id = ? AND transfer_account_id = ? AND deleted_at IS NULL`
+    );
     for (const id of ids) {
       const r = sel.get(id) as { from_account_id: string | null; to_account_id: string | null; reconciled: number } | undefined;
       if (!r) continue;
       const bit = r.from_account_id === accountId ? 1 : r.to_account_id === accountId ? 2 : 0;
-      if (bit === 0) continue;
-      const next = reconciled ? (r.reconciled | bit) : (r.reconciled & ~bit);
-      upd.run(next, ts, id);
+      if (bit !== 0) {
+        // Owning side: toggle the transaction's side bit.
+        const next = reconciled ? (r.reconciled | bit) : (r.reconciled & ~bit);
+        upd.run(next, ts, id);
+      } else {
+        // Counterparty via split transfer leg(s): toggle their reconciled flag.
+        legUpd.run(reconciled ? 1 : 0, ts, id, accountId);
+      }
     }
   });
 }
@@ -566,15 +585,22 @@ export function reconcileAccount(input: ReconcileInput): number {
       count++;
     }
     if (input.reconcileIds.length > 0) {
-      // OR in the account's side bit for each checked transaction.
+      // OR in the account's side bit (owner) or set the transfer leg(s) (counterparty).
       const sel = db.prepare("SELECT from_account_id, to_account_id, reconciled FROM transactions WHERE id = ?");
       const upd = db.prepare("UPDATE transactions SET reconciled = ?, updated_at = ? WHERE id = ?");
+      const legUpd = db.prepare(
+        `UPDATE transaction_splits SET reconciled = 1, updated_at = ?
+          WHERE transaction_id = ? AND transfer_account_id = ? AND deleted_at IS NULL`
+      );
       for (const id of input.reconcileIds) {
         const r = sel.get(id) as { from_account_id: string | null; to_account_id: string | null; reconciled: number } | undefined;
         if (!r) continue;
         const bit = r.from_account_id === input.accountId ? 1 : r.to_account_id === input.accountId ? 2 : 0;
-        if (bit === 0) continue;
-        upd.run(r.reconciled | bit, ts, id);
+        if (bit !== 0) {
+          upd.run(r.reconciled | bit, ts, id);
+        } else {
+          legUpd.run(ts, id, input.accountId);
+        }
         count++;
       }
     }
@@ -601,6 +627,7 @@ interface SplitRow {
   category_id: string | null;
   transfer_account_id: string | null;
   memo: string | null;
+  reconciled: number;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -614,6 +641,7 @@ function toSplit(r: SplitRow): TransactionSplit {
     categoryId: r.category_id,
     transferAccountId: r.transfer_account_id,
     memo: r.memo,
+    reconciled: r.reconciled ?? 0,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     deletedAt: r.deleted_at,
@@ -659,10 +687,10 @@ function writeSplits(
   ).run(ts, ts, txId);
   const ins = db.prepare(
     `INSERT INTO transaction_splits
-       (id, transaction_id, amount_cents, category_id, transfer_account_id, memo,
+       (id, transaction_id, amount_cents, category_id, transfer_account_id, memo, reconciled,
         created_at, updated_at, deleted_at)
      VALUES
-       (@id, @transaction_id, @amount_cents, @category_id, @transfer_account_id, @memo,
+       (@id, @transaction_id, @amount_cents, @category_id, @transfer_account_id, @memo, 0,
         @created_at, @updated_at, @deleted_at)`
   );
   for (const leg of splits) {

@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS transaction_splits (
   category_id         TEXT REFERENCES categories(id), -- category leg, OR
   transfer_account_id TEXT REFERENCES accounts(id),   -- transfer leg (the other account)
   memo                TEXT,
+  reconciled          INTEGER NOT NULL DEFAULT 0,     -- transfer-leg counterparty reconciled (0/1)
   created_at          TEXT NOT NULL,
   updated_at          TEXT NOT NULL,
   deleted_at          TEXT,

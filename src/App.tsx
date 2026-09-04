@@ -1287,8 +1287,8 @@ export function App() {
           if (selected) {
             const sel = info.selectedTransactionIds.length > 1 ? info.selectedTransactionIds : [t.id];
             const reconciledIds = sel.filter((id) => {
-              const tx = ledger.find((r) => r.transaction?.id === id)?.transaction;
-              return tx ? isReconciledForAccount(tx, selected.id) : false;
+              const rr = ledger.find((r) => r.transaction?.id === id);
+              return rr?.transaction ? isReconciledForAccount(rr.transaction, selected.id, rr.splits) : false;
             });
             if (reconciledIds.length > 0) {
               items.push({
