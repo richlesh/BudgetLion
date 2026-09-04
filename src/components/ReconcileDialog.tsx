@@ -250,7 +250,7 @@ export function ReconcileDialog({ account, accounts, rows, categories, onCancel,
         </div>
 
         <div style={{ maxHeight: "42vh", overflow: "auto", border: "1px solid var(--border)", borderRadius: 6 }}>
-          <table className="holdings-table">
+          <table className="holdings-table reconcile-table">
             <thead>
               <tr>
                 <th style={{ width: 28, textAlign: "center" }}>
