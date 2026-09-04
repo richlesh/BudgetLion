@@ -209,6 +209,32 @@ export function updateAccount(input: UpdateAccountInput): void {
 }
 
 /**
+ * Whether an account has any reconciled transactions from its perspective: either
+ * it OWNS a transaction whose matching side bit is set (from=1 / to=2), or it's a
+ * split transfer-leg counterparty whose leg is reconciled. Mirrors the renderer's
+ * isReconciledForAccount so the ledger green/lock and this check stay in sync.
+ */
+export function accountHasReconciled(accountId: string): boolean {
+  const db = getDb();
+  const owned = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM transactions
+        WHERE deleted_at IS NULL
+          AND ((from_account_id = ? AND (reconciled & 1) != 0)
+            OR (to_account_id = ? AND (reconciled & 2) != 0))`
+    )
+    .get(accountId, accountId) as { n: number };
+  if (owned.n > 0) return true;
+  const recLegs = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM transaction_splits
+        WHERE deleted_at IS NULL AND transfer_account_id = ? AND reconciled != 0`
+    )
+    .get(accountId) as { n: number };
+  return recLegs.n > 0;
+}
+
+/**
  * True when an account has NO content other than its (synthetic) opening
  * balance: no non-deleted transactions on either side, no transfer-split legs
  * pointing at it, and no non-deleted assets/holdings. Such an "empty" account is

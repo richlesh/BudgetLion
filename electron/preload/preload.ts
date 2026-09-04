@@ -27,6 +27,7 @@ const api: LedgerApi = {
   createAccount: (input: NewAccountInput) => ipcRenderer.invoke(IPC.createAccount, input),
   updateAccount: (input: UpdateAccountInput) => ipcRenderer.invoke(IPC.updateAccount, input),
   accountIsEmpty: (accountId: string) => ipcRenderer.invoke(IPC.accountIsEmpty, accountId),
+  accountHasReconciled: (accountId: string) => ipcRenderer.invoke(IPC.accountHasReconciled, accountId),
   deleteAccount: (accountId: string) => ipcRenderer.invoke(IPC.deleteAccount, accountId),
   getAllBalances: () => ipcRenderer.invoke(IPC.getAllBalances),
   getAllWorth: () => ipcRenderer.invoke(IPC.getAllWorth),

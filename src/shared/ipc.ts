@@ -159,6 +159,8 @@ export interface LedgerApi {
   updateAccount(input: UpdateAccountInput): Promise<void>;
   /** True when an account has no transactions (beyond opening) or holdings. */
   accountIsEmpty(accountId: string): Promise<boolean>;
+  /** Whether the account has any reconciled transactions (owned side or a reconciled leg). */
+  accountHasReconciled(accountId: string): Promise<boolean>;
   /** Soft-delete an empty account (throws if it still has content). */
   deleteAccount(accountId: string): Promise<void>;
   getAllBalances(): Promise<AccountBalance[]>;
@@ -329,6 +331,7 @@ export const IPC = {
   createAccount: "accounts:create",
   updateAccount: "accounts:update",
   accountIsEmpty: "accounts:is-empty",
+  accountHasReconciled: "accounts:has-reconciled",
   deleteAccount: "accounts:delete",
   getAllBalances: "accounts:balances",
   getAllWorth: "accounts:worth",

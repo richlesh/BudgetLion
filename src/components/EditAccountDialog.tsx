@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Account, AccountType, Category, UpdateAccountInput } from "../shared/types";
 import { bpsToPercent, displaySign, formatCents, isLiability, parseCents, percentToBps } from "../core/money";
 import { categoriesForDirection, categoryOptions } from "../core/categories";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 interface Props {
   account: Account;
@@ -43,6 +44,27 @@ export function EditAccountDialog({ account, categories, accounts, onCancel, onS
   );
   const [escrowTarget, setEscrowTarget] = useState(account.escrowTarget ?? "");
   const [error, setError] = useState<string | null>(null);
+  // Whether this account has reconciled transactions (owned side or a reconciled
+  // transfer leg). If so, changing the opening balance shifts every reconciled
+  // running balance, so we warn before saving.
+  const [hasReconciled, setHasReconciled] = useState(false);
+  // Holds the validated update awaiting the "opening balance changed" confirmation.
+  const [pendingUpdate, setPendingUpdate] = useState<UpdateAccountInput | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    window.ledger
+      .accountHasReconciled(account.id)
+      .then((v) => {
+        if (alive) setHasReconciled(v);
+      })
+      .catch(() => {
+        if (alive) setHasReconciled(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [account.id]);
 
   const expenseCats = categoryOptions(categoriesForDirection(categories, "expense"));
   // Candidate escrow accounts: everything except the loan being edited.
@@ -60,7 +82,7 @@ export function EditAccountDialog({ account, categories, accounts, onCancel, onS
     }
     // Flip the entered amount back to the stored convention based on the chosen type.
     const storedOpening = entered * displaySign(type);
-    onSave({
+    const update: UpdateAccountInput = {
       id: account.id,
       name: name.trim(),
       type,
@@ -73,7 +95,17 @@ export function EditAccountDialog({ account, categories, accounts, onCancel, onS
       // Escrow applies to a mortgage (loan); cleared for other types, null if blank.
       escrowPaymentCents: type === "loan" ? parseCents(escrow) : null,
       escrowTarget: type === "loan" ? escrowTarget || null : null,
-    });
+    };
+    // Warn if the opening balance (amount or date) changed while the account has
+    // reconciled transactions — this shifts every reconciled running balance.
+    const openingChanged =
+      storedOpening !== account.openingBalanceCents ||
+      (openingDate || null) !== (account.openingBalanceDate ?? null);
+    if (hasReconciled && openingChanged) {
+      setPendingUpdate(update);
+      return;
+    }
+    onSave(update);
   }
 
   return (
@@ -160,6 +192,20 @@ export function EditAccountDialog({ account, categories, accounts, onCancel, onS
           <button onClick={submit}>Save</button>
         </div>
       </div>
+      {pendingUpdate && (
+        <ConfirmDialog
+          title="Change opening balance?"
+          message="This account has reconciled transactions. Changing the opening balance will shift the running balance of every reconciled transaction. Continue?"
+          confirmLabel="Change anyway"
+          cancelLabel="Cancel"
+          onConfirm={() => {
+            const u = pendingUpdate;
+            setPendingUpdate(null);
+            onSave(u);
+          }}
+          onCancel={() => setPendingUpdate(null)}
+        />
+      )}
     </div>
   );
 }
