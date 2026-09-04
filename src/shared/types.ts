@@ -389,6 +389,21 @@ export interface AccountWorth {
   worthCents: number; // cashCents + holdingsCents
 }
 
+/** One optional reconciliation adjustment (interest / fee / manual adjustment). */
+export interface ReconcileAdjustment {
+  date: string;
+  description: string | null;
+  amountCents: number; // signed (inflow +, outflow -); 0 = ignored
+  categoryId: string | null;
+}
+
+/** Input for reconciling an account: mark txns reconciled + create adjustments. */
+export interface ReconcileInput {
+  accountId: string;
+  reconcileIds: string[];
+  adjustments?: ReconcileAdjustment[];
+}
+
 /** Input shape for creating a transaction. */
 export interface NewTransactionInput {
   date: string;

@@ -9,6 +9,7 @@ import type {
   NewCategoryInput,
   NewRecurringRuleInput,
   NewTransactionInput,
+  ReconcileInput,
   ParsedRow,
   UpdateCategoryInput,
   UpdateRecurringRuleInput,
@@ -72,6 +73,9 @@ const api: LedgerApi = {
     ipcRenderer.invoke(IPC.bulkDeleteTransactions, ids),
   bulkUpdateTransactions: (updates: UpdateTransactionInput[]) =>
     ipcRenderer.invoke(IPC.bulkUpdateTransactions, updates),
+  reconcileAccount: (input: ReconcileInput) => ipcRenderer.invoke(IPC.reconcileAccount, input),
+  setTransactionsReconciled: (ids: string[], reconciled: boolean) =>
+    ipcRenderer.invoke(IPC.setTransactionsReconciled, ids, reconciled),
   undo: () => ipcRenderer.invoke(IPC.undo),
   redo: () => ipcRenderer.invoke(IPC.redo),
   getUndoState: () => ipcRenderer.invoke(IPC.getUndoState),
@@ -132,6 +136,7 @@ const api: LedgerApi = {
 
   getSettings: () => ipcRenderer.invoke(IPC.getSettings),
   saveSettings: (patch: Partial<AppSettings>) => ipcRenderer.invoke(IPC.saveSettings, patch),
+  notifyAccountType: (type: string | null) => ipcRenderer.send("account-type-changed", type),
   onSettingsChanged: (cb: (settings: AppSettings) => void) => {
     ipcRenderer.on("settings-changed", (_e, settings: AppSettings) => cb(settings));
   },
@@ -141,6 +146,9 @@ const api: LedgerApi = {
   onMenuNewPaycheck: (cb: () => void) => {
     ipcRenderer.on("menu-new-paycheck", () => cb());
   },
+  onMenuNewAsset: (cb: () => void) => {
+    ipcRenderer.on("menu-new-asset", () => cb());
+  },
   onMenuNewAccount: (cb: () => void) => {
     ipcRenderer.on("menu-new-account", () => cb());
   },
@@ -149,6 +157,15 @@ const api: LedgerApi = {
   },
   onMenuDedupe: (cb: () => void) => {
     ipcRenderer.on("menu-dedupe", () => cb());
+  },
+  onMenuDeleteTransaction: (cb: () => void) => {
+    ipcRenderer.on("menu-delete-transaction", () => cb());
+  },
+  onMenuAddToRecurring: (cb: () => void) => {
+    ipcRenderer.on("menu-add-to-recurring", () => cb());
+  },
+  onMenuReconcile: (cb: () => void) => {
+    ipcRenderer.on("menu-reconcile", () => cb());
   },
   onMenuImport: (cb: () => void) => {
     ipcRenderer.on("menu-import", () => cb());

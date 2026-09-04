@@ -13,6 +13,7 @@ import type {
   NewCategoryInput,
   NewRecurringRuleInput,
   NewTransactionInput,
+  ReconcileInput,
   ParsedRow,
   UpdateCategoryInput,
   UpdateRecurringRuleInput,
@@ -214,6 +215,10 @@ export function registerIpcHandlers(): void {
   );
   ipcMain.handle(IPC.bulkUpdateTransactions, (_e, updates: UpdateTransactionInput[]) =>
     repo.bulkUpdateTransactions(updates)
+  );
+  ipcMain.handle(IPC.reconcileAccount, (_e, input: ReconcileInput) => repo.reconcileAccount(input));
+  ipcMain.handle(IPC.setTransactionsReconciled, (_e, ids: string[], reconciled: boolean) =>
+    repo.setTransactionsReconciled(ids, reconciled)
   );
 
   // Undo / redo.

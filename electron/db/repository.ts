@@ -10,6 +10,7 @@ import type {
   NewCategoryInput,
   UpdateCategoryInput,
   NewTransactionInput,
+  ReconcileInput,
   Transaction,
   UpdateTransactionInput,
   UpdateAccountInput,
@@ -412,6 +413,7 @@ export function updateTransaction(input: UpdateTransactionInput): void {
 export function deleteTransaction(id: string): void {
   const db = getDb();
   const ts = now();
+  assertNotReconciled(db, [id]);
   // Affected transaction ids: this one plus any sibling legs of a linked
   // investment lot (so the undo snapshot covers the whole cascade at the
   // transaction level).
@@ -473,9 +475,90 @@ export function deleteTransaction(id: string): void {
 /** Delete many transactions as a SINGLE undo step. */
 export function bulkDeleteTransactions(ids: string[]): void {
   if (ids.length === 0) return;
+  assertNotReconciled(getDb(), ids);
   withUndo(`Delete ${ids.length} transactions`, ids, () => {
     for (const id of ids) deleteTransaction(id); // nested: folded into this entry
   });
+}
+
+/** Throw if any of the given transactions is reconciled (protects them from deletion). */
+function assertNotReconciled(db: ReturnType<typeof getDb>, ids: string[]): void {
+  if (ids.length === 0) return;
+  const placeholders = ids.map(() => "?").join(",");
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM transactions
+        WHERE deleted_at IS NULL AND cleared = ${ClearedState.Reconciled} AND id IN (${placeholders})`
+    )
+    .get(...ids) as { n: number };
+  if (row.n > 0) {
+    throw new Error("Reconciled transactions can't be deleted. Un-reconcile them first.");
+  }
+}
+
+/** Set the reconciled flag (cleared = Reconciled or Uncleared) on transactions. */
+export function setTransactionsReconciled(ids: string[], reconciled: boolean): void {
+  if (ids.length === 0) return;
+  const db = getDb();
+  const ts = now();
+  const cleared = reconciled ? ClearedState.Reconciled : ClearedState.Uncleared;
+  withUndo(reconciled ? "Reconcile transactions" : "Un-reconcile transactions", ids, () => {
+    const stmt = db.prepare("UPDATE transactions SET cleared = ?, updated_at = ? WHERE id = ?");
+    for (const id of ids) stmt.run(cleared, ts, id);
+  });
+}
+
+/**
+ * Reconcile an account in one undo step: create any nonzero adjustment
+ * transactions (marked reconciled) and mark the checked transactions reconciled.
+ * Returns the number of transactions reconciled (existing checked + created).
+ */
+export function reconcileAccount(input: ReconcileInput): number {
+  const db = getDb();
+  const ts = now();
+  const adjustments = (input.adjustments ?? []).filter((a) => Math.round(a.amountCents) !== 0);
+  const label = "Reconcile account";
+  let count = 0;
+  withUndo(label, input.reconcileIds, () => {
+    const created: string[] = [];
+    const insert = db.prepare(
+      `INSERT INTO transactions
+         (id, date, payee, memo, amount_cents, from_account_id, to_account_id,
+          category_id, cleared, import_id, created_at, updated_at, deleted_at)
+       VALUES (@id, @date, @payee, @memo, @amount_cents, @from_account_id, @to_account_id,
+               @category_id, @cleared, NULL, @created_at, @created_at, NULL)`
+    );
+    for (const a of adjustments) {
+      const amt = Math.round(a.amountCents);
+      const id = randomUUID();
+      insert.run({
+        id,
+        date: a.date,
+        payee: a.description ?? null,
+        memo: null,
+        // Inflow (amt > 0) => to this account; outflow => from this account.
+        amount_cents: Math.abs(amt),
+        from_account_id: amt < 0 ? input.accountId : null,
+        to_account_id: amt >= 0 ? input.accountId : null,
+        category_id: a.categoryId ?? null,
+        cleared: ClearedState.Reconciled,
+        created_at: ts,
+      });
+      created.push(id);
+      count++;
+    }
+    if (input.reconcileIds.length > 0) {
+      const stmt = db.prepare(
+        `UPDATE transactions SET cleared = ${ClearedState.Reconciled}, updated_at = ? WHERE id = ?`
+      );
+      for (const id of input.reconcileIds) {
+        stmt.run(ts, id);
+        count++;
+      }
+    }
+    return created; // snapshot the newly created rows for undo
+  });
+  return count;
 }
 
 /** Apply a set of transaction updates as a SINGLE undo step (e.g. Bulk Category). */

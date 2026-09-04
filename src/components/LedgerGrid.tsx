@@ -62,6 +62,8 @@ interface Props {
   payeeSuggestions?: string[];
   /** Prior memos in this account, for inline Memo autocomplete. */
   memoSuggestions?: string[];
+  /** Fires with the ids of the currently selected transaction rows (no opening row). */
+  onSelectionChange?: (ids: string[]) => void;
 }
 
 // Flat row shape fed to AG Grid.
@@ -109,6 +111,7 @@ export function LedgerGrid({
   onColumnWidthsChange,
   payeeSuggestions,
   memoSuggestions,
+  onSelectionChange,
 }: Props) {
   // Keep the latest callbacks/data in refs so `columnDefs` can be built once and
   // stay referentially stable. If columnDefs changed identity on every edit (e.g.
@@ -117,6 +120,7 @@ export function LedgerGrid({
   const onDeleteRef = useRef(onDelete);
   const onSetChoiceRef = useRef(onSetCategoryOrTransfer);
   const onCellContextRef = useRef(onCellContext);
+  const onSelectionChangeRef = useRef(onSelectionChange);
   const categoriesRef = useRef(categories);
   const otherAccountsRef = useRef<Account[]>([]);
   // Suggestion lists kept in refs so the (stable) columnDefs read current values.
@@ -127,6 +131,7 @@ export function LedgerGrid({
   onDeleteRef.current = onDelete;
   onSetChoiceRef.current = onSetCategoryOrTransfer;
   onCellContextRef.current = onCellContext;
+  onSelectionChangeRef.current = onSelectionChange;
   categoriesRef.current = categories;
   // For liability accounts (credit card / loan) we flip the sign of displayed
   // amounts and balances so the ledger reads like a statement (charges positive,
@@ -558,6 +563,13 @@ export function LedgerGrid({
         preventDefaultOnContextMenu
         onGridReady={onGridReady}
         onColumnResized={onColumnResized}
+        onSelectionChanged={(e) => {
+          const ids = e.api
+            .getSelectedRows()
+            .map((r) => (r as GridRow).id)
+            .filter((id) => id !== account.id); // exclude the opening-balance row
+          onSelectionChangeRef.current?.(ids);
+        }}
         getRowId={(p) => p.data.id}
         rowSelection="multiple"
         isRowSelectable={(node) => !node.data?.isOpening}

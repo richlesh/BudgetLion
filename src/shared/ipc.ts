@@ -17,6 +17,7 @@ import type {
   UpdateCategoryInput,
   UpdateRecurringRuleInput,
   UpdateTransactionInput,
+  ReconcileInput,
   UpdateAccountInput,
   ParsedRow,
   Asset,
@@ -220,6 +221,10 @@ export interface LedgerApi {
   bulkDeleteTransactions(ids: string[]): Promise<void>;
   /** Apply many transaction updates as a single undo step (e.g. Bulk Category). */
   bulkUpdateTransactions(updates: UpdateTransactionInput[]): Promise<void>;
+  /** Reconcile an account: mark checked txns reconciled + create adjustments. */
+  reconcileAccount(input: ReconcileInput): Promise<number>;
+  /** Toggle the reconciled flag on transactions. */
+  setTransactionsReconciled(ids: string[], reconciled: boolean): Promise<void>;
 
   // Undo / redo (transaction-level, in-memory, session-scoped)
   undo(): Promise<boolean>;
@@ -283,14 +288,20 @@ export interface LedgerApi {
   getSettings(): Promise<AppSettings>;
   // Persist a partial settings patch (no UI side effects). Returns the merged settings.
   saveSettings(patch: Partial<AppSettings>): Promise<AppSettings>;
+  /** Tell the main process the selected account's type so it can enable/disable menu items. */
+  notifyAccountType(type: string | null): void;
   onSettingsChanged(cb: (settings: AppSettings) => void): void;
 
   // Menu events
   onMenuNewTransaction(cb: () => void): void;
   onMenuNewPaycheck(cb: () => void): void;
+  onMenuNewAsset(cb: () => void): void;
   onMenuNewAccount(cb: () => void): void;
   onMenuNewCategory(cb: () => void): void;
   onMenuDedupe(cb: () => void): void;
+  onMenuDeleteTransaction(cb: () => void): void;
+  onMenuAddToRecurring(cb: () => void): void;
+  onMenuReconcile(cb: () => void): void;
   onMenuImport(cb: () => void): void;
   onMenuExport(cb: () => void): void;
   onMenuPrint(cb: () => void): void;
@@ -348,6 +359,8 @@ export const IPC = {
   deleteTransaction: "tx:delete",
   buildLoanPaymentSplit: "tx:loan-split",
   bulkDeleteTransactions: "tx:bulk-delete",
+  reconcileAccount: "tx:reconcile",
+  setTransactionsReconciled: "tx:set-reconciled",
   bulkUpdateTransactions: "tx:bulk-update",
   undo: "undo:do",
   redo: "undo:redo",

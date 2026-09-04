@@ -238,31 +238,6 @@ export function buildMenu(mainWin: BrowserWindow): void {
           label: "New Category…",
           click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-new-category"),
         },
-        {
-          label: "New Transaction",
-          accelerator: "CmdOrCtrl+N",
-          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-new-transaction"),
-        },
-        {
-          label: "New Paycheck…",
-          accelerator: "CmdOrCtrl+Shift+P",
-          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-new-paycheck"),
-        },
-        {
-          label: "De-Duplicate Transactions",
-          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-dedupe"),
-        },
-        { type: "separator" },
-        {
-          label: "Import Transactions…",
-          accelerator: "CmdOrCtrl+I",
-          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-import"),
-        },
-        {
-          label: "Export Transactions…",
-          accelerator: "CmdOrCtrl+E",
-          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-export"),
-        },
         { type: "separator" },
         {
           label: "Import Accounts/Categories…",
@@ -271,12 +246,6 @@ export function buildMenu(mainWin: BrowserWindow): void {
         {
           label: "Export Accounts/Categories…",
           click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-export-data"),
-        },
-        { type: "separator" },
-        {
-          label: "Print…",
-          accelerator: "CmdOrCtrl+P",
-          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-print"),
         },
         { type: "separator" },
         isMac ? { role: "close" } : { role: "quit" },
@@ -303,6 +272,74 @@ export function buildMenu(mainWin: BrowserWindow): void {
       ],
     },
     {
+      label: "Account",
+      submenu: [
+        {
+          id: "acct-new-transaction",
+          label: "New Transaction…",
+          accelerator: "CmdOrCtrl+N",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-new-transaction"),
+        },
+        {
+          id: "acct-new-paycheck",
+          label: "New Paycheck…",
+          accelerator: "CmdOrCtrl+Shift+P",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-new-paycheck"),
+        },
+        {
+          id: "acct-new-asset",
+          label: "New Asset…",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-new-asset"),
+        },
+        { type: "separator" },
+        {
+          label: "Delete Transaction…",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-delete-transaction"),
+        },
+        {
+          label: "De-Duplicate Transactions",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-dedupe"),
+        },
+        {
+          label: "Reconcile Account…",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-reconcile"),
+        },
+        { type: "separator" },
+        {
+          label: "Search…",
+          accelerator: "CmdOrCtrl+F",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-search"),
+        },
+        { type: "separator" },
+        {
+          label: "Add to Recurring…",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-add-to-recurring"),
+        },
+        {
+          label: "Recurring Rules…",
+          accelerator: "CmdOrCtrl+R",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-recurring"),
+        },
+        { type: "separator" },
+        {
+          label: "Print…",
+          accelerator: "CmdOrCtrl+P",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-print"),
+        },
+        { type: "separator" },
+        {
+          label: "Import Transactions…",
+          accelerator: "CmdOrCtrl+I",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-import"),
+        },
+        {
+          label: "Export Transactions…",
+          accelerator: "CmdOrCtrl+E",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-export"),
+        },
+      ],
+    },
+    {
       label: "View",
       submenu: [
         {
@@ -318,16 +355,6 @@ export function buildMenu(mainWin: BrowserWindow): void {
         {
           label: "Net Worth Report…",
           click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-net-worth-report"),
-        },
-        {
-          label: "Recurring Rules…",
-          accelerator: "CmdOrCtrl+R",
-          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-recurring"),
-        },
-        {
-          label: "Search…",
-          accelerator: "CmdOrCtrl+F",
-          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-search"),
         },
         { type: "separator" },
         { role: "reload" },
@@ -361,4 +388,21 @@ export function buildMenu(mainWin: BrowserWindow): void {
   ];
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+
+  // Enable/disable the account-entry items based on the selected account's type,
+  // pushed from the renderer whenever the selection changes. Asset accounts allow
+  // only "New Asset…"; all other (or no) accounts allow Transaction/Paycheck.
+  ipcMain.removeAllListeners("account-type-changed");
+  ipcMain.on("account-type-changed", (_e, type: string | null) => {
+    const menu = Menu.getApplicationMenu();
+    if (!menu) return;
+    const isAsset = type === "asset";
+    const set = (id: string, enabled: boolean) => {
+      const item = menu.getMenuItemById(id);
+      if (item) item.enabled = enabled;
+    };
+    set("acct-new-transaction", !isAsset);
+    set("acct-new-paycheck", !isAsset);
+    set("acct-new-asset", isAsset);
+  });
 }

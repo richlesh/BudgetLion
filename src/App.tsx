@@ -32,6 +32,8 @@ import { NewInvestmentDialog } from "./components/NewInvestmentDialog";
 import { HoldingsPanel } from "./components/HoldingsPanel";
 import { AssetHoldingsPanel } from "./components/AssetHoldingsPanel";
 import { NetWorthReport } from "./components/NetWorthReport";
+import { ReconcileDialog } from "./components/ReconcileDialog";
+import type { ReconcileInput } from "./shared/types";
 import { AssetRecordDialog, type AssetRecordSubmit } from "./components/AssetRecordDialog";
 import { mergeAssetMeta } from "./core/assetRecord";
 import { MICRO } from "./shared/types";
@@ -69,6 +71,7 @@ export function App() {
   // Asset-account record entry (Buy/Sell/Lost) + the account's held items.
   const [showAssetRecord, setShowAssetRecord] = useState(false);
   const [showNetWorth, setShowNetWorth] = useState(false);
+  const [showReconcile, setShowReconcile] = useState(false);
   const [heldAssets, setHeldAssets] = useState<Asset[]>([]);
   const [holdingsReloadKey, setHoldingsReloadKey] = useState(0);
   // For investment accounts, which entry form to show: a chooser first, then
@@ -111,6 +114,10 @@ export function App() {
   // Transaction ids staged for bulk deletion (from a multi-row selection),
   // pending user confirmation. Null = no bulk-delete prompt showing.
   const [pendingBulkDelete, setPendingBulkDelete] = useState<string[] | null>(null);
+  // Currently selected transaction rows in the ledger grid (for menu Delete).
+  const [selectedTxIds, setSelectedTxIds] = useState<string[]>([]);
+  // A simple OK-only error dialog message (null = hidden).
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   // De-duplication review: confirmed duplicate pairs + the current index, plus a
   // "scanning…" flag while the (possibly AI-backed) similarity check runs.
   const [dedupePairs, setDedupePairs] = useState<DuplicatePair[]>([]);
@@ -301,11 +308,18 @@ export function App() {
 
   // Refs hold the latest values so the once-registered menu listeners can read them.
   const selectedRef = useRef<Account | null>(null);
+  const selectedTxIdsRef = useRef<string[]>([]);
   const ledgerRef = useRef<LedgerRow[]>([]);
+  const seedFromTransactionRef = useRef<((t: Transaction) => Partial<NewRecurringRuleInput>) | null>(null);
   const categoriesRef = useRef<Category[]>([]);
   useEffect(() => {
     selectedRef.current = selected;
+    // Enable/disable the account-entry menu items for the selection's type.
+    window.ledger.notifyAccountType(selected?.type ?? null);
   }, [selected]);
+  useEffect(() => {
+    selectedTxIdsRef.current = selectedTxIds;
+  }, [selectedTxIds]);
   useEffect(() => {
     ledgerRef.current = ledger;
   }, [ledger]);
@@ -435,10 +449,41 @@ export function App() {
       }
     });
     window.ledger.onMenuNewPaycheck(() => setShowPaycheckDialog(true));
+    window.ledger.onMenuNewAsset(() => {
+      const acct = selectedRef.current;
+      if (acct && acct.type === "asset") {
+        void window.ledger.listAssets(acct.id).then((list) => {
+          setHeldAssets(list);
+          setShowAssetRecord(true);
+        });
+      }
+    });
     window.ledger.onMenuNewAccount(() => setShowAccountDialog(true));
     window.ledger.onMenuNewCategory(() => setShowCategoriesDialog(true));
     window.ledger.onMenuDedupe(() => {
       if (selectedRef.current) void runDedupe();
+    });
+    window.ledger.onMenuDeleteTransaction(() => {
+      const ids = selectedTxIdsRef.current;
+      if (ids.length === 1) setPendingDeleteId(ids[0]);
+      else if (ids.length > 1) setPendingBulkDelete(ids);
+    });
+    window.ledger.onMenuAddToRecurring(() => {
+      const ids = selectedTxIdsRef.current;
+      if (ids.length !== 1) {
+        setErrorMessage("Select a single transaction to add to Recurring Rules.");
+        return;
+      }
+      const t = ledgerRef.current.find((r) => r.transaction?.id === ids[0])?.transaction;
+      if (!t) {
+        setErrorMessage("Could not find the selected transaction.");
+        return;
+      }
+      setRecurringSeed(seedFromTransactionRef.current?.(t) ?? null);
+      setShowRecurring(true);
+    });
+    window.ledger.onMenuReconcile(() => {
+      if (selectedRef.current) setShowReconcile(true);
     });
     window.ledger.onMenuImport(() => {
       const acct = selectedRef.current;
@@ -603,6 +648,18 @@ export function App() {
           ? `Paycheck added (${transactions.length} transactions).`
           : "Paycheck added."
       );
+    },
+    [selectedId, refreshLedger, refreshAccounts]
+  );
+
+  // Persist a reconciliation: mark checked txns reconciled + create adjustments.
+  const createReconcile = useCallback(
+    async (input: ReconcileInput) => {
+      const n = await window.ledger.reconcileAccount(input);
+      setShowReconcile(false);
+      if (selectedId) await refreshLedger(selectedId);
+      await refreshAccounts();
+      setToast(`Reconciled ${n} transaction${n === 1 ? "" : "s"}.`);
     },
     [selectedId, refreshLedger, refreshAccounts]
   );
@@ -1067,6 +1124,7 @@ export function App() {
     }),
     []
   );
+  seedFromTransactionRef.current = seedFromTransaction;
 
   // Apply a category / uncategorized / transfer choice to MANY selected rows at
   // once (Bulk Category). Each row keeps the viewed account's side; the other
@@ -1243,11 +1301,16 @@ export function App() {
 
   const confirmDelete = useCallback(async () => {
     if (!selected || !pendingDeleteId) return;
-    await window.ledger.deleteTransaction(pendingDeleteId);
+    const id = pendingDeleteId;
     setPendingDeleteId(null);
-    await refreshLedger(selected.id);
-    await refreshAccounts();
-    setHoldingsReloadKey((k) => k + 1); // trade legs may have been removed
+    try {
+      await window.ledger.deleteTransaction(id);
+      await refreshLedger(selected.id);
+      await refreshAccounts();
+      setHoldingsReloadKey((k) => k + 1); // trade legs may have been removed
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : "Could not delete the transaction.");
+    }
   }, [selected, pendingDeleteId, refreshLedger, refreshAccounts]);
 
   // Delete all transactions staged for bulk deletion, then refresh.
@@ -1255,11 +1318,15 @@ export function App() {
     if (!selected || !pendingBulkDelete || pendingBulkDelete.length === 0) return;
     const ids = pendingBulkDelete;
     setPendingBulkDelete(null);
-    await window.ledger.bulkDeleteTransactions(ids);
-    await refreshLedger(selected.id);
-    await refreshAccounts();
-    setHoldingsReloadKey((k) => k + 1);
-    setToast(`Deleted ${ids.length} transaction(s).`);
+    try {
+      await window.ledger.bulkDeleteTransactions(ids);
+      await refreshLedger(selected.id);
+      await refreshAccounts();
+      setHoldingsReloadKey((k) => k + 1);
+      setToast(`Deleted ${ids.length} transaction(s).`);
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : "Could not delete the transactions.");
+    }
   }, [selected, pendingBulkDelete, refreshLedger, refreshAccounts]);
 
   // Human-readable description of the transaction pending deletion.
@@ -1432,6 +1499,7 @@ export function App() {
                 onColumnWidthsChange={handleColumnWidthsChange}
                 payeeSuggestions={payeeSuggestions}
                 memoSuggestions={memoSuggestions}
+                onSelectionChange={setSelectedTxIds}
               />
             )}
           </>
@@ -1506,6 +1574,28 @@ export function App() {
         />
       )}
       {showNetWorth && <NetWorthReport onClose={() => setShowNetWorth(false)} />}
+      {showReconcile && selected && (
+        <ReconcileDialog
+          account={selected}
+          rows={ledger}
+          categories={categories}
+          onCancel={() => setShowReconcile(false)}
+          onReconcile={createReconcile}
+        />
+      )}
+      {errorMessage && (
+        <div className="dialog-backdrop" onClick={() => setErrorMessage(null)}>
+          <div className="dialog" onClick={(e) => e.stopPropagation()}>
+            <h3>Notice</h3>
+            <p style={{ margin: 0 }}>{errorMessage}</p>
+            <div className="dialog-actions">
+              <button onClick={() => setErrorMessage(null)} autoFocus>
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {showCategoriesDialog && (
         <CategoriesDialog
           categories={categories}
