@@ -51,35 +51,114 @@ export function formatCents(cents: number, currency = "USD", locale = "en-US"): 
 
 /**
  * Parse a user-entered money string into integer cents.
- * Accepts things like "1,234.56", "$1234.5", "-42", "(42)" (parentheses = negative).
- * Returns null if it cannot be parsed.
+ * Accepts plain amounts ("1,234.56", "$1234.5", "-42", "(42)" = negative) AND
+ * simple algebraic expressions using + - * / and parentheses, e.g.
+ * "12.50 + 3*2" or "(100-25)/2". Returns null if it cannot be parsed.
  */
 export function parseCents(input: string): number | null {
+  const value = evalMoneyExpression(input);
+  if (value == null) return null;
+  // Round to nearest cent to avoid float artifacts.
+  return Math.round(value * 100);
+}
+
+/**
+ * Evaluate a currency input as a number of DOLLARS, supporting simple arithmetic
+ * (+ - * / and parentheses) with no `eval`/`Function`. Handles currency symbols,
+ * whitespace, and thousands separators; a whole string wrapped in parentheses
+ * around a plain number is treated as an accounting-style negative (e.g. banks
+ * export "(1,234.56)" = -1234.56). Returns the numeric value, or null.
+ */
+export function evalMoneyExpression(input: string): number | null {
   if (input == null) return null;
   let s = String(input).trim();
   if (s === "") return null;
 
-  let negative = false;
-  // Accounting-style negatives: (1,234.56)
-  if (/^\(.*\)$/.test(s)) {
-    negative = true;
-    s = s.slice(1, -1);
-  }
-  if (s.startsWith("-")) {
-    negative = true;
-    s = s.slice(1);
+  // Accounting-style negative: the ENTIRE string is "(<plain number>)" with no
+  // inner operators. Preserves bank-import semantics; a grouped sub-expression
+  // (which contains operators) is handled by the evaluator instead.
+  const acct = s.match(/^\(\s*([0-9,]*\.?[0-9]+)\s*\)$/);
+  if (acct) {
+    const n = Number(acct[1].replace(/,/g, ""));
+    return Number.isFinite(n) ? -n : null;
   }
 
-  // Strip currency symbols, spaces, and thousands separators.
-  s = s.replace(/[^0-9.]/g, "");
-  if (s === "" || s === ".") return null;
+  // Strip currency symbols, spaces, and thousands separators; keep digits, a
+  // decimal point, the operators, and parentheses.
+  s = s.replace(/[,$\s]/g, "");
+  s = s.replace(/[^0-9.+\-*/()]/g, "");
+  if (s === "") return null;
 
-  const value = Number(s);
-  if (!Number.isFinite(value)) return null;
+  try {
+    const value = new ExprParser(s).parse();
+    return value != null && Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
 
-  // Round to nearest cent to avoid float artifacts.
-  const cents = Math.round(value * 100);
-  return negative ? -cents : cents;
+/**
+ * A tiny recursive-descent parser for + - * / and parentheses over decimal
+ * numbers. No eval/Function; throws on malformed input. Grammar:
+ *   expr   = term (('+' | '-') term)*
+ *   term   = factor (('*' | '/') factor)*
+ *   factor = ('+' | '-') factor | '(' expr ')' | number
+ */
+class ExprParser {
+  private pos = 0;
+  constructor(private readonly s: string) {}
+
+  parse(): number {
+    const v = this.expr();
+    if (this.pos !== this.s.length) throw new Error("Unexpected trailing input");
+    return v;
+  }
+
+  private expr(): number {
+    let v = this.term();
+    for (;;) {
+      const c = this.s[this.pos];
+      if (c === "+") { this.pos++; v += this.term(); }
+      else if (c === "-") { this.pos++; v -= this.term(); }
+      else break;
+    }
+    return v;
+  }
+
+  private term(): number {
+    let v = this.factor();
+    for (;;) {
+      const c = this.s[this.pos];
+      if (c === "*") { this.pos++; v *= this.factor(); }
+      else if (c === "/") { this.pos++; v /= this.factor(); }
+      else break;
+    }
+    return v;
+  }
+
+  private factor(): number {
+    const c = this.s[this.pos];
+    if (c === "+") { this.pos++; return this.factor(); }
+    if (c === "-") { this.pos++; return -this.factor(); }
+    if (c === "(") {
+      this.pos++;
+      const v = this.expr();
+      if (this.s[this.pos] !== ")") throw new Error("Missing )");
+      this.pos++;
+      return v;
+    }
+    return this.number();
+  }
+
+  private number(): number {
+    const start = this.pos;
+    while (this.pos < this.s.length && /[0-9.]/.test(this.s[this.pos])) this.pos++;
+    const tok = this.s.slice(start, this.pos);
+    if (tok === "" || tok === ".") throw new Error("Expected number");
+    const n = Number(tok);
+    if (!Number.isFinite(n)) throw new Error("Bad number");
+    return n;
+  }
 }
 
 /**
@@ -92,26 +171,8 @@ export function parseCents(input: string): number | null {
  * prices; use parseCents for ordinary money amounts (whole cents).
  */
 export function parsePriceCents(input: string): number | null {
-  if (input == null) return null;
-  let s = String(input).trim();
-  if (s === "") return null;
-
-  let negative = false;
-  if (/^\(.*\)$/.test(s)) {
-    negative = true;
-    s = s.slice(1, -1);
-  }
-  if (s.startsWith("-")) {
-    negative = true;
-    s = s.slice(1);
-  }
-  s = s.replace(/[^0-9.]/g, "");
-  if (s === "" || s === ".") return null;
-
-  const value = Number(s);
-  if (!Number.isFinite(value)) return null;
-
+  const value = evalMoneyExpression(input);
+  if (value == null) return null;
   // Cents WITHOUT whole-cent rounding (keeps up to sub-cent precision).
-  const cents = value * 100;
-  return negative ? -cents : cents;
+  return value * 100;
 }
