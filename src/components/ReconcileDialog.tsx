@@ -6,6 +6,8 @@ import { isReconciledForAccount } from "../core/reconcile";
 
 interface Props {
   account: Account;
+  /** All accounts, used to label transfers as "To/From <account>". */
+  accounts: Account[];
   /** The account's ledger rows (to list unreconciled transactions). */
   rows: LedgerRow[];
   categories: Category[];
@@ -42,9 +44,38 @@ function findCategoryId(categories: Category[], displayName: string): string {
  * add interest, fee, and adjustment entries. Checked transactions (and any
  * created adjustments) are marked reconciled.
  */
-export function ReconcileDialog({ account, rows, categories, onCancel, onReconcile }: Props) {
+export function ReconcileDialog({ account, accounts, rows, categories, onCancel, onReconcile }: Props) {
   const currency = account.currency;
   const catChoices = useMemo(() => categoryOptions(categories), [categories]);
+
+  const accountNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const a of accounts) m.set(a.id, a.name);
+    return m;
+  }, [accounts]);
+
+  // Display payee mirroring the ledger: transfers (and the counterparty side of a
+  // split transfer) show "To/From <account>" instead of the stored payee.
+  const payeeFor = (r: LedgerRow): string => {
+    const t = r.transaction!;
+    const isTransfer = !!(t.fromAccountId && t.toAccountId);
+    if (isTransfer) {
+      if (t.fromAccountId === account.id) {
+        const other = t.toAccountId ? accountNameById.get(t.toAccountId) : undefined;
+        return `To ${other ?? "account"}`;
+      }
+      const other = t.fromAccountId ? accountNameById.get(t.fromAccountId) : undefined;
+      return `From ${other ?? "account"}`;
+    }
+    const isForeignSplit =
+      r.isSplit && t.fromAccountId !== account.id && t.toAccountId !== account.id;
+    if (isForeignSplit) {
+      const ownerId = t.fromAccountId ?? t.toAccountId ?? null;
+      const other = ownerId ? accountNameById.get(ownerId) : undefined;
+      return `From ${other ?? "account"}`;
+    }
+    return t.payee ?? "";
+  };
 
   // Unreconciled real transactions on THIS account's side (exclude the opening row).
   const unreconciled = useMemo(
@@ -258,7 +289,7 @@ export function ReconcileDialog({ account, rows, categories, onCancel, onReconci
                         />
                       </td>
                       <td>{t.date}</td>
-                      <td>{t.payee ?? ""}</td>
+                      <td>{payeeFor(r)}</td>
                       <td className="num">{formatCents(r.signedAmountCents, currency)}</td>
                     </tr>
                   );

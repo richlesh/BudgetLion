@@ -1610,6 +1610,7 @@ export function App() {
       {showReconcile && selected && (
         <ReconcileDialog
           account={selected}
+          accounts={accounts}
           rows={ledger}
           categories={categories}
           onCancel={() => setShowReconcile(false)}
