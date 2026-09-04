@@ -31,6 +31,9 @@ interface EditorParams {
   // Direction of the row from the account's perspective, used to filter which
   // categories are offered (income vs expense). Undefined = show all.
   direction?: "income" | "expense";
+  /** When true, omit transfer-account options (e.g. a reconciled row: the
+   *  counterparty can't change, but the category may still be edited). */
+  hideAccounts?: boolean;
   stopEditing: (cancel?: boolean) => void;
   onChoose: (choice: CategoryChoice) => void;
 }
@@ -53,7 +56,7 @@ export const CategoryAccountEditor = forwardRef(function CategoryAccountEditor(
   props: EditorParams,
   ref
 ) {
-  const { categories, accounts, direction, initialValue, stopEditing, onChoose } = props;
+  const { categories, accounts, direction, hideAccounts, initialValue, stopEditing, onChoose } = props;
 
   // Build the flat option list: fixed choices, then categories, then accounts.
   const allOptions = useMemo<Opt[]>(() => {
@@ -64,16 +67,20 @@ export const CategoryAccountEditor = forwardRef(function CategoryAccountEditor(
         group: "Category" as const,
       }))
       .sort((a, b) => a.label.localeCompare(b.label));
-    const accts = accounts
-      .map((a) => ({ value: `acct:${a.id}`, label: a.name, group: "Account" as const }))
-      .sort((a, b) => a.label.localeCompare(b.label));
+    // Reconciled rows can still be re-categorized, but the transfer counterparty
+    // must not change, so the account options are omitted.
+    const accts = hideAccounts
+      ? []
+      : accounts
+          .map((a) => ({ value: `acct:${a.id}`, label: a.name, group: "Account" as const }))
+          .sort((a, b) => a.label.localeCompare(b.label));
     return [
       { value: "split", label: "Split…", group: "" as const },
       { value: "none", label: "— Uncategorized —", group: "" as const },
       ...cats,
       ...accts,
     ];
-  }, [categories, accounts, direction]);
+  }, [categories, accounts, direction, hideAccounts]);
 
   const [query, setQuery] = useState("");
   // Highlighted index into the FILTERED list.

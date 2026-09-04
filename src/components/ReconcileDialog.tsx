@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import type { Account, Category, LedgerRow, ReconcileInput, ReconcileAdjustment } from "../shared/types";
-import { ClearedState } from "../shared/types";
-import { formatCents, parseCents, isLiability } from "../core/money";
+import { formatCents, parseCents, isLiability, displaySign } from "../core/money";
 import { categoryOptions, categoryDisplayName } from "../core/categories";
+import { isReconciledForAccount } from "../core/reconcile";
 
 interface Props {
   account: Account;
@@ -46,13 +46,13 @@ export function ReconcileDialog({ account, rows, categories, onCancel, onReconci
   const currency = account.currency;
   const catChoices = useMemo(() => categoryOptions(categories), [categories]);
 
-  // Unreconciled real transactions in this account (exclude the opening row).
+  // Unreconciled real transactions on THIS account's side (exclude the opening row).
   const unreconciled = useMemo(
     () =>
       rows.filter(
-        (r) => r.kind === "transaction" && r.transaction && r.transaction.cleared !== ClearedState.Reconciled
+        (r) => r.kind === "transaction" && r.transaction && !isReconciledForAccount(r.transaction, account.id)
       ),
-    [rows]
+    [rows, account.id]
   );
 
   // Default: every unreconciled row checked (i.e. it has cleared).
@@ -85,6 +85,32 @@ export function ReconcileDialog({ account, rows, categories, onCancel, onReconci
       return next;
     });
   }
+
+  // Signed (stored) magnitude of an enabled adjustment, per its kind.
+  function adjSigned(r: AdjRow, kind: "interest" | "fees" | "adjustment"): number {
+    if (!r.enabled) return 0;
+    const cents = parseCents(r.amount);
+    if (cents == null) return 0;
+    const mag = Math.abs(cents);
+    return kind === "interest" ? mag : kind === "fees" ? -mag : cents;
+  }
+
+  // Reconciled balance = opening balance + already-reconciled rows + the checked
+  // (about-to-be-reconciled) rows + any enabled adjustments. Shown with the
+  // account's display sign so it matches the ledger/statement.
+  const reconciledBalance = useMemo(() => {
+    let cents = account.openingBalanceCents;
+    for (const r of rows) {
+      if (r.kind === "opening") continue;
+      const t = r.transaction;
+      if (!t) continue;
+      if (isReconciledForAccount(t, account.id)) cents += r.signedAmountCents;
+      else if (checked.has(t.id)) cents += r.signedAmountCents;
+    }
+    cents += adjSigned(interest, "interest") + adjSigned(fees, "fees") + adjSigned(adjustment, "adjustment");
+    return cents * displaySign(account.type);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, checked, interest, fees, adjustment, account.openingBalanceCents, account.type, account.id]);
 
   // Build an adjustment (interest/fees positive = inflow/outflow per kind).
   // Interest is income (inflow, +); Fees are an expense (outflow, −); Adjustment
@@ -186,6 +212,10 @@ export function ReconcileDialog({ account, rows, categories, onCancel, onReconci
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <h3 style={{ margin: 0 }}>Reconcile — {account.name}</h3>
           <span className="account-type">{checked.size} of {unreconciled.length} checked</span>
+          <span style={{ flex: 1 }} />
+          <div className="nwr-net" style={{ margin: 0, fontSize: 16 }}>
+            Reconciled balance: {formatCents(reconciledBalance, currency)}
+          </div>
         </div>
 
         <div style={{ maxHeight: "42vh", overflow: "auto", border: "1px solid var(--border)", borderRadius: 6 }}>

@@ -1022,3 +1022,15 @@ body.dark .amount-neg {
   font-size: 13px;
   color: var(--muted);
 }
+
+
+/* Reconciled ledger rows: faint green background so they're easy to spot.
+   AG Grid paints backgrounds on the cells, so target both the row and cells. */
+.ag-theme-alpine .ag-row.row-reconciled,
+.ag-theme-alpine .ag-row.row-reconciled .ag-cell {
+  background-color: rgba(21, 128, 61, 0.10);
+}
+.ag-theme-alpine-dark .ag-row.row-reconciled,
+.ag-theme-alpine-dark .ag-row.row-reconciled .ag-cell {
+  background-color: rgba(74, 222, 128, 0.15);
+}

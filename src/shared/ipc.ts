@@ -223,8 +223,8 @@ export interface LedgerApi {
   bulkUpdateTransactions(updates: UpdateTransactionInput[]): Promise<void>;
   /** Reconcile an account: mark checked txns reconciled + create adjustments. */
   reconcileAccount(input: ReconcileInput): Promise<number>;
-  /** Toggle the reconciled flag on transactions. */
-  setTransactionsReconciled(ids: string[], reconciled: boolean): Promise<void>;
+  /** Toggle the reconciled bit for an account's side of the given transactions. */
+  setTransactionsReconciled(ids: string[], accountId: string, reconciled: boolean): Promise<void>;
 
   // Undo / redo (transaction-level, in-memory, session-scoped)
   undo(): Promise<boolean>;

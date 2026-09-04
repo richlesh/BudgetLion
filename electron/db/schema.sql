@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS transactions (
   from_account_id TEXT REFERENCES accounts(id),  -- money leaves here (nullable)
   to_account_id   TEXT REFERENCES accounts(id),  -- money arrives here (nullable)
   category_id     TEXT REFERENCES categories(id),
-  cleared         INTEGER NOT NULL DEFAULT 0,    -- 0 uncleared, 1 cleared, 2 reconciled
+  cleared         INTEGER NOT NULL DEFAULT 0,    -- 0 uncleared, 1 cleared, 2 reconciled (reserved; separate from `reconciled`)
+  reconciled      INTEGER NOT NULL DEFAULT 0,    -- bitmask: 0 none, 1 from-side, 2 to-side, 3 both
   import_id       TEXT,                          -- bank FITID for dedupe
   created_at      TEXT NOT NULL,
   updated_at      TEXT NOT NULL,

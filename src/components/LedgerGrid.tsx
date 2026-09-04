@@ -13,6 +13,7 @@ import {
   type ValueParserParams,
 } from "ag-grid-community";
 import type { Account, Category, LedgerRow } from "../shared/types";
+import { isReconciledForAccount, isReconciledEitherSide } from "../core/reconcile";
 import { displaySign, formatCents, parseCents } from "../core/money";
 import { categoryDisplayName } from "../core/categories";
 import { CategoryAccountEditor, type CategoryChoice } from "./CategoryAccountEditor";
@@ -84,6 +85,10 @@ interface GridRow {
   splitTooltip: string;
   /** True when this row is an investment trade leg (memo is derived, read-only). */
   isTrade: boolean;
+  /** True when THIS account's side of the transaction is reconciled (green row). */
+  reconciled: boolean;
+  /** True when EITHER side is reconciled (locks date/amount/to-from edits). */
+  reconcileLocked: boolean;
 }
 
 const NO_CATEGORY = "—";
@@ -298,6 +303,8 @@ export function LedgerGrid({
             isForeignSplit: false,
             splitTooltip: "",
             isTrade: false,
+            reconciled: false,
+            reconcileLocked: false,
           };
         }
         const t = r.transaction!;
@@ -318,6 +325,8 @@ export function LedgerGrid({
             !!r.isSplit && t.fromAccountId !== account.id && t.toAccountId !== account.id,
           splitTooltip: splitTooltipFor(r),
           isTrade: !!r.trade,
+          reconciled: isReconciledForAccount(t, account.id),
+          reconcileLocked: isReconciledEitherSide(t),
         };
       }),
     [rows, categoryFor, splitTooltipFor, sign, payeeFor, memoFor, account.openingBalanceDate, account.createdAt]
@@ -331,8 +340,9 @@ export function LedgerGrid({
 
   const columnDefs = useMemo<ColDef<GridRow>[]>(
     () => [
-      // Date is editable for transactions and for the opening row (both sortable).
-      { field: "date", headerName: "Date", editable: true, width: 120, sort: "asc" },
+      // Date is editable for transactions and the opening row, but locked once a
+      // transaction is reconciled.
+      { field: "date", headerName: "Date", editable: (p) => !p.data?.reconcileLocked, width: 120, sort: "asc" },
       {
         field: "payee",
         headerName: "Payee",
@@ -360,9 +370,12 @@ export function LedgerGrid({
       {
         field: "categoryName",
         headerName: "Category",
-        // Not editable for a split viewed on its TO side; double-clicking instead
-        // opens the read-only split viewer (see onCellDoubleClicked).
-        editable: (p) => isTxRow(p) && !p.data?.isForeignSplit,
+        // Not editable for a split viewed on its TO side (opens the read-only
+        // viewer instead), nor for a reconciled TRANSFER (any change would alter
+        // the locked counterparty). A reconciled non-transfer stays editable
+        // (category only — transfer accounts are hidden in the picker).
+        editable: (p) =>
+          isTxRow(p) && !p.data?.isForeignSplit && !(p.data?.reconcileLocked && p.data?.isTransfer),
         width: 150,
         // Hovering a split row's Category cell lists the legs.
         tooltipValueGetter: (p) => (p.data?.isSplit ? p.data.splitTooltip : undefined),
@@ -375,6 +388,9 @@ export function LedgerGrid({
           accounts: otherAccountsRef.current,
           // Preselect the row's current category/transfer/split in the list.
           initialValue: initialEditorValue(p.data.id),
+          // Reconciled rows: keep category editable but hide transfer accounts so
+          // the counterparty can't be changed (locked when either side is reconciled).
+          hideAccounts: !!p.data.reconcileLocked,
           // Which categories are offered is driven by the NORMALIZED (stored)
           // sign, not the display sign: a stored positive => income/both, a
           // stored negative => expense/both. For liability accounts the display
@@ -391,8 +407,9 @@ export function LedgerGrid({
         field: "signedAmountCents",
         headerName: "Amount",
         // Editable for transactions and the opening-balance row, but NOT for a
-        // split viewed on its TO side (counterparty) — edit it from the owner.
-        editable: (p: { data?: GridRow }) => !p.data?.isForeignSplit,
+        // split viewed on its TO side (counterparty) — edit it from the owner —
+        // and NOT once reconciled.
+        editable: (p: { data?: GridRow }) => !p.data?.isForeignSplit && !p.data?.reconcileLocked,
         width: 130,
         type: "rightAligned",
         valueFormatter: money,
@@ -571,6 +588,7 @@ export function LedgerGrid({
           onSelectionChangeRef.current?.(ids);
         }}
         getRowId={(p) => p.data.id}
+        getRowClass={(p) => (p.data?.reconciled ? "row-reconciled" : undefined)}
         rowSelection="multiple"
         isRowSelectable={(node) => !node.data?.isOpening}
         suppressRowClickSelection={false}

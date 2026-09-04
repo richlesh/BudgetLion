@@ -67,6 +67,7 @@ interface TransactionRow {
   to_account_id: string | null;
   category_id: string | null;
   cleared: number;
+  reconciled: number;
   import_id: string | null;
   created_at: string;
   updated_at: string;
@@ -106,6 +107,7 @@ function toTransaction(r: TransactionRow): Transaction {
     toAccountId: r.to_account_id,
     categoryId: r.category_id,
     cleared: r.cleared as ClearedState,
+    reconciled: r.reconciled ?? 0,
     importId: r.import_id,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -302,6 +304,7 @@ export function createTransaction(input: NewTransactionInput): Transaction {
     // Split transactions carry no single inline category; the legs hold the detail.
     category_id: isSplit ? null : input.categoryId ?? null,
     cleared: input.cleared ?? ClearedState.Uncleared,
+    reconciled: 0,
     import_id: input.importId ?? null,
     created_at: ts,
     updated_at: ts,
@@ -310,10 +313,10 @@ export function createTransaction(input: NewTransactionInput): Transaction {
   const insertTx = db.prepare(
     `INSERT INTO transactions
        (id, date, payee, memo, amount_cents, from_account_id, to_account_id,
-        category_id, cleared, import_id, created_at, updated_at, deleted_at)
+        category_id, cleared, reconciled, import_id, created_at, updated_at, deleted_at)
      VALUES
        (@id, @date, @payee, @memo, @amount_cents, @from_account_id, @to_account_id,
-        @category_id, @cleared, @import_id, @created_at, @updated_at, @deleted_at)`
+        @category_id, @cleared, @reconciled, @import_id, @created_at, @updated_at, @deleted_at)`
   );
   const run = db.transaction(() => {
     insertTx.run(row);
@@ -488,7 +491,7 @@ function assertNotReconciled(db: ReturnType<typeof getDb>, ids: string[]): void 
   const row = db
     .prepare(
       `SELECT COUNT(*) AS n FROM transactions
-        WHERE deleted_at IS NULL AND cleared = ${ClearedState.Reconciled} AND id IN (${placeholders})`
+        WHERE deleted_at IS NULL AND reconciled != 0 AND id IN (${placeholders})`
     )
     .get(...ids) as { n: number };
   if (row.n > 0) {
@@ -496,15 +499,26 @@ function assertNotReconciled(db: ReturnType<typeof getDb>, ids: string[]): void 
   }
 }
 
-/** Set the reconciled flag (cleared = Reconciled or Uncleared) on transactions. */
-export function setTransactionsReconciled(ids: string[], reconciled: boolean): void {
+/**
+ * Set or clear the reconciled bit for `accountId`'s side of each transaction.
+ * The bit is From (1) when the account is the from-side, To (2) when it's the
+ * to-side. Transactions where the account is on neither side are skipped.
+ */
+export function setTransactionsReconciled(ids: string[], accountId: string, reconciled: boolean): void {
   if (ids.length === 0) return;
   const db = getDb();
   const ts = now();
-  const cleared = reconciled ? ClearedState.Reconciled : ClearedState.Uncleared;
   withUndo(reconciled ? "Reconcile transactions" : "Un-reconcile transactions", ids, () => {
-    const stmt = db.prepare("UPDATE transactions SET cleared = ?, updated_at = ? WHERE id = ?");
-    for (const id of ids) stmt.run(cleared, ts, id);
+    const sel = db.prepare("SELECT from_account_id, to_account_id, reconciled FROM transactions WHERE id = ?");
+    const upd = db.prepare("UPDATE transactions SET reconciled = ?, updated_at = ? WHERE id = ?");
+    for (const id of ids) {
+      const r = sel.get(id) as { from_account_id: string | null; to_account_id: string | null; reconciled: number } | undefined;
+      if (!r) continue;
+      const bit = r.from_account_id === accountId ? 1 : r.to_account_id === accountId ? 2 : 0;
+      if (bit === 0) continue;
+      const next = reconciled ? (r.reconciled | bit) : (r.reconciled & ~bit);
+      upd.run(next, ts, id);
+    }
   });
 }
 
@@ -521,38 +535,46 @@ export function reconcileAccount(input: ReconcileInput): number {
   let count = 0;
   withUndo(label, input.reconcileIds, () => {
     const created: string[] = [];
+    // Adjustments are created in this account and reconciled on the side they
+    // touch: an inflow (amt >= 0) arrives (to = account => To bit); an outflow
+    // leaves (from = account => From bit).
     const insert = db.prepare(
       `INSERT INTO transactions
          (id, date, payee, memo, amount_cents, from_account_id, to_account_id,
-          category_id, cleared, import_id, created_at, updated_at, deleted_at)
+          category_id, cleared, reconciled, import_id, created_at, updated_at, deleted_at)
        VALUES (@id, @date, @payee, @memo, @amount_cents, @from_account_id, @to_account_id,
-               @category_id, @cleared, NULL, @created_at, @created_at, NULL)`
+               @category_id, 0, @reconciled, NULL, @created_at, @created_at, NULL)`
     );
     for (const a of adjustments) {
       const amt = Math.round(a.amountCents);
       const id = randomUUID();
+      const inflow = amt >= 0;
       insert.run({
         id,
         date: a.date,
         payee: a.description ?? null,
         memo: null,
-        // Inflow (amt > 0) => to this account; outflow => from this account.
         amount_cents: Math.abs(amt),
-        from_account_id: amt < 0 ? input.accountId : null,
-        to_account_id: amt >= 0 ? input.accountId : null,
+        from_account_id: inflow ? null : input.accountId,
+        to_account_id: inflow ? input.accountId : null,
         category_id: a.categoryId ?? null,
-        cleared: ClearedState.Reconciled,
+        // Reconciled on the account's side: To (2) for inflow, From (1) for outflow.
+        reconciled: inflow ? 2 : 1,
         created_at: ts,
       });
       created.push(id);
       count++;
     }
     if (input.reconcileIds.length > 0) {
-      const stmt = db.prepare(
-        `UPDATE transactions SET cleared = ${ClearedState.Reconciled}, updated_at = ? WHERE id = ?`
-      );
+      // OR in the account's side bit for each checked transaction.
+      const sel = db.prepare("SELECT from_account_id, to_account_id, reconciled FROM transactions WHERE id = ?");
+      const upd = db.prepare("UPDATE transactions SET reconciled = ?, updated_at = ? WHERE id = ?");
       for (const id of input.reconcileIds) {
-        stmt.run(ts, id);
+        const r = sel.get(id) as { from_account_id: string | null; to_account_id: string | null; reconciled: number } | undefined;
+        if (!r) continue;
+        const bit = r.from_account_id === input.accountId ? 1 : r.to_account_id === input.accountId ? 2 : 0;
+        if (bit === 0) continue;
+        upd.run(r.reconciled | bit, ts, id);
         count++;
       }
     }
@@ -1715,6 +1737,7 @@ export function recordTrade(input: NewTradeInput): InvestmentTransaction {
         to_account_id: intoAccount ? input.accountId : null,
         category_id: categoryId,
         cleared: ClearedState.Uncleared,
+        reconciled: 0,
         import_id: null,
         created_at: ts,
         updated_at: ts,
@@ -1723,10 +1746,10 @@ export function recordTrade(input: NewTradeInput): InvestmentTransaction {
       db.prepare(
         `INSERT INTO transactions
            (id, date, payee, memo, amount_cents, from_account_id, to_account_id,
-            category_id, cleared, import_id, created_at, updated_at, deleted_at)
+            category_id, cleared, reconciled, import_id, created_at, updated_at, deleted_at)
          VALUES
            (@id, @date, @payee, @memo, @amount_cents, @from_account_id, @to_account_id,
-            @category_id, @cleared, @import_id, @created_at, @updated_at, @deleted_at)`
+            @category_id, @cleared, @reconciled, @import_id, @created_at, @updated_at, @deleted_at)`
       ).run(cashRow);
       return cashRow.id;
     };

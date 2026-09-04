@@ -17,6 +17,14 @@ export enum ClearedState {
   Reconciled = 2,
 }
 
+/**
+ * Per-side reconciled bitmask on `transaction.reconciled` (separate from
+ * `cleared`). A transfer can be reconciled on each side independently:
+ *   0 = not reconciled, 1 = from-account side, 2 = to-account side, 3 = both.
+ * Non-transfers (expense/income) only ever use one bit (the side they touch).
+ */
+export const ReconcileBit = { From: 1, To: 2 } as const;
+
 export interface Account {
   id: string; // UUID
   name: string;
@@ -67,6 +75,8 @@ export interface Transaction {
   toAccountId: string | null;
   categoryId: string | null;
   cleared: ClearedState;
+  /** Per-side reconciled bitmask (see ReconcileBit): 0 none, 1 from, 2 to, 3 both. */
+  reconciled: number;
   importId: string | null; // bank FITID etc., for dedupe
   createdAt: string;
   updatedAt: string;

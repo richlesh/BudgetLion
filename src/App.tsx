@@ -20,6 +20,7 @@ import type {
   PaycheckInput,
 } from "./shared/types";
 import { displaySign, formatCents } from "./core/money";
+import { isReconciledForAccount } from "./core/reconcile";
 import { ledgerToHtml } from "./core/export/html";
 import { LedgerGrid } from "./components/LedgerGrid";
 import type { CategoryChoice } from "./components/CategoryAccountEditor";
@@ -116,6 +117,8 @@ export function App() {
   const [pendingBulkDelete, setPendingBulkDelete] = useState<string[] | null>(null);
   // Currently selected transaction rows in the ledger grid (for menu Delete).
   const [selectedTxIds, setSelectedTxIds] = useState<string[]>([]);
+  // Transaction ids staged for un-reconcile (on the selected account's side), pending confirm.
+  const [pendingUnreconcile, setPendingUnreconcile] = useState<string[] | null>(null);
   // A simple OK-only error dialog message (null = hidden).
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   // De-duplication review: confirmed duplicate pairs + the current index, plus a
@@ -1279,6 +1282,21 @@ export function App() {
               });
             }
           }
+          // "Un-reconcile" — clear THIS account's reconcile bit. Shown when the
+          // clicked row (or any selected row) is reconciled for this account.
+          if (selected) {
+            const sel = info.selectedTransactionIds.length > 1 ? info.selectedTransactionIds : [t.id];
+            const reconciledIds = sel.filter((id) => {
+              const tx = ledger.find((r) => r.transaction?.id === id)?.transaction;
+              return tx ? isReconciledForAccount(tx, selected.id) : false;
+            });
+            if (reconciledIds.length > 0) {
+              items.push({
+                label: reconciledIds.length > 1 ? `Un-reconcile (${reconciledIds.length})` : "Un-reconcile",
+                onClick: () => setPendingUnreconcile(reconciledIds),
+              });
+            }
+          }
         }
       }
       // Bulk actions when more than one transaction row is selected.
@@ -1298,6 +1316,21 @@ export function App() {
     },
     [ledger, seedFromTransaction, buildBulkCategorySubmenu, moveTransaction, accounts, selected]
   );
+
+  // Un-reconcile the staged transactions (clear this account's side bit).
+  const confirmUnreconcile = useCallback(async () => {
+    if (!selected || !pendingUnreconcile || pendingUnreconcile.length === 0) return;
+    const ids = pendingUnreconcile;
+    setPendingUnreconcile(null);
+    try {
+      await window.ledger.setTransactionsReconciled(ids, selected.id, false);
+      await refreshLedger(selected.id);
+      await refreshAccounts();
+      setToast(`Un-reconciled ${ids.length} transaction${ids.length === 1 ? "" : "s"}.`);
+    } catch (e) {
+      setToast(e instanceof Error ? e.message : "Could not un-reconcile.");
+    }
+  }, [selected, pendingUnreconcile, refreshLedger, refreshAccounts]);
 
   const confirmDelete = useCallback(async () => {
     if (!selected || !pendingDeleteId) return;
@@ -1695,6 +1728,20 @@ export function App() {
           confirmLabel="Delete"
           onConfirm={deleteAccountConfirmed}
           onCancel={() => setPendingAccountDelete(null)}
+        />
+      )}
+      {pendingUnreconcile && pendingUnreconcile.length > 0 && (
+        <ConfirmDialog
+          title="Un-reconcile?"
+          message={
+            `This will clear the reconciled flag for ${pendingUnreconcile.length} transaction` +
+            `${pendingUnreconcile.length === 1 ? "" : "s"} on “${selected?.name}”. ` +
+            `They'll become editable and deletable again. Continue?`
+          }
+          confirmLabel="Un-reconcile"
+          destructive={false}
+          onConfirm={confirmUnreconcile}
+          onCancel={() => setPendingUnreconcile(null)}
         />
       )}
       {viewAccount && (

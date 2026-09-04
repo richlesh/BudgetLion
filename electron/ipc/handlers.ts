@@ -217,8 +217,8 @@ export function registerIpcHandlers(): void {
     repo.bulkUpdateTransactions(updates)
   );
   ipcMain.handle(IPC.reconcileAccount, (_e, input: ReconcileInput) => repo.reconcileAccount(input));
-  ipcMain.handle(IPC.setTransactionsReconciled, (_e, ids: string[], reconciled: boolean) =>
-    repo.setTransactionsReconciled(ids, reconciled)
+  ipcMain.handle(IPC.setTransactionsReconciled, (_e, ids: string[], accountId: string, reconciled: boolean) =>
+    repo.setTransactionsReconciled(ids, accountId, reconciled)
   );
 
   // Undo / redo.

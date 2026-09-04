@@ -74,8 +74,8 @@ const api: LedgerApi = {
   bulkUpdateTransactions: (updates: UpdateTransactionInput[]) =>
     ipcRenderer.invoke(IPC.bulkUpdateTransactions, updates),
   reconcileAccount: (input: ReconcileInput) => ipcRenderer.invoke(IPC.reconcileAccount, input),
-  setTransactionsReconciled: (ids: string[], reconciled: boolean) =>
-    ipcRenderer.invoke(IPC.setTransactionsReconciled, ids, reconciled),
+  setTransactionsReconciled: (ids: string[], accountId: string, reconciled: boolean) =>
+    ipcRenderer.invoke(IPC.setTransactionsReconciled, ids, accountId, reconciled),
   undo: () => ipcRenderer.invoke(IPC.undo),
   redo: () => ipcRenderer.invoke(IPC.redo),
   getUndoState: () => ipcRenderer.invoke(IPC.getUndoState),
