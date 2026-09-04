@@ -5,6 +5,7 @@
   --text: #1e1e1e;
   --muted: #6b7075;
   --accent: #0a84ff;
+  color-scheme: light;
 }
 
 body.dark {
@@ -14,6 +15,7 @@ body.dark {
   --text: #e6e6e6;
   --muted: #9aa0a6;
   --accent: #5b8def;
+  color-scheme: dark;
 }
 
 * {
