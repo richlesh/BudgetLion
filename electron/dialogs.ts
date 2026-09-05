@@ -353,6 +353,10 @@ export function buildMenu(mainWin: BrowserWindow): void {
           click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-toggle-forecast"),
         },
         {
+          label: "Category Report…",
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-category-report"),
+        },
+        {
           label: "Net Worth Report…",
           click: () => BrowserWindow.getFocusedWindow()?.webContents.send("menu-net-worth-report"),
         },

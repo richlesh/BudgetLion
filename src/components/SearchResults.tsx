@@ -308,8 +308,21 @@ export function SearchResults({ data, criteria, dark, onClose, onReload, onToast
           <h3 style={{ margin: 0 }}>Search Results</h3>
           <span className="account-type">{total} match{total === 1 ? "" : "es"}</span>
           <span style={{ flex: 1 }} />
-          <button className="secondary" onClick={onClose}>
-            Close
+          <button className="secondary icon-btn" onClick={onClose} title="Close" aria-label="Close">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              style={{ display: "block" }}
+            >
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
           </button>
         </div>
 

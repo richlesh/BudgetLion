@@ -139,7 +139,26 @@ export function RecurringRulesDialog({ accounts, categories, initialSeed, onClos
   return (
     <div className="dialog-backdrop" onClick={onClose}>
       <div className="dialog" style={{ width: 620 }} onClick={(e) => e.stopPropagation()}>
-        <h3>Recurring Rules</h3>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <h3 style={{ margin: 0 }}>Recurring Rules</h3>
+          <span style={{ flex: 1 }} />
+          <button className="secondary icon-btn" onClick={onClose} title="Close" aria-label="Close">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              style={{ display: "block" }}
+            >
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
 
         <div style={{ display: "flex", gap: 16 }}>
           {/* Existing rules list */}
@@ -263,12 +282,6 @@ export function RecurringRulesDialog({ accounts, categories, initialSeed, onClos
               <button onClick={save}>{editingId ? "Update" : "Add"} Rule</button>
             </div>
           </div>
-        </div>
-
-        <div className="dialog-actions">
-          <button className="secondary" onClick={onClose}>
-            Close
-          </button>
         </div>
       </div>
     </div>

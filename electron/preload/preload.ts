@@ -192,6 +192,9 @@ const api: LedgerApi = {
   onMenuNetWorthReport: (cb: () => void) => {
     ipcRenderer.on("menu-net-worth-report", () => cb());
   },
+  onMenuCategoryReport: (cb: () => void) => {
+    ipcRenderer.on("menu-category-report", () => cb());
+  },
   onMenuRecurring: (cb: () => void) => {
     ipcRenderer.on("menu-recurring", () => cb());
   },

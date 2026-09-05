@@ -108,8 +108,41 @@ export function NetWorthReport({ onClose }: Props) {
           <h3 style={{ margin: 0 }}>Net Worth Report</h3>
           <span className="account-type">As of {asOf}</span>
           <span style={{ flex: 1 }} />
-          <button className="secondary" onClick={printReport}>Print…</button>
-          <button className="secondary" onClick={onClose}>Close</button>
+          <div style={{ display: "flex", flexWrap: "nowrap", gap: 8, alignItems: "center" }}>
+            <button className="secondary" onClick={printReport} title="Print…" aria-label="Print">
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                style={{ display: "block" }}
+              >
+                <polyline points="6 9 6 2 18 2 18 9" />
+                <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+                <rect x="6" y="14" width="12" height="8" />
+              </svg>
+            </button>
+            <button className="secondary" onClick={onClose} title="Close" aria-label="Close">
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                style={{ display: "block" }}
+              >
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         <div style={{ maxHeight: "70vh", overflow: "auto" }}>

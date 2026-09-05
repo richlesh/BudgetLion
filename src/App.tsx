@@ -33,6 +33,7 @@ import { NewInvestmentDialog } from "./components/NewInvestmentDialog";
 import { HoldingsPanel } from "./components/HoldingsPanel";
 import { AssetHoldingsPanel } from "./components/AssetHoldingsPanel";
 import { NetWorthReport } from "./components/NetWorthReport";
+import { CategoryReport } from "./components/CategoryReport";
 import { ReconcileDialog } from "./components/ReconcileDialog";
 import type { ReconcileInput } from "./shared/types";
 import { AssetRecordDialog, type AssetRecordSubmit } from "./components/AssetRecordDialog";
@@ -72,6 +73,7 @@ export function App() {
   // Asset-account record entry (Buy/Sell/Lost) + the account's held items.
   const [showAssetRecord, setShowAssetRecord] = useState(false);
   const [showNetWorth, setShowNetWorth] = useState(false);
+  const [showCategoryReport, setShowCategoryReport] = useState(false);
   const [showReconcile, setShowReconcile] = useState(false);
   const [heldAssets, setHeldAssets] = useState<Asset[]>([]);
   const [holdingsReloadKey, setHoldingsReloadKey] = useState(0);
@@ -501,6 +503,7 @@ export function App() {
     window.ledger.onMenuToggleCharts(() => setShowCharts((v) => !v));
     window.ledger.onMenuToggleForecast(() => setShowProjection((v) => !v));
     window.ledger.onMenuNetWorthReport(() => setShowNetWorth(true));
+    window.ledger.onMenuCategoryReport(() => setShowCategoryReport(true));
     window.ledger.onMenuRecurring(() => {
       setRecurringSeed(null);
       setShowRecurring(true);
@@ -1444,52 +1447,238 @@ export function App() {
             <div className="toolbar">
               <h2>{selected.name}</h2>
               <button
-                className={"secondary" + (showCharts ? " active-toggle" : "")}
+                className={"secondary icon-btn" + (showCharts ? " active-toggle" : "")}
                 onClick={() => setShowCharts((v) => !v)}
+                title="Charts"
+                aria-label="Charts"
               >
-                Charts
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  style={{ display: "block" }}
+                >
+                  <path d="M21.21 15.89A10 10 0 1 1 8 2.83" />
+                  <path d="M22 12A10 10 0 0 0 12 2v10z" />
+                </svg>
               </button>
               <button
-                className={"secondary" + (showProjection ? " active-toggle" : "")}
+                className={"secondary icon-btn" + (showProjection ? " active-toggle" : "")}
                 onClick={() => setShowProjection((v) => !v)}
+                title="Forecast"
+                aria-label="Forecast"
               >
-                Forecast
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  style={{ display: "block" }}
+                >
+                  <line x1="3" y1="21" x2="21" y2="21" />
+                  <line x1="3" y1="21" x2="3" y2="3" />
+                  <polyline points="5 15 10 10 14 13 20 6" />
+                  <polyline points="20 10 20 6 16 6" />
+                </svg>
               </button>
               <button
-                className="secondary"
+                className="secondary icon-btn"
+                title="Category Report…"
+                aria-label="Category Report"
+                onClick={() => setShowCategoryReport(true)}
+              >
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  style={{ display: "block" }}
+                >
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                  <line x1="8" y1="13" x2="16" y2="13" />
+                  <line x1="8" y1="17" x2="16" y2="17" />
+                  <line x1="8" y1="9" x2="10" y2="9" />
+                </svg>
+              </button>
+              <button
+                className="secondary icon-btn"
+                title="Net Worth Report…"
+                aria-label="Net Worth Report"
+                onClick={() => setShowNetWorth(true)}
+              >
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  style={{ display: "block" }}
+                >
+                  <ellipse cx="12" cy="5" rx="7" ry="2.5" />
+                  <path d="M5 5v4c0 1.38 3.13 2.5 7 2.5s7-1.12 7-2.5V5" />
+                  <path d="M5 9v4c0 1.38 3.13 2.5 7 2.5s7-1.12 7-2.5V9" />
+                  <path d="M5 13v4c0 1.38 3.13 2.5 7 2.5s7-1.12 7-2.5v-4" />
+                </svg>
+              </button>
+              <button className="secondary icon-btn" onClick={doPrint} title="Print…" aria-label="Print">
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  style={{ display: "block" }}
+                >
+                  <polyline points="6 9 6 2 18 2 18 9" />
+                  <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+                  <rect x="6" y="14" width="12" height="8" />
+                </svg>
+              </button>
+              <button
+                className="secondary icon-btn"
+                title="Import transactions…"
+                aria-label="Import transactions"
                 onClick={() =>
                   selected.type === "investment"
                     ? setShowInvestmentImport(true)
                     : setShowImportDialog(true)
                 }
               >
-                Import…
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  style={{ display: "block" }}
+                >
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
               </button>
-              <button className="secondary" onClick={() => setShowExportDialog(true)}>
-                Export…
-              </button>
-              <button className="secondary" onClick={doPrint}>
-                Print…
+              <button
+                className="secondary icon-btn"
+                title="Export transactions…"
+                aria-label="Export transactions"
+                onClick={() => setShowExportDialog(true)}
+              >
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  style={{ display: "block" }}
+                >
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 8 12 3 17 8" />
+                  <line x1="12" y1="3" x2="12" y2="15" />
+                </svg>
               </button>
               {selected.type === "asset" ? (
-                <button onClick={() => void openAssetRecord()}>
+                <button title="Record a new asset" onClick={() => void openAssetRecord()}>
                   + New Asset
                 </button>
               ) : (
                 <>
                   <button
+                    className="icon-btn"
+                    title="Add a new transaction"
+                    aria-label="New transaction"
                     onClick={() => {
                       setInvTxMode("choose");
                       setShowTxDialog(true);
                     }}
                   >
-                    + New Transaction
+                    <svg
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      style={{ display: "block" }}
+                    >
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="8" x2="12" y2="16" />
+                      <line x1="8" y1="12" x2="16" y2="12" />
+                    </svg>
                   </button>
-                  <button className="secondary" onClick={() => setShowPaycheckDialog(true)}>
-                    + New Paycheck
+                  <button
+                    className="secondary icon-btn"
+                    title="Enter a paycheck"
+                    aria-label="New paycheck"
+                    onClick={() => setShowPaycheckDialog(true)}
+                  >
+                    <svg
+                      width="16"
+                      height="16"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      style={{ display: "block" }}
+                    >
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="6" x2="12" y2="18" />
+                      <path d="M15 9a3 3 0 0 0-3-2h-1a2.5 2.5 0 0 0 0 5h2a2.5 2.5 0 0 1 0 5h-1a3 3 0 0 1-3-2" />
+                    </svg>
                   </button>
                 </>
               )}
+              <button
+                className="secondary icon-btn"
+                style={{ marginLeft: "auto" }}
+                title="Reconcile transactions…"
+                aria-label="Reconcile"
+                onClick={() => setShowReconcile(true)}
+              >
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  style={{ display: "block" }}
+                >
+                  <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                  <polyline points="22 4 12 14.01 9 11.01" />
+                </svg>
+              </button>
             </div>
             {selected.type === "investment" && (
               <HoldingsPanel account={selected} reloadKey={holdingsReloadKey} dark={dark} />
@@ -1607,6 +1796,7 @@ export function App() {
         />
       )}
       {showNetWorth && <NetWorthReport onClose={() => setShowNetWorth(false)} />}
+      {showCategoryReport && <CategoryReport onClose={() => setShowCategoryReport(false)} />}
       {showReconcile && selected && (
         <ReconcileDialog
           account={selected}
