@@ -66,6 +66,22 @@ jobs:
       - name: Build renderer + main
         run: npm run build
 
+      - name: Clear electron-builder NSIS cache
+        # Works around intermittent "Plugin not found, cannot call
+        # StdUtils::TestParameter" errors caused by a corrupted/incomplete NSIS
+        # toolchain in the electron-builder cache. Removing it forces a clean
+        # re-download of NSIS and its bundled plugins (StdUtils, etc.).
+        # See electron-userland/electron-builder#2797, #3243.
+        shell: pwsh
+        run: |
+          $cache = Join-Path $env:LOCALAPPDATA "electron-builder\Cache\nsis"
+          if (Test-Path $cache) {
+            Write-Host "Removing NSIS cache at $cache"
+            Remove-Item -Recurse -Force $cache
+          } else {
+            Write-Host "No NSIS cache found at $cache (nothing to clear)"
+          }
+
       - name: Build Windows ${{ matrix.arch }} installer
         run: ./node_modules/.bin/electron-builder --win --${{ matrix.arch }} --publish never
 
