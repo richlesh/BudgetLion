@@ -1796,7 +1796,12 @@ export function App() {
         />
       )}
       {showNetWorth && <NetWorthReport onClose={() => setShowNetWorth(false)} />}
-      {showCategoryReport && <CategoryReport onClose={() => setShowCategoryReport(false)} />}
+      {showCategoryReport && (
+        <CategoryReport
+          initialAccountId={selected?.id ?? null}
+          onClose={() => setShowCategoryReport(false)}
+        />
+      )}
       {showReconcile && selected && (
         <ReconcileDialog
           account={selected}

@@ -29,6 +29,8 @@ A cross-platform personal-finance ledger with double-entry accounting, built wit
 - **Undo / Redo** — Session-scoped, transaction-level undo/redo of adds, edits, deletes, and split changes (row-level snapshot journal; capped at 50 steps, cleared when the database changes)
 - **Resizable, persistent columns** — Column widths are saved between sessions
 - **Movable sidebar divider** — Drag to resize the accounts panel; the width persists
+- **Icon toolbar** — Quick-access icon buttons for Charts, Forecast, Category Report, Net Worth Report, Print, Import, Export, New Transaction, New Paycheck, and Reconcile (each with a tooltip)
+- **Reconcile** — A Reconcile button on the ledger toolbar opens the reconciliation dialog for the selected account
 
 ### Split Transactions
 - Split a single transaction across multiple categories and/or transfer legs
@@ -86,6 +88,10 @@ A cross-platform personal-finance ledger with double-entry accounting, built wit
 - **View → Net Worth Report** — A one-page summary grouping accounts into Assets and Liabilities, with per-account values, subtotals, and total net worth (cash + holdings), sorted by account type then name
 - **Printable** — Print the report to paper or PDF
 
+### Category Report
+- **View → Category Report** — Pick an income/expense category, an account (or **All Accounts**, defaulting to the currently selected account), and an optional date range to list every matching transaction (including split legs) with a total
+- **Printable** — Print the report to paper or PDF
+
 ### De-Duplicate Transactions
 - Finds likely duplicate transactions in an account (same date, amount, and from/to accounts — transposed matches allowed for transfers)
 - Similar payees/memos judged by the configured AI when available, or an exact/empty-field fallback otherwise
@@ -98,7 +104,9 @@ A cross-platform personal-finance ledger with double-entry accounting, built wit
 - Right-click actions and the Split editor work directly in Search results; scoping to a single account groups results under just that account
 
 ### Import & Export
-- **Import transactions** — CSV (configurable column mapping), OFX/QFX, and QIF
+- **Import transactions** — CSV (configurable column mapping), OFX/QFX, QIF, and **bank-statement PDF**
+- **PDF statement import** — Extracts the PDF text locally and detects transactions with a deterministic heuristic parser (dates, amounts, and statement sections); you review them in an **editable preview** where you can fix any field and add rows before importing. Optionally, **Extract with AI** sends the statement text to your configured provider and returns the transactions for the same review step (opt-in; scanned/image-only PDFs have no text to read)
+- **Auto-categorize on import** — Imported transactions are assigned a category by matching a prior transaction with the same payee (most recent wins); otherwise they stay uncategorized
 - **Statement sign convention** — Optional "loan/credit-card conventions" toggle inverts amounts on import (defaults on for liability accounts)
 - **Import safety check** — Warns after preview if the amount-sign distribution looks reversed for the account type
 - **Duplicate detection** on import via bank FITID / synthesized keys

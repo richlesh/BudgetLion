@@ -1,14 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type {
   Account,
   CsvColumnMapping,
   ImportFormat,
   ParsedRow,
 } from "../shared/types";
-import { formatCents, isLiability } from "../core/money";
+import { formatCents, isLiability, parseCents } from "../core/money";
 import { parseCsvGrid, guessMapping, csvToRows } from "../core/import/csv";
 import { ofxToRows } from "../core/import/ofx";
 import { qifToRows } from "../core/import/qif";
+import { parseStatementText } from "../core/import/pdf";
 import { detectFormat, dedupeKey, looksLikeTransferByDescription } from "../core/import";
 import { ConfirmDialog } from "./ConfirmDialog";
 
@@ -19,7 +20,7 @@ interface Props {
   onDone: (importedCount: number) => void;
 }
 
-type Stage = "pick" | "map" | "resolve" | "resolveDesc" | "preview";
+type Stage = "pick" | "map" | "resolve" | "resolveDesc" | "preview" | "pdfEdit";
 
 // Sentinel stored in descResolutions to mean "the user chose Skip".
 const SKIP = "__skip__";
@@ -33,6 +34,18 @@ export function ImportDialog({ account, accounts, onCancel, onDone }: Props) {
   const [rows, setRows] = useState<ParsedRow[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // PDF import: the raw extracted text (for the AI extraction path) and whether
+  // to invert statement-convention amounts (default on for liability accounts).
+  const [pdfText, setPdfText] = useState<string>("");
+  const [invertPdf, setInvertPdf] = useState<boolean>(isLiability(account.type));
+  // True while an AI extraction request is in flight.
+  const [aiBusy, setAiBusy] = useState(false);
+  // Stable per-row keys for the editable PDF grid, kept in sync with `rows`.
+  // React reuses DOM nodes by key; without a stable key the uncontrolled amount
+  // input would keep a stale value when a row is removed. Monotonic id via ref.
+  const rowKeySeq = useRef(0);
+  const [rowKeys, setRowKeys] = useState<string[]>([]);
+  const freshKeys = (n: number) => Array.from({ length: n }, () => `r${rowKeySeq.current++}`);
   // Resolution choices for transfer Account IDs that didn't auto-match: code -> accountId ("" = skip).
   const [resolutions, setResolutions] = useState<Record<string, string>>({});
   // Per-row resolutions for transfers detected by description (no Account ID):
@@ -48,10 +61,10 @@ export function ImportDialog({ account, accounts, onCancel, onDone }: Props) {
   // index into `rows` (previewRows preserves that order 1:1).
   const [checked, setChecked] = useState<Set<number>>(new Set());
 
-  // Default every row to checked whenever the parsed rows change.
-  useEffect(() => {
-    setChecked(new Set(rows.map((_, i) => i)));
-  }, [rows]);
+  // `checked` is initialized explicitly whenever a fresh set of rows is loaded
+  // (after parsing a file / mapping / PDF / AI extraction). It is intentionally
+  // NOT reset on every `rows` change, so per-row edits and adding a row preserve
+  // the user's existing check state.
 
   // Accounts other than the import target, that could be a transfer counterparty.
   const otherAccounts = useMemo(
@@ -117,8 +130,89 @@ export function ImportDialog({ account, accounts, onCancel, onDone }: Props) {
         return;
       }
       setRows(parsed);
+      setChecked(new Set(parsed.map((_, i) => i)));
       setStage(nextStageAfterParse(parsed));
     }
+  }
+
+  // Pick a PDF statement, extract its text, and run the deterministic heuristic
+  // parser. Rows come back in statement convention; the editable preview lets the
+  // user fix/add rows and toggle the invert before importing.
+  async function pickPdf() {
+    setError(null);
+    const opened = await window.ledger.openImportPdf();
+    if (!opened) return;
+    setFileName(opened.fileName);
+    setFormat("pdf");
+    setPdfText(opened.text);
+    if (!opened.text || opened.text.trim() === "") {
+      setRows([]);
+      setRowKeys([]);
+      setChecked(new Set());
+      setError(
+        "No text could be extracted from this PDF. It may be a scanned/image-only " +
+          "statement. You can still add rows manually, or try “Extract with AI”."
+      );
+      setStage("pdfEdit");
+      return;
+    }
+    const { rows: parsed } = parseStatementText(opened.text);
+    setRows(parsed);
+    setRowKeys(freshKeys(parsed.length));
+    setChecked(new Set(parsed.map((_, i) => i)));
+    if (parsed.length === 0) {
+      setError(
+        "Couldn’t detect transactions automatically. Add rows manually, or try " +
+          "“Extract with AI”."
+      );
+    }
+    setStage("pdfEdit");
+  }
+
+  // Opt-in AI extraction: send the extracted PDF text to the configured provider.
+  async function runAiExtract() {
+    if (!pdfText.trim()) {
+      setError("There is no statement text to send to the AI.");
+      return;
+    }
+    setAiBusy(true);
+    setError(null);
+    try {
+      const res = await window.ledger.extractTransactionsAI(pdfText, isLiability(account.type));
+      if (!res.ok) {
+        setError(res.error || "AI extraction failed.");
+      } else if (res.rows.length === 0) {
+        setError("The AI didn’t return any transactions.");
+      } else {
+        setRows(res.rows);
+        setRowKeys(freshKeys(res.rows.length));
+        setChecked(new Set(res.rows.map((_, i) => i)));
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
+  // ---- Editable-row helpers (PDF preview) ----
+  function updateRowField(index: number, field: "date" | "payee", value: string) {
+    setRows((prev) =>
+      prev.map((r, i) => (i === index ? { ...r, [field]: field === "payee" ? (value || null) : value } : r))
+    );
+  }
+  function updateRowAmount(index: number, value: string) {
+    const cents = parseCents(value);
+    if (cents == null) return; // ignore unparseable input; keep prior value
+    setRows((prev) => prev.map((r, i) => (i === index ? { ...r, amountCents: cents } : r)));
+  }
+  function addRow() {
+    const today = new Date().toISOString().slice(0, 10);
+    // The new row's index is the current length; check it by default without
+    // disturbing the existing rows' check state.
+    setChecked((prev) => new Set(prev).add(rows.length));
+    setRows((prev) => [...prev, { date: today, payee: null, memo: null, amountCents: 0, importId: null }]);
+    setRowKeys((prev) => [...prev, `r${rowKeySeq.current++}`]);
   }
 
   function applyMapping() {
@@ -130,6 +224,7 @@ export function ImportDialog({ account, accounts, onCancel, onDone }: Props) {
     }
     setError(null);
     setRows(parsed);
+    setChecked(new Set(parsed.map((_, i) => i)));
     setStage(nextStageAfterParse(parsed));
   }
 
@@ -238,7 +333,14 @@ export function ImportDialog({ account, accounts, onCancel, onDone }: Props) {
 
   // Resolved rows the user has kept checked, in original order.
   function checkedResolvedRows(): ParsedRow[] {
-    return resolveRows(rows).filter((_, i) => checked.has(i));
+    const kept = resolveRows(rows).filter((_, i) => checked.has(i));
+    // PDF rows come back in statement convention; flip to internal convention
+    // when the invert toggle is on (default for liability accounts), mirroring
+    // how the CSV path applies mapping.invertAmounts.
+    if (format === "pdf" && invertPdf) {
+      return kept.map((r) => ({ ...r, amountCents: -r.amountCents }));
+    }
+    return kept;
   }
 
   async function commit() {
@@ -291,7 +393,7 @@ export function ImportDialog({ account, accounts, onCancel, onDone }: Props) {
     <div className="dialog-backdrop" onClick={onCancel}>
       <div
         className="dialog"
-        style={{ width: stage === "preview" ? 640 : 420 }}
+        style={{ width: stage === "preview" || stage === "pdfEdit" ? 640 : 420 }}
         onClick={(e) => e.stopPropagation()}
       >
         <h3>Import into “{account.name}”</h3>
@@ -306,6 +408,11 @@ export function ImportDialog({ account, accounts, onCancel, onDone }: Props) {
               will be added to this account; duplicates are skipped automatically.
             </p>
             <button onClick={pickFile}>Choose File…</button>
+            <p style={{ fontSize: 13, color: "var(--muted)", marginTop: 14 }}>
+              Or import from a statement <strong>PDF</strong>. Transactions are detected
+              automatically; you can review, edit, and add rows before importing.
+            </p>
+            <button className="secondary" onClick={pickPdf}>Choose PDF…</button>
           </>
         )}
 
@@ -437,6 +544,113 @@ export function ImportDialog({ account, accounts, onCancel, onDone }: Props) {
           </>
         )}
 
+        {stage === "pdfEdit" && (
+          <>
+            <div className="account-type">
+              {fileName} · PDF · {rows.length} transaction{rows.length === 1 ? "" : "s"} detected
+            </div>
+            <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
+              <input
+                type="checkbox"
+                checked={invertPdf}
+                onChange={(e) => setInvertPdf(e.target.checked)}
+                style={{ width: "auto" }}
+              />
+              Amounts use loan / credit-card conventions
+            </label>
+            <div className="account-type" style={{ marginTop: -2 }}>
+              Charges are shown as positive and payments/credits as negative on the
+              statement; leave this checked to flip them for a {account.type.replace("_", " ")} account.
+            </div>
+
+            <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "8px 0" }}>
+              <button className="secondary" onClick={addRow}>+ Add row</button>
+              <span style={{ flex: 1 }} />
+              <button className="secondary" onClick={runAiExtract} disabled={aiBusy} title="Send the statement text to your configured AI to extract transactions">
+                {aiBusy ? "Extracting…" : "Extract with AI"}
+              </button>
+            </div>
+
+            <div style={{ maxHeight: 300, overflow: "auto", border: "1px solid var(--border)", borderRadius: 6 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead>
+                  <tr>
+                    <th style={{ ...thStyle, width: 28, textAlign: "center" }}>
+                      <input
+                        type="checkbox"
+                        aria-label="Select all"
+                        checked={rows.length > 0 && checked.size === rows.length}
+                        ref={(el) => {
+                          if (el) el.indeterminate = checked.size > 0 && checked.size < rows.length;
+                        }}
+                        onChange={(e) =>
+                          setChecked(e.target.checked ? new Set(rows.map((_, i) => i)) : new Set())
+                        }
+                        style={{ width: "auto" }}
+                      />
+                    </th>
+                    <th style={thStyle}>Date</th>
+                    <th style={thStyle}>Payee</th>
+                    <th style={{ ...thStyle, textAlign: "right" }}>Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r, i) => (
+                    <tr key={rowKeys[i] ?? i}>
+                      <td style={{ ...tdStyle, textAlign: "center" }}>
+                        <input
+                          type="checkbox"
+                          aria-label="Import this row"
+                          checked={checked.has(i)}
+                          onChange={(e) =>
+                            setChecked((prev) => {
+                              const next = new Set(prev);
+                              if (e.target.checked) next.add(i);
+                              else next.delete(i);
+                              return next;
+                            })
+                          }
+                          style={{ width: "auto" }}
+                        />
+                      </td>
+                      <td style={tdStyle}>
+                        <input
+                          type="date"
+                          value={r.date}
+                          onChange={(e) => updateRowField(i, "date", e.target.value)}
+                          style={editInput}
+                        />
+                      </td>
+                      <td style={tdStyle}>
+                        <input
+                          type="text"
+                          value={r.payee ?? ""}
+                          placeholder="(description)"
+                          onChange={(e) => updateRowField(i, "payee", e.target.value)}
+                          style={editInput}
+                        />
+                      </td>
+                      <td style={{ ...tdStyle, textAlign: "right" }}>
+                        <input
+                          key={`amt-${rowKeys[i] ?? i}`}
+                          type="text"
+                          defaultValue={(r.amountCents / 100).toFixed(2)}
+                          onBlur={(e) => updateRowAmount(i, e.target.value)}
+                          style={{ ...editInput, textAlign: "right", width: 90 }}
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="account-type" style={{ marginTop: 6 }}>
+              Review and edit before importing. Amounts are shown in statement
+              convention; the invert toggle above is applied on import.
+            </div>
+          </>
+        )}
+
         {stage === "preview" && (
           <>
             <div className="account-type">
@@ -523,6 +737,11 @@ export function ImportDialog({ account, accounts, onCancel, onDone }: Props) {
               {busy ? "Importing…" : `Import ${checked.size} transaction(s)`}
             </button>
           )}
+          {stage === "pdfEdit" && (
+            <button onClick={attemptCommit} disabled={busy || aiBusy || checked.size === 0}>
+              {busy ? "Importing…" : `Import ${checked.size} transaction(s)`}
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -561,4 +780,11 @@ const thStyle: React.CSSProperties = {
 const tdStyle: React.CSSProperties = {
   padding: "4px 8px",
   borderBottom: "1px solid var(--border)",
+};
+
+const editInput: React.CSSProperties = {
+  width: "100%",
+  boxSizing: "border-box",
+  padding: "2px 4px",
+  fontSize: 12,
 };

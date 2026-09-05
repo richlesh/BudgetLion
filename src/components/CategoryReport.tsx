@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AggregateData, Category, TransactionSplit } from "../shared/types";
+import type { AggregateData, Account, Category, TransactionSplit } from "../shared/types";
 import { categoryOptions, categoryDisplayName } from "../core/categories";
 import { formatCents } from "../core/money";
 
 interface Props {
+  /** Prefill the account scope (e.g. the currently-selected account), or null for All. */
+  initialAccountId?: string | null;
   onClose: () => void;
 }
 
@@ -19,16 +21,18 @@ interface ReportRow {
 
 /**
  * Collect the report rows for a single category over an (optional) inclusive
- * date range. A transaction contributes a row when its own categoryId matches;
- * a split transaction contributes one row per matching category leg. Amounts are
- * signed by direction: income is positive (money in via toAccount), expense is
- * negative (money out via fromAccount).
+ * date range, optionally scoped to a single account. A transaction contributes a
+ * row when its own categoryId matches; a split transaction contributes one row
+ * per matching category leg. Amounts are signed by direction: income is positive
+ * (money in via toAccount), expense is negative (money out via fromAccount).
+ * When `accountId` is set, only rows drawn from/deposited to that account are kept.
  */
 function collectRows(
   data: AggregateData,
   categoryId: string,
   startDate: string,
-  endDate: string
+  endDate: string,
+  accountId: string
 ): ReportRow[] {
   if (!categoryId) return [];
   const acctName = new Map(data.accounts.map((a) => [a.id, a.name]));
@@ -56,6 +60,7 @@ function collectRows(
       // Direction: income when it lands in an account (toAccountId), else expense.
       const isIncome = tx.toAccountId != null && tx.fromAccountId == null;
       const acctId = isIncome ? tx.toAccountId : tx.fromAccountId;
+      if (accountId && acctId !== accountId) continue; // scope to one account
       rows.push({
         id: tx.id,
         date: tx.date,
@@ -71,6 +76,7 @@ function collectRows(
     // owning account's perspective: negative = outflow (expense), positive =
     // inflow (income). We report that sign directly.
     const ownerAcctId = tx.fromAccountId ?? tx.toAccountId;
+    if (accountId && ownerAcctId !== accountId) continue; // scope to one account
     const ownerName = (ownerAcctId && acctName.get(ownerAcctId)) || "";
     for (const leg of matchingLegs) {
       rows.push({
@@ -93,9 +99,10 @@ function collectRows(
  * then list every matching transaction (including split legs) with a total.
  * Printable.
  */
-export function CategoryReport({ onClose }: Props) {
+export function CategoryReport({ initialAccountId = null, onClose }: Props) {
   const [data, setData] = useState<AggregateData | null>(null);
   const [categoryId, setCategoryId] = useState("");
+  const [accountId, setAccountId] = useState<string>(initialAccountId ?? "");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
 
@@ -105,10 +112,17 @@ export function CategoryReport({ onClose }: Props) {
 
   const categories: Category[] = data?.categories ?? [];
   const catChoices = useMemo(() => categoryOptions(categories), [categories]);
+  const accounts: Account[] = useMemo(
+    () =>
+      (data?.accounts ?? [])
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })),
+    [data]
+  );
 
   const rows = useMemo(
-    () => (data ? collectRows(data, categoryId, startDate, endDate) : []),
-    [data, categoryId, startDate, endDate]
+    () => (data ? collectRows(data, categoryId, startDate, endDate, accountId) : []),
+    [data, categoryId, startDate, endDate, accountId]
   );
   const total = useMemo(() => rows.reduce((s, r) => s + r.amountCents, 0), [rows]);
 
@@ -117,6 +131,10 @@ export function CategoryReport({ onClose }: Props) {
     const c = categories.find((x) => x.id === categoryId);
     return c ? categoryDisplayName(c, categories) : "";
   }, [categoryId, categories]);
+  const accountLabel = useMemo(() => {
+    if (!accountId) return "All Accounts";
+    return accounts.find((a) => a.id === accountId)?.name ?? "All Accounts";
+  }, [accountId, accounts]);
 
   function printReport() {
     if (!categoryId) return;
@@ -142,7 +160,7 @@ export function CategoryReport({ onClose }: Props) {
         .total td{font-weight:700;border-top:2px solid #999}
       </style></head><body>
       <h1>Category Report — ${escapeHtml(categoryLabel)}</h1>
-      <p class="sub">${escapeHtml(rangeText)}</p>
+      <p class="sub">${escapeHtml(accountLabel)} · ${escapeHtml(rangeText)}</p>
       <table>
         <thead><tr><th>Date</th><th>Payee</th><th>Memo</th><th>Account</th><th class="n">Amount</th></tr></thead>
         <tbody>${body || '<tr><td colspan="5">No matching transactions</td></tr>'}
@@ -156,28 +174,44 @@ export function CategoryReport({ onClose }: Props) {
   return (
     <div className="dialog-backdrop" onClick={onClose}>
       <div className="dialog" style={{ width: "min(820px, 96vw)" }} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 12, flexWrap: "wrap" }}>
-          <h3 style={{ margin: 0, alignSelf: "center" }}>Category Report</h3>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+          <h3 style={{ margin: 0, alignSelf: "flex-start" }}>Category Report</h3>
 
-          <div className="field" style={{ margin: 0, minWidth: 200 }}>
-            <label>Category</label>
-            <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
-              <option value="">Select a category…</option>
-              {catChoices.map((o) => (
-                <option key={o.category.id} value={o.category.id}>
-                  {o.display}
-                </option>
-              ))}
-            </select>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 200 }}>
+            <div className="field" style={{ margin: 0 }}>
+              <label>Category</label>
+              <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
+                <option value="">Select a category…</option>
+                {catChoices.map((o) => (
+                  <option key={o.category.id} value={o.category.id}>
+                    {o.display}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="field" style={{ margin: 0 }}>
+              <label>Account</label>
+              <select value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+                <option value="">All Accounts</option>
+                {accounts.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
-          <div className="field" style={{ margin: 0 }}>
-            <label>From date</label>
-            <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
-          </div>
-          <div className="field" style={{ margin: 0 }}>
-            <label>To date</label>
-            <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div className="field" style={{ margin: 0 }}>
+              <label>From date</label>
+              <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+            </div>
+            <div className="field" style={{ margin: 0 }}>
+              <label>To date</label>
+              <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+            </div>
           </div>
 
           <span style={{ flex: 1 }} />

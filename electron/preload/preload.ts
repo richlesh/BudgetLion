@@ -86,6 +86,11 @@ const api: LedgerApi = {
   commitImport: (accountId: string, rows: ParsedRow[]) =>
     ipcRenderer.invoke(IPC.commitImport, accountId, rows),
 
+  // PDF statement import
+  openImportPdf: () => ipcRenderer.invoke(IPC.openImportPdf),
+  extractTransactionsAI: (text: string, isLiability: boolean) =>
+    ipcRenderer.invoke(IPC.extractTransactionsAI, text, isLiability),
+
   // Paycheck PDF import (Phase 2)
   importPaycheckPdf: () => ipcRenderer.invoke(IPC.importPaycheckPdf),
 

@@ -343,27 +343,20 @@ export function SearchResults({ data, criteria, dark, onClose, onReload, onToast
               const account = accountById.get(aid)!;
               const rows = rowsForAccount(account);
               if (rows.length === 0) return null;
-              // With a single account group, let the table fill the available
-              // dialog height (so a one-row result still has a tall grid and the
-              // right-click menu has room). With multiple groups, size each to its
-              // content (capped) so they stack and the region scrolls.
+              // Size each grid to its content in pixels (capped) rather than
+              // relying on a flex-height chain through the dialog — the latter
+              // collapsed to zero height for a single group, showing a blank
+              // table. A single group gets a taller cap so it fills more space.
               const single = groupAccountIds.length === 1;
+              const boxHeight = single
+                ? Math.min(560, Math.max(240, 84 + rows.length * 34))
+                : Math.min(360, 84 + rows.length * 34);
               return (
-                <div
-                  key={aid}
-                  style={single ? { flex: 1, display: "flex", flexDirection: "column", minHeight: 0 } : undefined}
-                >
+                <div key={aid}>
                   <div className="account-type" style={{ marginBottom: 4 }}>
                     {account.name} · {rows.length} match{rows.length === 1 ? "" : "es"}
                   </div>
-                  <div
-                    className="search-grid-box"
-                    style={
-                      single
-                        ? { flex: 1, minHeight: 0 }
-                        : { height: Math.min(360, 84 + rows.length * 34) }
-                    }
-                  >
+                  <div className="search-grid-box" style={{ height: boxHeight }}>
                     <LedgerGrid
                       account={account}
                       rows={rows}

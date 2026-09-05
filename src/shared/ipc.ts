@@ -71,6 +71,22 @@ export interface OpenedFile {
   text: string;
 }
 
+/** Result of opening a PDF statement for import: the file name and its extracted text layer. */
+export interface OpenedPdf {
+  fileName: string;
+  /** The reconstructed text layer (empty when the PDF has no extractable text, e.g. a scan). */
+  text: string;
+}
+
+/** Result of an opt-in AI transaction extraction from statement text. */
+export interface AiExtractResult {
+  ok: boolean;
+  /** Parsed rows (signed amounts, statement convention) when ok. */
+  rows: ParsedRow[];
+  /** Human-readable error when not ok (AI not configured, network, bad JSON, …). */
+  error?: string;
+}
+
 /** Result of backfilling monthly historical prices for a tickered asset. */
 export interface BackfillHistoryResult {
   resolved: boolean;
@@ -237,6 +253,11 @@ export interface LedgerApi {
   openImportFile(): Promise<OpenedFile | null>;
   commitImport(accountId: string, rows: ParsedRow[]): Promise<number>;
 
+  // PDF statement import: open a PDF, extract its text layer (no parsing here).
+  openImportPdf(): Promise<OpenedPdf | null>;
+  // Opt-in AI extraction of transactions from statement text -> signed rows.
+  extractTransactionsAI(text: string, isLiability: boolean): Promise<AiExtractResult>;
+
   // Paycheck PDF import (Phase 2): open a stub PDF, extract text, parse it.
   importPaycheckPdf(): Promise<ParsedPaycheckResult | null>;
 
@@ -371,6 +392,8 @@ export const IPC = {
   getUndoState: "undo:state",
   openImportFile: "import:open",
   commitImport: "import:commit",
+  openImportPdf: "import:open-pdf",
+  extractTransactionsAI: "import:extract-ai",
   importPaycheckPdf: "paycheck:import-pdf",
   getAggregateData: "charts:aggregate",
   listRecurringRules: "recurring:list",

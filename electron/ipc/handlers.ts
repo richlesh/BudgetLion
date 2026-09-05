@@ -38,6 +38,7 @@ import { refreshPrices } from "../prices/index.js";
 import { backfillMonthlyHistory } from "../prices/index.js";
 import { lookupSymbols } from "../prices/index.js";
 import { extractPdfText } from "../paycheck/pdfText.js";
+import { extractTransactions } from "../ai/extract.js";
 import { parsePaycheckText } from "../../src/core/paycheckParse.js";
 import * as undoJournal from "../db/undo.js";
 import { validateTransaction } from "../../src/core/validation.js";
@@ -317,13 +318,56 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC.commitImport, (_e, accountId: string, rows: ParsedRow[]) => {
     // Dedupe against what's already in the account, then bulk insert.
     const existing = repo.importIdsForAccount(accountId);
+    // Auto-categorize by matching a prior transaction's payee (most recent wins).
+    const catByPayee = repo.categoryByPayee();
+    const normPayee = (p: string | null | undefined) =>
+      (p ?? "").toLowerCase().replace(/\s+/g, " ").trim();
     const inputs: NewTransactionInput[] = [];
     for (const row of rows) {
       const tx = rowToTransaction(row, accountId);
       if (tx.importId && existing.has(tx.importId)) continue;
+      // Only infer a category for plain (non-transfer) transactions that don't
+      // already carry one; a matching prior payee sets it, else it stays null.
+      const isTransfer = tx.fromAccountId != null && tx.toAccountId != null;
+      if (!isTransfer && tx.categoryId == null) {
+        const match = catByPayee.get(normPayee(tx.payee));
+        if (match) tx.categoryId = match;
+      }
       inputs.push(tx);
     }
     return repo.createTransactionsBulk(inputs);
+  });
+
+  // ---- PDF statement import ----
+  // Open a PDF and return its extracted text layer (parsing happens in the
+  // renderer via the pure heuristic parser). Empty text => likely a scanned PDF.
+  ipcMain.handle(IPC.openImportPdf, async () => {
+    const win = BrowserWindow.getFocusedWindow() ?? undefined;
+    const { canceled, filePaths } = await dialog.showOpenDialog(win!, {
+      title: "Import Transactions (PDF)",
+      properties: ["openFile"],
+      filters: [
+        { name: "PDF", extensions: ["pdf"] },
+        { name: "All Files", extensions: ["*"] },
+      ],
+    });
+    if (canceled || filePaths.length === 0) return null;
+    const filePath = filePaths[0];
+    const bytes = new Uint8Array(readFileSync(filePath));
+    const text = await extractPdfText(bytes);
+    return { fileName: basename(filePath), text };
+  });
+
+  // Opt-in AI extraction: send statement text to the configured provider and get
+  // back signed rows (statement convention). Never throws to the renderer — it
+  // returns an { ok, rows, error } result so the UI can show a friendly message.
+  ipcMain.handle(IPC.extractTransactionsAI, async (_e, text: string, isLiability: boolean) => {
+    try {
+      const rows = await extractTransactions(text, isLiability);
+      return { ok: true, rows };
+    } catch (err) {
+      return { ok: false, rows: [], error: err instanceof Error ? err.message : String(err) };
+    }
   });
 
   // ---- Export (M6) ----

@@ -798,6 +798,34 @@ export function importIdsForAccount(accountId: string): Set<string> {
 }
 
 /**
+ * Build a map of normalized payee (lowercased, whitespace-collapsed) -> the
+ * category id of the MOST RECENT categorized transaction with that payee. Used
+ * to auto-categorize imported transactions by matching a prior payee. Excludes
+ * deleted rows and transfers/splits (category_id null). Most-recent wins by
+ * date, then created_at.
+ */
+export function categoryByPayee(): Map<string, string> {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT payee, category_id
+         FROM transactions
+        WHERE deleted_at IS NULL
+          AND category_id IS NOT NULL
+          AND payee IS NOT NULL AND TRIM(payee) <> ''
+        ORDER BY date ASC, created_at ASC`
+    )
+    .all() as { payee: string; category_id: string }[];
+  // Iterating oldest -> newest and overwriting means the newest wins.
+  const map = new Map<string, string>();
+  for (const r of rows) {
+    const key = r.payee.toLowerCase().replace(/\s+/g, " ").trim();
+    if (key) map.set(key, r.category_id);
+  }
+  return map;
+}
+
+/**
  * Insert many transactions in a single sync transaction, skipping any whose
  * importId already exists for the account. Returns the number actually inserted.
  */

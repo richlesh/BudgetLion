@@ -510,7 +510,7 @@ export interface LedgerTradeInfo {
 
 // ---- Import / Export (M5 / M6) ----
 
-export type ImportFormat = "csv" | "ofx" | "qif";
+export type ImportFormat = "csv" | "ofx" | "qif" | "pdf";
 export type ExportFormat = "csv" | "qif" | "pdf" | "png";
 
 /**
