@@ -48,6 +48,7 @@ import { rowToTransaction } from "../../src/core/import/index.js";
 import { balanceForecast, projectLedger, addMonthsISO } from "../../src/core/recurring.js";
 import * as repo from "../db/repository.js";
 import { arePairSimilar, isAiAvailable } from "../ai/similarity.js";
+import { recordAiUsage } from "../dialogs.js";
 import {
   currentDbName,
   dbBackup,
@@ -383,6 +384,8 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC.extractTransactionsAI, async (_e, text: string, isLiability: boolean) => {
     try {
       const rows = await extractTransactions(text, isLiability);
+      // One AI import = one AI usage for the nag counter.
+      recordAiUsage();
       return { ok: true, rows };
     } catch (err) {
       return { ok: false, rows: [], error: err instanceof Error ? err.message : String(err) };
@@ -475,6 +478,9 @@ export function registerIpcHandlers(): void {
     ) => arePairSimilar(aPayee, aMemo, bPayee, bMemo, useAI ?? true)
   );
   ipcMain.handle(IPC.isAiAvailable, () => isAiAvailable());
+  // Renderer-initiated AI operations (e.g. a de-dupe scan) record one usage for
+  // the nag counter. Main-process AI ops (PDF extract) call recordAiUsage directly.
+  ipcMain.handle(IPC.recordAiUsage, () => recordAiUsage());
 
   // ---- Database management (File menu) ----
   ipcMain.handle(IPC.dbNew, () => dbNew());

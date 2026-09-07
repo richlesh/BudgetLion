@@ -8,7 +8,7 @@
 
 import { app, BrowserWindow, ipcMain, Menu, shell, type MenuItemConstructorOptions } from "electron";
 import { join } from "node:path";
-import { loadSettings, saveSettings, type Settings } from "./settings.js";
+import { loadSettings, saveSettings, recordAiRequest, type Settings } from "./settings.js";
 import { loadVendors } from "./ai/vendors.js";
 import { fetchModels, getModelsForVendor } from "./ai/models.js";
 
@@ -66,15 +66,18 @@ export function showSplash(): void {
 ipcMain.on("splash-close", () => splashWin?.close());
 
 /**
- * Nag hook for the AI-request counter: every 5th request, show the purchase
- * splash — but never for a validly licensed user. `count` is the running total
- * from settings (persisted across launches).
+ * Record ONE AI usage (one dedupe scan, or one AI import/extract — not one model
+ * call): increment the persistent counter and, every 5th use, show the purchase
+ * splash. Never nags a validly licensed user. Returns the new count.
  */
-export function maybeNagForAiRequest(count: number): void {
-  if (count <= 0 || count % 5 !== 0) return;
-  const s = loadSettings();
-  if (s.licenseKey && s.userName && isValidLicense(s.licenseKey, s.userName)) return;
-  showSplash();
+export function recordAiUsage(): number {
+  const count = recordAiRequest();
+  if (count > 0 && count % 5 === 0) {
+    const s = loadSettings();
+    const licensed = !!(s.licenseKey && s.userName && isValidLicense(s.licenseKey, s.userName));
+    if (!licensed) showSplash();
+  }
+  return count;
 }
 
 // ---- About ----

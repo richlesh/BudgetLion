@@ -124,6 +124,7 @@ const api: LedgerApi = {
     useAI?: boolean
   ) => ipcRenderer.invoke(IPC.arePairSimilar, aPayee, aMemo, bPayee, bMemo, useAI),
   isAiAvailable: () => ipcRenderer.invoke(IPC.isAiAvailable),
+  recordAiUsage: () => ipcRenderer.invoke(IPC.recordAiUsage),
 
   // Database management (File menu).
   dbNew: () => ipcRenderer.invoke(IPC.dbNew),

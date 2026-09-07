@@ -249,6 +249,8 @@ export function App() {
   const startDedupeScan = useCallback(async (useAI: boolean) => {
     const acct = selectedRef.current;
     if (!acct) return;
+    // One AI-backed de-dupe scan = one AI usage for the purchase-nag counter.
+    if (useAI) void window.ledger.recordAiUsage();
     setDedupeScanning(true);
     try {
       const rows = await window.ledger.getLedger(acct.id);

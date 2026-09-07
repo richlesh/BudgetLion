@@ -315,6 +315,8 @@ export interface LedgerApi {
   ): Promise<boolean>;
   // AI: is a provider configured AND currently responding? (live probe)
   isAiAvailable(): Promise<boolean>;
+  /** Record one AI usage (e.g. a de-dupe scan) for the purchase-nag counter. */
+  recordAiUsage(): Promise<number>;
 
   // Database management (File menu). Each returns the now-current DB name.
   dbNew(): Promise<DbOpResult>;
@@ -442,6 +444,7 @@ export const IPC = {
   importData: "data:import",
   arePairSimilar: "ai:pair-similar",
   isAiAvailable: "ai:available",
+  recordAiUsage: "ai:record-usage",
   dbNew: "db:new",
   dbOpen: "db:open",
   dbOpenDefault: "db:open-default",
