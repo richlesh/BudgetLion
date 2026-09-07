@@ -16,6 +16,7 @@ A cross-platform personal-finance ledger with double-entry accounting, built wit
 - **Loan/mortgage fields** — Annual interest rate (basis points, up to 3 decimal places), principal, and term
 - **Liability sign convention** — Credit card and loan ledgers display charges as positive and payments as negative, statement-style, while stored data stays consistent
 - **Balances** — Running balance per row and current balance per account in the sidebar
+- **Website URL & Notes** — Optional per-account website/login URL and free-form notes (Edit account); the sidebar shows an internet icon that opens the account's website in your browser, and URLs in these fields are clickable in the account details view
 - **Delete empty accounts** — Right-click an account to delete it, available only when it has no transactions or holdings
 
 ### Ledger
@@ -52,7 +53,8 @@ A cross-platform personal-finance ledger with double-entry accounting, built wit
 
 ### Investments & Assets
 - **Investment/Brokerage accounts** — Track securities alongside cash in the same account
-- **Trades** — Buy/Sell dialog with bidirectional shares ⟷ price ⟷ amount; trade rows in the cash ledger show the security ticker, name, shares, and price
+- **Trades** — Buy/Sell dialog with shares ⟷ price ⟷ amount, where any one of the three fields can be **locked** (held fixed) while editing the other two recomputes the third; trade rows in the cash ledger show the security ticker, name, shares, and price
+- **Price-on-date lookup** — An internet-lookup button next to Price per Share fetches the security's closing price on the transaction date (opt-in Yahoo; nearest prior trading day for weekends/holidays)
 - **Stock grants & "Add shares"** — Record employer grants (with an income category) and add opening holdings, gifts, or transfers-in; "Add shares" appears as its own ledger line
 - **Brokerage fees** — Optional fee expense category on trades
 - **Holdings panel** — Per-account holdings with per-share price and market value; double-click the ticker or description to edit them inline
@@ -60,9 +62,9 @@ A cross-platform personal-finance ledger with double-entry accounting, built wit
 - **Price fetching** — Opt-in automated quotes from Yahoo Finance (stocks, ETFs, many mutual funds) via a Settings toggle and a Refresh button; unresolved symbols fall back to manual entry, and symbols are only sent to the provider when fetching is enabled
 - **Symbol lookup** — Find a security's ticker by name (opt-in Yahoo search) from the holding's Symbol cell
 - **Price history** — Right-click a holding for a History chart with a Share Price ⟷ Total Value toggle and a date-range selector; "Fill monthly history" backfills monthly closes for tickered holdings, and Total Value uses the shares held as of each date
-- **Valuations editor** — Right-click a holding to add, edit, or delete its stored valuations (date + per-share price)
+- **Valuations editor** — Right-click a holding to add, edit, or delete its stored valuations (date + per-share price); for a tickered security the add-row price auto-fills from Yahoo for the chosen date (opt-in) and re-fetches when you change the date, tagging the source as Yahoo or manual
 - **Investment CSV import** — Import 401(k)-style transaction history into trades
-- **Asset accounts** — Track physical assets (property, vehicles, collectibles) as pure holdings (no cash). A "New Asset" dialog records Buy/Sell/Lost items with description, model number, serial number, and purchase/sale price; the holdings view shows Description, Model, Serial, Purchase Price, Purchased date, and Market Value, each editable by double-click
+- **Asset accounts** — Track physical assets (property, vehicles, collectibles) as pure holdings (no cash). A "+/- New Asset" dialog records Buy/Sell/Lost items with description, model number, serial number, and purchase/sale price; the holdings view shows Description, Model, Serial, Purchase Price, Purchased date, and Market Value, each editable by double-click, with a per-row trash button that warns you to record a Sell or Lost transaction instead when appropriate
 - **Net worth** — Per-account worth combines cash balance with the current value of holdings; investment/asset accounts show their worth in the sidebar
 
 ### Categories
@@ -100,11 +102,14 @@ A cross-platform personal-finance ledger with double-entry accounting, built wit
 
 ### Search
 - **Search dialog** — Filter across the whole database by account (default All), date range, payee, memo, category, and amount; empty fields are ignored
+- **Uncategorized filter** — The category picker includes an "Uncategorized" option to find transactions with no category (transfers excluded)
 - Results open in a ledger-style view (grouped by account) that reuses the same table and inline-edit mechanisms
 - Right-click actions and the Split editor work directly in Search results; scoping to a single account groups results under just that account
 
 ### Import & Export
-- **Import transactions** — CSV (configurable column mapping), OFX/QFX, QIF, and **bank-statement PDF**
+- **Import transactions** — CSV (configurable column mapping), **Excel (.xls/.xlsx)**, OFX/QFX, QIF, and **bank-statement PDF**
+- **Excel import** — Reads the first sheet of an `.xls`/`.xlsx` workbook into the same column-mapping flow as CSV (dates, amounts, payee, etc.)
+- **Investment-account import** — For an investment account, a chooser asks whether you're importing **cash transactions** (into the account ledger, e.g. HSA spending) or **investment transactions** (trade history)
 - **PDF statement import** — Extracts the PDF text locally and detects transactions with a deterministic heuristic parser (dates, amounts, and statement sections); you review them in an **editable preview** where you can fix any field and add rows before importing. Optionally, **Extract with AI** sends the statement text to your configured provider and returns the transactions for the same review step (opt-in; scanned/image-only PDFs have no text to read)
 - **Auto-categorize on import** — Imported transactions are assigned a category by matching a prior transaction with the same payee (most recent wins); otherwise they stay uncategorized
 - **Statement sign convention** — Optional "loan/credit-card conventions" toggle inverts amounts on import (defaults on for liability accounts)
@@ -228,6 +233,7 @@ BudgetLion/
 - [AG Grid](https://www.ag-grid.com) — the editable ledger grid
 - [Apache ECharts](https://echarts.apache.org) — charts and forecast graphs
 - [PapaParse](https://www.papaparse.com) — CSV parsing
+- [SheetJS](https://sheetjs.com) (xlsx) — Excel (.xls/.xlsx) import parsing
 - [pdf.js](https://mozilla.github.io/pdf.js/) (pdfjs-dist) — local pay-stub PDF text extraction
 - [adm-zip](https://github.com/cthackers/adm-zip) — database backup/restore archives
 
