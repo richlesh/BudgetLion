@@ -9,6 +9,8 @@ import type {
 import { parseCents, parsePriceCents, formatCents } from "../core/money";
 import { tradeCashCents } from "../core/worth";
 import { categoriesForDirection, categoryOptions } from "../core/categories";
+import { GlobeIcon } from "./GlobeIcon";
+import { LockIcon } from "./LockIcon";
 
 interface Props {
   account: Account; // the investment account we're trading in
@@ -30,6 +32,95 @@ const ACTIONS: { value: InvestmentAction; label: string }[] = [
   { value: "add", label: "Add shares (opening / gift / transfer-in)" },
 ];
 
+/** Which of the three linked trade fields is held fixed (A = S × P). */
+export type TradeField = "shares" | "price" | "amount";
+
+/** The three linked fields as raw input strings. */
+export interface TradeFields {
+  shares: string;
+  price: string;
+  amount: string;
+}
+
+/** Format a shares count (up to 6 dp, trailing zeros trimmed). */
+function fmtShares(n: number): string {
+  if (!Number.isFinite(n)) return "";
+  return Number(n.toFixed(6)).toString();
+}
+/** Format a per-share price in dollars (up to 6 dp, trailing zeros trimmed). */
+function fmtPrice(dollars: number): string {
+  if (!Number.isFinite(dollars)) return "";
+  return dollars.toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
+}
+/** Format a money amount in dollars (2 dp). */
+function fmtAmount(dollars: number): string {
+  if (!Number.isFinite(dollars)) return "";
+  return dollars.toFixed(2);
+}
+
+/** Parse the raw field strings into numbers (dollars for price/amount). */
+function readTrade(f: TradeFields): { s: number; p: number; a: number } {
+  const s = Math.abs(Number((f.shares || "").replace(/,/g, "")) || 0);
+  const p = (parsePriceCents(f.price) ?? 0) / 100; // dollars/share
+  const a = (parseCents(f.amount) ?? 0) / 100; // dollars
+  return { s, p, a };
+}
+
+/**
+ * Recompute the linked trade fields after `changed` was edited, holding `locked`
+ * fixed (A = S × P). With a lock on L, editing one free field recomputes the
+ * OTHER free field so L stays put. With no lock (locked = null) it preserves the
+ * legacy behavior: editing shares/price updates amount; editing amount updates
+ * price (when shares are known). Returns the next set of raw strings.
+ */
+export function recomputeTradeFields(
+  next: TradeFields,
+  locked: TradeField | null,
+  changed: TradeField
+): TradeFields {
+  const { s, p, a } = readTrade(next);
+  const out: TradeFields = { ...next };
+
+  // No lock: legacy 2-way behavior (amount derived from shares×price by default).
+  if (locked == null) {
+    if (changed === "amount") {
+      if (s > 0) out.price = fmtPrice(a / s);
+    } else {
+      out.amount = fmtAmount(s * p);
+    }
+    return out;
+  }
+
+  // Editing the locked field itself: keep it as typed and recompute amount from
+  // shares×price (or price from amount when amount is the locked/basis field).
+  if (changed === locked) {
+    if (locked === "amount") {
+      if (s > 0) out.price = fmtPrice(a / s);
+    } else {
+      out.amount = fmtAmount(s * p);
+    }
+    return out;
+  }
+
+  // Editing a FREE field: recompute the other free field so `locked` stays fixed.
+  // free fields = the two that aren't `locked`; `changed` is one of them.
+  if (locked === "amount") {
+    // A fixed. Edit shares -> price = A/S; edit price -> shares = A/P.
+    if (changed === "shares") out.price = s > 0 ? fmtPrice(a / s) : out.price;
+    else out.shares = p > 0 ? fmtShares(a / p) : out.shares;
+  } else if (locked === "price") {
+    // P fixed. Edit shares -> amount = S×P; edit amount -> shares = A/P.
+    if (changed === "shares") out.amount = fmtAmount(s * p);
+    else out.shares = p > 0 ? fmtShares(a / p) : out.shares;
+  } else {
+    // locked === "shares". S fixed. Edit price -> amount = S×P; edit amount -> price = A/S.
+    if (changed === "price") out.amount = fmtAmount(s * p);
+    else out.price = s > 0 ? fmtPrice(a / s) : out.price;
+  }
+  return out;
+}
+
+
 /**
  * Investment transaction entry: Buy / Sell / Dividend / Reinvest / Grant, a
  * security (existing or created inline via ticker), shares, per-share price, and
@@ -46,16 +137,20 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
   const [shares, setShares] = useState("0");
   const [price, setPrice] = useState("0.00");
   const [amount, setAmount] = useState("0.00");
-  // Which of price/amount the user last typed. The OTHER is derived from shares:
-  //   lastEdited "price"  => amount = shares * price
-  //   lastEdited "amount" => price  = amount / shares
-  const [lastEdited, setLastEdited] = useState<"price" | "amount">("price");
+  // Three linked fields: A = S × P. Exactly one may be LOCKED (held fixed); when
+  // set, editing one free field recomputes the other free field. Null = no lock
+  // (legacy 2-way behavior: amount follows shares×price). Default: lock Amount so
+  // editing shares/price recomputes the other and the amount you set stays put.
+  const [locked, setLocked] = useState<TradeField | null>(null);
   const [fees, setFees] = useState("0.00");
   const [cashDiv, setCashDiv] = useState("0.00");
   const [categoryId, setCategoryId] = useState<string>("");
   const [feeCategoryId, setFeeCategoryId] = useState<string>("");
   const [memo, setMemo] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // Price-on-date lookup (opt-in Yahoo): in-flight flag + last status message.
+  const [priceLookupBusy, setPriceLookupBusy] = useState(false);
+  const [priceLookupMsg, setPriceLookupMsg] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -77,31 +172,74 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
   // Grant, cash dividend, and reinvested dividend are income and can be categorized.
   const isIncome = action === "grant" || action === "div" || action === "reinvest";
 
-  // ---- Bidirectional shares / price / amount ----
-  // The user types two of the three; the third is derived. `lastEdited` records
-  // whether price or amount is the typed one, so the other is computed here.
-  const unitsNum = Math.abs(Number(shares) || 0);
+  // The ticker to price: the new-security field when creating, else the selected
+  // existing security's symbol. Trimmed/uppercased; empty when none.
+  const lookupSymbol = (
+    creatingNew ? newSymbol : assets.find((a) => a.id === assetId)?.symbol ?? ""
+  )
+    .trim()
+    .toUpperCase();
 
-  // Effective per-share price in (possibly fractional) cents.
-  const effectivePriceCents = useMemo(() => {
-    if (lastEdited === "price") return parsePriceCents(price) ?? 0;
-    // Derived from amount: price = amount / shares.
-    const amt = parseCents(amount) ?? 0;
-    return unitsNum > 0 ? amt / unitsNum : 0;
-  }, [lastEdited, price, amount, unitsNum]);
+  // Fetch the per-share closing price for `lookupSymbol` on the Date field's date
+  // and fill the Price per Share field. Opt-in Yahoo fetch (gated in main).
+  async function lookupPriceOnDate() {
+    setPriceLookupMsg(null);
+    if (!lookupSymbol) {
+      setPriceLookupMsg("Enter a ticker symbol first.");
+      return;
+    }
+    setPriceLookupBusy(true);
+    try {
+      const res = await window.ledger.fetchPriceForDate(lookupSymbol, date);
+      if (res.resolved && res.priceCents != null) {
+        // Show cents as dollars with up to 6 dp (trim trailing zeros), matching
+        // how the price field renders derived values.
+        const dollars = (res.priceCents / 100)
+          .toFixed(6)
+          .replace(/0+$/, "")
+          .replace(/\.$/, "");
+        // Treat the fetched value as a Price edit so the linked fields recompute
+        // per the current lock (the button is disabled when Price is locked).
+        editTradeField("price", dollars);
+        setPriceLookupMsg(
+          res.asOfDate && res.asOfDate !== date
+            ? `Close from ${res.asOfDate} (nearest trading day).`
+            : `Price as of ${res.asOfDate ?? date}.`
+        );
+      } else {
+        setPriceLookupMsg(res.error ?? "No price found for that symbol/date.");
+      }
+    } catch (e) {
+      setPriceLookupMsg(e instanceof Error ? e.message : "Price lookup failed.");
+    } finally {
+      setPriceLookupBusy(false);
+    }
+  }
 
-  // Effective gross amount (shares * price) in whole cents.
-  const effectiveGrossCents = useMemo(() => {
-    if (lastEdited === "amount") return parseCents(amount) ?? 0;
-    return Math.round(unitsNum * (parsePriceCents(price) ?? 0));
-  }, [lastEdited, price, amount, unitsNum]);
+  // ---- Shares / price / amount (A = S × P) with an optional locked field ----
+  // Effective per-share price in (possibly fractional) cents, read from the field.
+  const effectivePriceCents = useMemo(() => parsePriceCents(price) ?? 0, [price]);
 
-  // Display strings for the two fields: the typed one shows what the user typed;
-  // the derived one shows the computed value.
-  const priceDisplay =
-    lastEdited === "price" ? price : (effectivePriceCents / 100).toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
-  const amountDisplay =
-    lastEdited === "amount" ? amount : (effectiveGrossCents / 100).toFixed(2);
+  // Effective gross amount in whole cents, read from the Amount field.
+  const effectiveGrossCents = useMemo(() => parseCents(amount) ?? 0, [amount]);
+
+  // Apply an edit to one of the three linked fields and recompute per the lock.
+  function editTradeField(field: TradeField, value: string) {
+    const base: TradeFields = { shares, price, amount };
+    base[field] = value;
+    const nextFields = recomputeTradeFields(base, locked, field);
+    setShares(nextFields.shares);
+    setPrice(nextFields.price);
+    setAmount(nextFields.amount);
+  }
+
+  // Toggle the lock on a field (only one at a time; clicking the locked one clears it).
+  function toggleLock(field: TradeField) {
+    setLocked((cur) => (cur === field ? null : field));
+  }
+
+  const priceDisplay = price;
+  const amountDisplay = amount;
 
   // Income categories for the picker (Salary, Dividend, etc.).
   const incomeCategoryChoices = useMemo(
@@ -247,30 +385,96 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
         {needsShares && (
           <>
             <div className="field">
-              <label>Shares</label>
-              <input value={shares} onChange={(e) => setShares(e.target.value)} />
+              <label>
+                Shares{locked === "shares" ? " (locked)" : ""}
+              </label>
+              <div className="lock-row">
+                <button
+                  type="button"
+                  className={"lock-btn" + (locked === "shares" ? " on" : "")}
+                  title={locked === "shares" ? "Unlock Shares" : "Lock Shares (hold fixed)"}
+                  aria-label={locked === "shares" ? "Unlock Shares" : "Lock Shares"}
+                  aria-pressed={locked === "shares"}
+                  onClick={() => toggleLock("shares")}
+                >
+                  <LockIcon locked={locked === "shares"} />
+                </button>
+                <input
+                  style={{ flex: 1 }}
+                  value={shares}
+                  disabled={locked === "shares"}
+                  onChange={(e) => editTradeField("shares", e.target.value)}
+                />
+              </div>
             </div>
             <div className="field">
               <label>
                 {action === "grant" ? "Grant price per share" : "Price per Share"}
+                {locked === "price" ? " (locked)" : ""}
               </label>
-              <input
-                value={priceDisplay}
-                onChange={(e) => {
-                  setPrice(e.target.value);
-                  setLastEdited("price");
-                }}
-              />
+              <div className="lock-row">
+                <button
+                  type="button"
+                  className={"lock-btn" + (locked === "price" ? " on" : "")}
+                  title={locked === "price" ? "Unlock Price" : "Lock Price (hold fixed)"}
+                  aria-label={locked === "price" ? "Unlock Price" : "Lock Price"}
+                  aria-pressed={locked === "price"}
+                  onClick={() => toggleLock("price")}
+                >
+                  <LockIcon locked={locked === "price"} />
+                </button>
+                <input
+                  style={{ flex: 1 }}
+                  value={priceDisplay}
+                  disabled={locked === "price"}
+                  onChange={(e) => editTradeField("price", e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="price-lookup-btn"
+                  title={
+                    locked === "price"
+                      ? "Unlock Price to look it up"
+                      : lookupSymbol
+                        ? `Look up ${lookupSymbol} price on ${date}`
+                        : "Enter a ticker symbol to look up its price"
+                  }
+                  aria-label="Look up price on the selected date"
+                  disabled={priceLookupBusy || !lookupSymbol || locked === "price"}
+                  onClick={() => void lookupPriceOnDate()}
+                >
+                  <GlobeIcon />
+                </button>
+              </div>
+              {(priceLookupBusy || priceLookupMsg) && (
+                <div className="account-type" style={{ marginTop: 2 }}>
+                  {priceLookupBusy ? "Looking up price…" : priceLookupMsg}
+                </div>
+              )}
             </div>
             <div className="field">
-              <label>{isAdd ? "Amount (shares × price) (optional)" : "Amount (shares × price)"}</label>
-              <input
-                value={amountDisplay}
-                onChange={(e) => {
-                  setAmount(e.target.value);
-                  setLastEdited("amount");
-                }}
-              />
+              <label>
+                {isAdd ? "Amount (shares × price) (optional)" : "Amount (shares × price)"}
+                {locked === "amount" ? " (locked)" : ""}
+              </label>
+              <div className="lock-row">
+                <button
+                  type="button"
+                  className={"lock-btn" + (locked === "amount" ? " on" : "")}
+                  title={locked === "amount" ? "Unlock Amount" : "Lock Amount (hold fixed)"}
+                  aria-label={locked === "amount" ? "Unlock Amount" : "Lock Amount"}
+                  aria-pressed={locked === "amount"}
+                  onClick={() => toggleLock("amount")}
+                >
+                  <LockIcon locked={locked === "amount"} />
+                </button>
+                <input
+                  style={{ flex: 1 }}
+                  value={amountDisplay}
+                  disabled={locked === "amount"}
+                  onChange={(e) => editTradeField("amount", e.target.value)}
+                />
+              </div>
             </div>
           </>
         )}

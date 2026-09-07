@@ -17,7 +17,12 @@ export { cleanDescription } from "./normalize";
 /** Guess the import format from a filename and/or file contents. */
 export function detectFormat(fileName: string, text: string): ImportFormat {
   const lower = fileName.toLowerCase();
-  if (lower.endsWith(".ofx") || lower.endsWith(".qfx")) return "ofx";
+  if (
+    lower.endsWith(".ofx") ||
+    lower.endsWith(".qfx") ||
+    lower.endsWith(".qbo")
+  )
+    return "ofx";
   if (lower.endsWith(".qif")) return "qif";
   if (lower.endsWith(".csv")) return "csv";
   if (looksLikeOfx(text)) return "ofx";

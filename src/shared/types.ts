@@ -39,6 +39,8 @@ export interface Account {
   termMonths: number | null;
   escrowPaymentCents: number | null; // monthly escrow portion of a mortgage payment
   escrowTarget: string | null; // escrow destination: 'cat:<id>' | 'acct:<id>' (null = default Escrow category)
+  websiteUrl: string | null; // account website / login URL
+  notes: string | null; // free-form account notes
   createdAt: string; // ISO 8601
   updatedAt: string; // ISO 8601
   deletedAt: string | null; // soft delete
@@ -183,6 +185,8 @@ export interface NewAccountInput {
   termMonths?: number | null;
   escrowPaymentCents?: number | null;
   escrowTarget?: string | null;
+  websiteUrl?: string | null;
+  notes?: string | null;
 }
 
 /** Partial update for an account (id required). Only provided fields change. */
@@ -197,6 +201,8 @@ export interface UpdateAccountInput {
   interestRateBps?: number | null;
   escrowPaymentCents?: number | null;
   escrowTarget?: string | null;
+  websiteUrl?: string | null;
+  notes?: string | null;
 }
 
 // ---- Assets & valuations (Phase 1) ----

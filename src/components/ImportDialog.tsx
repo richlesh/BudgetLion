@@ -30,6 +30,9 @@ export function ImportDialog({ account, accounts, onCancel, onDone }: Props) {
   const [fileName, setFileName] = useState<string>("");
   const [format, setFormat] = useState<ImportFormat>("csv");
   const [grid, setGrid] = useState<string[][]>([]);
+  // True when the current grid came from an Excel workbook (for the header label;
+  // Excel reuses the CSV mapping flow, so `format` stays "csv").
+  const [isExcel, setIsExcel] = useState(false);
   const [mapping, setMapping] = useState<CsvColumnMapping | null>(null);
   const [rows, setRows] = useState<ParsedRow[]>([]);
   const [busy, setBusy] = useState(false);
@@ -108,7 +111,25 @@ export function ImportDialog({ account, accounts, onCancel, onDone }: Props) {
     const opened = await window.ledger.openImportFile();
     if (!opened) return;
     setFileName(opened.fileName);
+
+    // Excel workbooks arrive pre-parsed into a grid from the main process. Reuse
+    // the CSV column-mapping flow directly (the mapping stage operates on the
+    // grid, so it's format-agnostic).
+    if (opened.grid) {
+      if (opened.grid.length === 0) {
+        setError("The spreadsheet appears to be empty.");
+        return;
+      }
+      setIsExcel(true);
+      setFormat("csv");
+      setGrid(opened.grid);
+      setMapping({ ...guessMapping(opened.grid), invertAmounts: isLiability(account.type) });
+      setStage("map");
+      return;
+    }
+
     const fmt = detectFormat(opened.fileName, opened.text);
+    setIsExcel(false);
     setFormat(fmt);
 
     if (fmt === "csv") {
@@ -404,8 +425,9 @@ export function ImportDialog({ account, accounts, onCancel, onDone }: Props) {
         {stage === "pick" && (
           <>
             <p style={{ fontSize: 13, color: "var(--muted)" }}>
-              Choose a CSV, OFX/QFX, or QIF file exported from your bank. Transactions
-              will be added to this account; duplicates are skipped automatically.
+              Choose a CSV, Excel (.xlsx/.xls), OFX/QFX/QBO, or QIF file exported from
+              your bank. Transactions will be added to this account; duplicates are
+              skipped automatically.
             </p>
             <button onClick={pickFile}>Choose File…</button>
             <p style={{ fontSize: 13, color: "var(--muted)", marginTop: 14 }}>
@@ -419,7 +441,7 @@ export function ImportDialog({ account, accounts, onCancel, onDone }: Props) {
         {stage === "map" && mapping && (
           <>
             <div className="account-type">
-              {fileName} · detected {format.toUpperCase()} · {grid.length} rows
+              {fileName} · detected {isExcel ? "EXCEL" : format.toUpperCase()} · {grid.length} rows
             </div>
             <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
               <input
@@ -656,6 +678,12 @@ export function ImportDialog({ account, accounts, onCancel, onDone }: Props) {
             <div className="account-type">
               {fileName} · {format.toUpperCase()} · {rows.length} transactions
               {dupCount > 0 ? ` · ${dupCount} in-file duplicate(s)` : ""}
+            </div>
+            <div className="account-type" style={{ marginTop: 2 }}>
+              Note: amounts are shown in ledger convention — <strong>payments/credits
+              are positive</strong> and <strong>charges/withdrawals are negative</strong>.
+              If they look reversed, go back and toggle the “Amounts use loan /
+              credit-card conventions” option.
             </div>
             <div style={{ maxHeight: 300, overflow: "auto", border: "1px solid var(--border)", borderRadius: 6 }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>

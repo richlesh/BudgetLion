@@ -238,6 +238,105 @@ export async function backfillMonthlyHistory(input: {
   return { resolved: true, added };
 }
 
+/** Result of fetching a symbol's price on a specific date. */
+export interface PriceOnDateResult {
+  resolved: boolean;
+  /** Per-share price in cents when resolved. */
+  priceCents?: number;
+  /** The actual trading date the price came from (YYYY-MM-DD) — may be on/before
+   * the requested date when markets were closed that day. */
+  asOfDate?: string;
+  error?: string;
+}
+
+/**
+ * Fetch a symbol's closing price (in cents) as of a specific date. Markets are
+ * closed on weekends/holidays, so this pulls a small daily window ending at the
+ * requested date and returns the LAST close on or before it. Gated on the opt-in
+ * price-fetch setting. Returns { resolved: false } (with a message) when disabled,
+ * the symbol is unknown, or no close is available near that date.
+ */
+export async function fetchPriceOnDate(
+  symbol: string,
+  dateISO: string
+): Promise<PriceOnDateResult> {
+  const settings = loadSettings();
+  if (!settings.priceFetchEnabled) {
+    return { resolved: false, error: "Price fetching is disabled in Settings." };
+  }
+  const sym = symbol.trim().toUpperCase();
+  if (!sym) return { resolved: false, error: "No ticker symbol to look up." };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateISO)) {
+    return { resolved: false, error: "Enter a valid date first." };
+  }
+
+  // Window: from ~10 days before the target (to cover long weekends/holidays)
+  // through the end of the target day.
+  const target = new Date(`${dateISO}T00:00:00Z`).getTime();
+  if (!Number.isFinite(target)) return { resolved: false, error: "Enter a valid date first." };
+  const period1 = Math.floor((target - 10 * 24 * 3600 * 1000) / 1000);
+  const period2 = Math.floor((target + 24 * 3600 * 1000) / 1000);
+  const url =
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}` +
+    `?interval=1d&period1=${period1}&period2=${period2}`;
+
+  try {
+    const res = await fetch(url, {
+      redirect: "follow",
+      headers: { "User-Agent": "Mozilla/5.0", Accept: "application/json" },
+    });
+    if (res.status === 404) return { resolved: false, error: "No quote available for that symbol." };
+    if (!res.ok) return { resolved: false, error: `HTTP ${res.status}` };
+    const data = (await res.json()) as {
+      chart?: {
+        result?: Array<{
+          timestamp?: number[];
+          indicators?: {
+            quote?: Array<{ close?: Array<number | null> }>;
+            adjclose?: Array<{ adjclose?: Array<number | null> }>;
+          };
+        }> | null;
+        error?: unknown;
+      };
+    };
+    if (data.chart?.error) return { resolved: false, error: "No quote available for that symbol." };
+    const r = data.chart?.result?.[0];
+    const ts = r?.timestamp;
+    // Prefer the raw close (the traded price that day) over adjclose so the price
+    // matches what was paid, not a split/dividend-adjusted value.
+    const closes = r?.indicators?.quote?.[0]?.close ?? r?.indicators?.adjclose?.[0]?.adjclose;
+    if (!ts || !closes || ts.length === 0) {
+      return { resolved: false, error: "No price found near that date." };
+    }
+    // Last point whose trading date is on/before the requested date.
+    let bestIdx = -1;
+    for (let i = 0; i < ts.length; i++) {
+      const d = new Date(ts[i] * 1000).toISOString().slice(0, 10);
+      if (d <= dateISO && closes[i] != null && Number.isFinite(closes[i] as number)) {
+        bestIdx = i;
+      }
+    }
+    // Fall back to the earliest available close in the window if none on/before.
+    if (bestIdx < 0) {
+      for (let i = 0; i < ts.length; i++) {
+        if (closes[i] != null && Number.isFinite(closes[i] as number)) {
+          bestIdx = i;
+          break;
+        }
+      }
+    }
+    if (bestIdx < 0) return { resolved: false, error: "No price found near that date." };
+    const price = closes[bestIdx] as number;
+    return {
+      resolved: true,
+      priceCents: Math.round(price * 100),
+      asOfDate: new Date(ts[bestIdx] * 1000).toISOString().slice(0, 10),
+    };
+  } catch (err) {
+    return { resolved: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 /** One symbol-search match (name -> ticker). */
 export interface SymbolMatch {
   symbol: string;

@@ -8,10 +8,12 @@ import type {
   Category,
   ForecastPoint,
   LedgerRow,
+  LedgerTradeInfo,
   NewAccountInput,
   NewCategoryInput,
   NewRecurringRuleInput,
   NewTransactionInput,
+  Transaction,
   ProjectionRow,
   RecurringRule,
   UpdateCategoryInput,
@@ -69,6 +71,12 @@ export interface PriceFetchResult {
 export interface OpenedFile {
   fileName: string;
   text: string;
+  /**
+   * For spreadsheet (.xls/.xlsx) files: the first sheet parsed into a row/column
+   * grid of stringified cells, ready to reuse the CSV column-mapping flow. Absent
+   * for text formats (csv/ofx/qif), which carry their content in `text`.
+   */
+  grid?: string[][];
 }
 
 /** Result of opening a PDF statement for import: the file name and its extracted text layer. */
@@ -108,6 +116,16 @@ export interface SymbolMatch {
 export interface SymbolLookupResult {
   resolved: boolean;
   results: SymbolMatch[];
+  error?: string;
+}
+
+/** Result of fetching a symbol's price on a specific date. */
+export interface PriceOnDateResult {
+  resolved: boolean;
+  /** Per-share price in cents when resolved. */
+  priceCents?: number;
+  /** The actual trading date the price came from (may be on/before the request). */
+  asOfDate?: string;
   error?: string;
 }
 
@@ -218,6 +236,8 @@ export interface LedgerApi {
   backfillPriceHistory(assetId: string): Promise<BackfillHistoryResult>;
   /** Look up ticker symbols by security/fund name (opt-in; sends the query to Yahoo). */
   lookupSecuritySymbol(query: string): Promise<SymbolLookupResult>;
+  /** Fetch a security's closing price (cents) on/before a specific date (opt-in). */
+  fetchPriceForDate(symbol: string, dateISO: string): Promise<PriceOnDateResult>;
 
   // Categories
   listCategories(): Promise<Category[]>;
@@ -230,7 +250,13 @@ export interface LedgerApi {
 
   // Transactions / ledger
   getLedger(accountId: string): Promise<LedgerRow[]>;
-  createTransaction(input: NewTransactionInput): Promise<void>;
+  /**
+   * Investment trade info (ticker/shares/price) for the given transaction ids,
+   * keyed by transaction id. Used to render the derived trade memo in views that
+   * build ledger rows client-side (e.g. Search results).
+   */
+  tradeInfoByTxnIds(txnIds: string[]): Promise<Record<string, LedgerTradeInfo>>;
+  createTransaction(input: NewTransactionInput): Promise<Transaction>;
   updateTransaction(input: UpdateTransactionInput): Promise<void>;
   deleteTransaction(id: string): Promise<void>;
   /** Auto-compute a principal/interest split for a loan-payment transfer. */
@@ -313,6 +339,8 @@ export interface LedgerApi {
   saveSettings(patch: Partial<AppSettings>): Promise<AppSettings>;
   /** Tell the main process the selected account's type so it can enable/disable menu items. */
   notifyAccountType(type: string | null): void;
+  /** Open a URL in the user's default web browser (validated main-side). */
+  openExternal(url: string): Promise<void>;
   onSettingsChanged(cb: (settings: AppSettings) => void): void;
 
   // Menu events
@@ -373,12 +401,14 @@ export const IPC = {
   refreshPrices: "prices:refresh",
   backfillPriceHistory: "prices:backfill-history",
   lookupSecuritySymbol: "prices:lookup-symbol",
+  fetchPriceForDate: "prices:price-on-date",
   listCategories: "categories:list",
   createCategory: "categories:create",
   updateCategory: "categories:update",
   deleteCategory: "categories:delete",
   getCategoryUsage: "categories:usage",
   getLedger: "ledger:get",
+  tradeInfoByTxnIds: "ledger:trade-info",
   createTransaction: "tx:create",
   updateTransaction: "tx:update",
   deleteTransaction: "tx:delete",

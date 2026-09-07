@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS accounts (
   term_months           INTEGER,          -- loan term (nullable)
   escrow_payment_cents  INTEGER,          -- monthly escrow portion for a mortgage payment (nullable)
   escrow_target         TEXT,             -- escrow destination: 'cat:<id>' | 'acct:<id>' (null = default Escrow category)
+  website_url           TEXT,             -- account website / login URL (nullable)
+  notes                 TEXT,             -- free-form account notes (nullable)
   created_at            TEXT NOT NULL,
   updated_at            TEXT NOT NULL,
   deleted_at            TEXT

@@ -88,6 +88,14 @@ function runMigrations(instance: Database.Database): void {
   if (!cols.some((c) => c.name === "escrow_target")) {
     instance.exec("ALTER TABLE accounts ADD COLUMN escrow_target TEXT");
   }
+  // Account website / login URL (nullable).
+  if (!cols.some((c) => c.name === "website_url")) {
+    instance.exec("ALTER TABLE accounts ADD COLUMN website_url TEXT");
+  }
+  // Free-form account notes (nullable).
+  if (!cols.some((c) => c.name === "notes")) {
+    instance.exec("ALTER TABLE accounts ADD COLUMN notes TEXT");
+  }
 
   // categories.applicability: 'income' | 'expense' | 'both' (default 'both').
   const catCols = instance
@@ -292,6 +300,8 @@ function runMigrations(instance: Database.Database): void {
           term_months           INTEGER,
           escrow_payment_cents  INTEGER,
           escrow_target         TEXT,
+          website_url           TEXT,
+          notes                 TEXT,
           created_at            TEXT NOT NULL,
           updated_at            TEXT NOT NULL,
           deleted_at            TEXT
@@ -301,11 +311,11 @@ function runMigrations(instance: Database.Database): void {
         INSERT INTO accounts_new
           (id, name, type, currency, opening_balance_cents, opening_balance_date,
            account_code, interest_rate_bps, principal_cents, term_months, escrow_payment_cents, escrow_target,
-           created_at, updated_at, deleted_at)
+           website_url, notes, created_at, updated_at, deleted_at)
         SELECT
            id, name, type, currency, opening_balance_cents, opening_balance_date,
            account_code, interest_rate_bps, principal_cents, term_months, escrow_payment_cents, escrow_target,
-           created_at, updated_at, deleted_at
+           website_url, notes, created_at, updated_at, deleted_at
         FROM accounts
       `);
       instance.exec("DROP TABLE accounts");

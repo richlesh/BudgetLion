@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { AssetValuation, SecurityHolding } from "../shared/types";
 import { MICRO } from "../shared/types";
 import { formatCents, parsePriceCents } from "../core/money";
@@ -36,6 +36,17 @@ export function ValuationsEditor({ holding, currency, onClose, onChanged }: Prop
   // New-row drafts.
   const [newDate, setNewDate] = useState(today());
   const [newPrice, setNewPrice] = useState("");
+  // Source recorded for the new row: "yahoo" when the price was auto-fetched,
+  // "manual" once the user edits the price by hand.
+  const [newSource, setNewSource] = useState<"manual" | "yahoo">("manual");
+  // Auto price-on-date lookup for tickered securities (opt-in Yahoo). Status
+  // message shown under the new-row price; busy flag while a fetch is in flight.
+  const [lookupBusy, setLookupBusy] = useState(false);
+  const [lookupMsg, setLookupMsg] = useState<string | null>(null);
+  const symbol = (holding.asset.symbol ?? "").trim().toUpperCase();
+  // Guard so a fetch that resolves after the date changed again doesn't apply
+  // a stale price (last-write-wins by date).
+  const lookupSeq = useRef(0);
 
   const load = useCallback(async () => {
     const vs = await window.ledger.listValuations(assetId);
@@ -46,6 +57,47 @@ export function ValuationsEditor({ holding, currency, onClose, onChanged }: Prop
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Auto-fill the new-row price by looking up the security's close on `newDate`
+  // (starts at today). Runs on open and whenever the user changes the date, so
+  // the price re-fetches for the new date. Only for tickered securities; when
+  // fetching is disabled/unresolved the price is left blank for manual entry.
+  useEffect(() => {
+    if (!symbol || !newDate) {
+      setLookupMsg(null);
+      return;
+    }
+    const seq = ++lookupSeq.current;
+    setLookupBusy(true);
+    setLookupMsg(null);
+    void window.ledger
+      .fetchPriceForDate(symbol, newDate)
+      .then((res) => {
+        if (seq !== lookupSeq.current) return; // a newer lookup superseded this one
+        if (res.resolved && res.priceCents != null) {
+          setNewPrice(
+            (res.priceCents / 100).toFixed(6).replace(/0+$/, "").replace(/\.$/, "")
+          );
+          setNewSource("yahoo");
+          setLookupMsg(
+            res.asOfDate && res.asOfDate !== newDate
+              ? `Close from ${res.asOfDate} (nearest trading day).`
+              : `Fetched close for ${res.asOfDate ?? newDate}.`
+          );
+        } else {
+          // Leave the price for manual entry; show why (disabled/unresolved).
+          setNewSource("manual");
+          setLookupMsg(res.error ?? "No price found — enter it manually.");
+        }
+      })
+      .catch((e) => {
+        if (seq !== lookupSeq.current) return;
+        setLookupMsg(e instanceof Error ? e.message : "Price lookup failed.");
+      })
+      .finally(() => {
+        if (seq === lookupSeq.current) setLookupBusy(false);
+      });
+  }, [symbol, newDate]);
 
   const notify = useCallback(async () => {
     await load();
@@ -113,14 +165,14 @@ export function ValuationsEditor({ holding, currency, onClose, onChanged }: Prop
         assetId,
         asOfDate: newDate,
         valueMicros: Math.round(cents * MICRO),
-        source: "manual",
+        source: newSource,
       });
       setNewPrice("");
       await notify();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not add the valuation.");
     }
-  }, [newDate, newPrice, assetId, notify]);
+  }, [newDate, newPrice, newSource, assetId, notify]);
 
   const title = holding.asset.symbol
     ? `${holding.asset.symbol} — ${holding.asset.name}`
@@ -219,11 +271,19 @@ export function ValuationsEditor({ holding, currency, onClose, onChanged }: Prop
                     value={newPrice}
                     placeholder="0.00"
                     style={{ width: 100, textAlign: "right" }}
-                    onChange={(e) => setNewPrice(e.target.value)}
+                    onChange={(e) => {
+                      setNewPrice(e.target.value);
+                      setNewSource("manual");
+                    }}
                     onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void addRow(); } }}
                   />
+                  {(lookupBusy || lookupMsg) && (
+                    <div className="account-type" style={{ marginTop: 2 }}>
+                      {lookupBusy ? "Looking up price…" : lookupMsg}
+                    </div>
+                  )}
                 </td>
-                <td className="account-type">manual</td>
+                <td className="account-type">{newSource}</td>
                 <td className="num">
                   <button className="secondary" onClick={() => void addRow()}>Add</button>
                 </td>

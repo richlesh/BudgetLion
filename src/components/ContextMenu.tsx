@@ -17,15 +17,211 @@ interface Props {
   onClose: () => void;
 }
 
-/** One row in a menu; opens a side submenu on hover when it has children.
- * The submenu is fixed-positioned and clamped to the viewport so a long list
- * (e.g. many categories) never runs off the bottom or right edge. */
-function MenuRow({ item, onClose }: { item: ContextMenuItem; onClose: () => void }) {
-  const [open, setOpen] = useState(false);
-  const rowRef = useRef<HTMLDivElement>(null);
+/** Keyboard-focus coordination across nested menu levels.
+ *
+ * Only the deepest open menu should react to key presses (arrows, type-ahead,
+ * Enter). Each open menu level pushes a token onto this shared stack while it
+ * is the active (open) level; the level whose token is on top of the stack is
+ * the one that owns the keyboard. This lets a submenu take over typing from its
+ * parent, and hand control back when it closes. */
+const focusStack: symbol[] = [];
+function pushFocus(tok: symbol) {
+  focusStack.push(tok);
+}
+function popFocus(tok: symbol) {
+  const i = focusStack.lastIndexOf(tok);
+  if (i >= 0) focusStack.splice(i, 1);
+}
+function isTopFocus(tok: symbol) {
+  return focusStack.length > 0 && focusStack[focusStack.length - 1] === tok;
+}
+
+/** Index of the first non-disabled item at/after `start` (wrapping). */
+function firstEnabled(items: ContextMenuItem[], start: number, dir: 1 | -1): number {
+  const n = items.length;
+  if (n === 0) return -1;
+  for (let step = 0; step < n; step++) {
+    const i = ((start + dir * step) % n + n) % n;
+    if (!items[i].disabled) return i;
+  }
+  return -1;
+}
+
+/** A single menu level: renders rows, owns keyboard navigation + type-ahead
+ * when it is the deepest (active) open level. `depth` distinguishes the root
+ * (0) from submenus for focus bookkeeping. */
+function MenuList({
+  items,
+  onClose,
+  onCloseLevel,
+  active,
+  className,
+}: {
+  items: ContextMenuItem[];
+  /** Close the whole context menu (leaf activation, Escape). */
+  onClose: () => void;
+  /** Close just this menu level (ArrowLeft out of a submenu). Defaults to
+   * onClose for the root level, which has no parent to return to. */
+  onCloseLevel?: () => void;
+  /** Whether this level is currently open/visible (eligible for keyboard). */
+  active: boolean;
+  className: string;
+}) {
+  const tokRef = useRef<symbol>(Symbol("menu-level"));
+  const [highlight, setHighlight] = useState<number>(-1);
+  // The index of the submenu currently open from this level (keyboard-driven),
+  // or null when none. Hover also opens submenus (see MenuRow) independently.
+  const [openSubIndex, setOpenSubIndex] = useState<number | null>(null);
+  const typeBufRef = useRef<{ text: string; at: number }>({ text: "", at: 0 });
+  const rowRefs = useRef<Array<HTMLDivElement | null>>([]);
+
+  // Register/unregister this level on the shared focus stack while it is active.
+  useEffect(() => {
+    const tok = tokRef.current;
+    if (active) {
+      pushFocus(tok);
+      return () => popFocus(tok);
+    }
+    return;
+  }, [active]);
+
+  // Keep the highlighted row scrolled into view.
+  useEffect(() => {
+    if (highlight >= 0) rowRefs.current[highlight]?.scrollIntoView({ block: "nearest" });
+  }, [highlight]);
+
+  useEffect(() => {
+    if (!active) return;
+    const tok = tokRef.current;
+    const onKey = (e: KeyboardEvent) => {
+      // A deeper submenu is open and owns the keyboard — ignore here.
+      if (!isTopFocus(tok)) return;
+
+      const move = (dir: 1 | -1) => {
+        const start = highlight < 0 ? (dir === 1 ? 0 : items.length - 1) : highlight + dir;
+        const next = firstEnabled(items, start, dir);
+        if (next >= 0) setHighlight(next);
+      };
+
+      switch (e.key) {
+        case "ArrowDown":
+          e.preventDefault();
+          e.stopPropagation();
+          move(1);
+          break;
+        case "ArrowUp":
+          e.preventDefault();
+          e.stopPropagation();
+          move(-1);
+          break;
+        case "ArrowRight":
+        case "Enter": {
+          const it = items[highlight];
+          if (!it || it.disabled) {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+            break;
+          }
+          e.preventDefault();
+          e.stopPropagation();
+          if (it.submenu && it.submenu.length > 0) {
+            setOpenSubIndex(highlight);
+          } else if (it.onClick) {
+            it.onClick();
+            onClose();
+          }
+          break;
+        }
+        case "ArrowLeft":
+          // Close this submenu and hand focus back to the parent level.
+          if (className.includes("context-submenu") && onCloseLevel) {
+            e.preventDefault();
+            e.stopPropagation();
+            onCloseLevel();
+          }
+          break;
+        case "Escape":
+          e.preventDefault();
+          e.stopPropagation();
+          onClose();
+          break;
+        default: {
+          // Type-ahead: printable single characters filter by label prefix,
+          // then fall back to a substring match. Consume the key so it never
+          // reaches the grid/input beneath the menu.
+          if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            e.preventDefault();
+            e.stopPropagation();
+            const now = Date.now();
+            const buf = typeBufRef.current;
+            // Reset the buffer after a short pause between keystrokes.
+            buf.text = now - buf.at > 800 ? e.key : buf.text + e.key;
+            buf.at = now;
+            const q = buf.text.toLowerCase();
+            const matches = (label: string) => label.toLowerCase().startsWith(q);
+            const contains = (label: string) => label.toLowerCase().includes(q);
+            let found = items.findIndex((it) => !it.disabled && matches(it.label));
+            if (found < 0) found = items.findIndex((it) => !it.disabled && contains(it.label));
+            if (found >= 0) setHighlight(found);
+          }
+          break;
+        }
+      }
+    };
+    // Capture so we intercept before the grid's own key handlers.
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [active, items, highlight, onClose, onCloseLevel, className]);
+
+  return (
+    <>
+      {items.map((it, i) => (
+        <MenuRow
+          key={it.label}
+          item={it}
+          onClose={onClose}
+          rowRef={(el) => (rowRefs.current[i] = el)}
+          highlighted={i === highlight}
+          onHover={() => setHighlight(i)}
+          // Keyboard-opened submenu for this row; hover opens independently.
+          keyboardOpen={openSubIndex === i}
+          onCloseSubmenu={() => {
+            setOpenSubIndex(null);
+          }}
+        />
+      ))}
+    </>
+  );
+}
+
+/** One row in a menu; opens a side submenu on hover or via keyboard when it has
+ * children. The submenu is fixed-positioned and clamped to the viewport so a
+ * long list (e.g. many categories) never runs off the bottom or right edge. */
+function MenuRow({
+  item,
+  onClose,
+  rowRef: setRowRefEl,
+  highlighted,
+  onHover,
+  keyboardOpen,
+  onCloseSubmenu,
+}: {
+  item: ContextMenuItem;
+  onClose: () => void;
+  rowRef: (el: HTMLDivElement | null) => void;
+  highlighted: boolean;
+  onHover: () => void;
+  keyboardOpen: boolean;
+  onCloseSubmenu: () => void;
+}) {
+  const [hoverOpen, setHoverOpen] = useState(false);
+  const rowRef = useRef<HTMLDivElement | null>(null);
   const subRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number; maxHeight: number } | null>(null);
   const hasSub = !!item.submenu && item.submenu.length > 0;
+  const open = hasSub && (hoverOpen || keyboardOpen);
 
   // Position the submenu against the viewport once it opens (and is measured).
   useLayoutEffect(() => {
@@ -60,16 +256,23 @@ function MenuRow({ item, onClose }: { item: ContextMenuItem; onClose: () => void
 
   return (
     <div
-      ref={rowRef}
+      ref={(el) => {
+        rowRef.current = el;
+        setRowRefEl(el);
+      }}
       className="context-menu-row"
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
+      onMouseEnter={() => {
+        setHoverOpen(true);
+        onHover();
+      }}
+      onMouseLeave={() => setHoverOpen(false)}
     >
       <button
         className={
           "context-menu-item" +
           (item.disabled ? " disabled" : "") +
-          (hasSub ? " has-submenu" : "")
+          (hasSub ? " has-submenu" : "") +
+          (highlighted ? " highlighted" : "")
         }
         role="menuitem"
         disabled={item.disabled}
@@ -94,9 +297,13 @@ function MenuRow({ item, onClose }: { item: ContextMenuItem; onClose: () => void
                 { left: -9999, top: 0, visibility: "hidden" }
           }
         >
-          {item.submenu!.map((sub) => (
-            <MenuRow key={sub.label} item={sub} onClose={onClose} />
-          ))}
+          <MenuList
+            items={item.submenu!}
+            onClose={onClose}
+            onCloseLevel={onCloseSubmenu}
+            active={open}
+            className="context-menu context-submenu"
+          />
         </div>
       )}
     </div>
@@ -104,7 +311,9 @@ function MenuRow({ item, onClose }: { item: ContextMenuItem; onClose: () => void
 }
 
 /** A popup menu anchored at (x, y) with optional hierarchical submenus.
- * Closes on outside click or Escape. */
+ * Closes on outside click or Escape. Supports keyboard navigation (arrow keys,
+ * Enter) and type-ahead: typing jumps to the matching item in the active menu
+ * level instead of leaking keystrokes to the grid/input beneath. */
 export function ContextMenu({ x, y, items, onClose }: Props) {
   const menuRef = useRef<HTMLDivElement>(null);
   // Clamp the menu to the viewport: if it would run off the bottom (e.g. a tall
@@ -132,20 +341,15 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
 
   useEffect(() => {
     const close = () => onClose();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
     // Defer so the opening click doesn't immediately close it.
     const id = setTimeout(() => {
       window.addEventListener("click", close);
       window.addEventListener("contextmenu", close);
-      window.addEventListener("keydown", onKey);
     }, 0);
     return () => {
       clearTimeout(id);
       window.removeEventListener("click", close);
       window.removeEventListener("contextmenu", close);
-      window.removeEventListener("keydown", onKey);
     };
   }, [onClose]);
 
@@ -161,9 +365,7 @@ export function ContextMenu({ x, y, items, onClose }: Props) {
       }
       role="menu"
     >
-      {items.map((it) => (
-        <MenuRow key={it.label} item={it} onClose={onClose} />
-      ))}
+      <MenuList items={items} onClose={onClose} active className="context-menu" />
     </div>
   );
 }

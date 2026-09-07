@@ -1,5 +1,10 @@
 import { useState } from "react";
-import type { Account, Transaction } from "../shared/types";
+import type {
+  Account,
+  Category,
+  Transaction,
+  TransactionSplit,
+} from "../shared/types";
 import { formatCents } from "../core/money";
 
 interface Props {
@@ -10,6 +15,12 @@ interface Props {
   currency: string;
   /** All accounts, for resolving from/to names. */
   accounts: Account[];
+  /** All categories, for resolving the category name of a non-transfer. */
+  categories: Category[];
+  /** Split legs per transaction id, for detecting split transactions. */
+  splitsByTx: Map<string, TransactionSplit[]>;
+  /** The scanned account id, used to orient transfer direction (To/From). */
+  accountId: string | null;
   /** Progress indicator, e.g. "1 of 3". */
   progressLabel: string;
   /** Delete the chosen transaction (by id), then advance. */
@@ -30,6 +41,9 @@ export function DedupeDialog({
   b,
   currency,
   accounts,
+  categories,
+  splitsByTx,
+  accountId,
   progressLabel,
   onDelete,
   onSkip,
@@ -39,6 +53,30 @@ export function DedupeDialog({
 
   const acctName = (id: string | null) =>
     id ? accounts.find((x) => x.id === id)?.name ?? "(unknown)" : null;
+
+  const catName = (id: string | null) =>
+    id ? categories.find((c) => c.id === id)?.name ?? "(unknown)" : null;
+
+  // The Category / To account / "Split" display line for a transaction, mirroring
+  // the ledger's Category cell: split transactions show "Split"; transfers show
+  // the counterparty account (oriented To/From relative to the scanned account);
+  // otherwise the assigned category name (or "Uncategorized").
+  const categoryDisplay = (t: Transaction): string => {
+    const splits = splitsByTx.get(t.id);
+    if (splits && splits.length > 0) return "Split";
+    const isTransfer = !!(t.fromAccountId && t.toAccountId);
+    if (isTransfer) {
+      if (accountId && t.fromAccountId === accountId) {
+        return `To ${acctName(t.toAccountId) ?? "account"}`;
+      }
+      if (accountId && t.toAccountId === accountId) {
+        return `From ${acctName(t.fromAccountId) ?? "account"}`;
+      }
+      // Not oriented to the scanned account: show the destination side.
+      return `To ${acctName(t.toAccountId) ?? "account"}`;
+    }
+    return catName(t.categoryId) ?? "Uncategorized";
+  };
 
   const renderCard = (t: Transaction) => {
     const from = acctName(t.fromAccountId);
@@ -68,6 +106,7 @@ export function DedupeDialog({
         <Row label="Date" value={t.date} />
         <Row label="Payee" value={t.payee ?? "—"} />
         <Row label="Amount" value={formatCents(t.amountCents, currency)} />
+        <Row label="Category" value={categoryDisplay(t)} />
         {from && <Row label="From" value={from} />}
         {to && <Row label="To" value={to} />}
         <Row label="Memo" value={t.memo ?? "—"} />

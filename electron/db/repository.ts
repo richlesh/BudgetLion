@@ -52,6 +52,8 @@ interface AccountRow {
   term_months: number | null;
   escrow_payment_cents: number | null;
   escrow_target: string | null;
+  website_url: string | null;
+  notes: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -90,6 +92,8 @@ function toAccount(r: AccountRow): Account {
     termMonths: r.term_months,
     escrowPaymentCents: r.escrow_payment_cents,
     escrowTarget: r.escrow_target,
+    websiteUrl: r.website_url,
+    notes: r.notes,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     deletedAt: r.deleted_at,
@@ -145,6 +149,8 @@ export function createAccount(input: NewAccountInput): Account {
     term_months: input.termMonths ?? null,
     escrow_payment_cents: input.escrowPaymentCents ?? null,
     escrow_target: input.escrowTarget ?? null,
+    website_url: input.websiteUrl ?? null,
+    notes: input.notes ?? null,
     created_at: ts,
     updated_at: ts,
     deleted_at: null,
@@ -152,10 +158,10 @@ export function createAccount(input: NewAccountInput): Account {
   db.prepare(
     `INSERT INTO accounts
        (id, name, type, currency, account_code, opening_balance_cents, opening_balance_date,
-        interest_rate_bps, principal_cents, term_months, escrow_payment_cents, escrow_target, created_at, updated_at, deleted_at)
+        interest_rate_bps, principal_cents, term_months, escrow_payment_cents, escrow_target, website_url, notes, created_at, updated_at, deleted_at)
      VALUES
        (@id, @name, @type, @currency, @account_code, @opening_balance_cents, @opening_balance_date,
-        @interest_rate_bps, @principal_cents, @term_months, @escrow_payment_cents, @escrow_target, @created_at, @updated_at, @deleted_at)`
+        @interest_rate_bps, @principal_cents, @term_months, @escrow_payment_cents, @escrow_target, @website_url, @notes, @created_at, @updated_at, @deleted_at)`
   ).run(row);
   return toAccount(row);
 }
@@ -193,6 +199,14 @@ export function updateAccount(input: UpdateAccountInput): void {
   if (input.escrowTarget !== undefined) {
     fields.push("escrow_target = @escrow_target");
     params.escrow_target = input.escrowTarget;
+  }
+  if (input.websiteUrl !== undefined) {
+    fields.push("website_url = @website_url");
+    params.website_url = input.websiteUrl;
+  }
+  if (input.notes !== undefined) {
+    fields.push("notes = @notes");
+    params.notes = input.notes;
   }
   if (input.openingBalanceCents !== undefined) {
     fields.push("opening_balance_cents = @opening_balance_cents");
@@ -1167,10 +1181,10 @@ export function importData(data: {
   const upsertAccount = db.prepare(
     `INSERT INTO accounts
        (id, name, type, currency, account_code, opening_balance_cents, opening_balance_date,
-        interest_rate_bps, principal_cents, term_months, escrow_payment_cents, escrow_target, created_at, updated_at, deleted_at)
+        interest_rate_bps, principal_cents, term_months, escrow_payment_cents, escrow_target, website_url, notes, created_at, updated_at, deleted_at)
      VALUES
        (@id, @name, @type, @currency, @account_code, @opening_balance_cents, @opening_balance_date,
-        @interest_rate_bps, @principal_cents, @term_months, @escrow_payment_cents, @escrow_target, @created_at, @updated_at, @deleted_at)
+        @interest_rate_bps, @principal_cents, @term_months, @escrow_payment_cents, @escrow_target, @website_url, @notes, @created_at, @updated_at, @deleted_at)
      ON CONFLICT(id) DO UPDATE SET
        name = excluded.name, type = excluded.type, currency = excluded.currency,
        account_code = excluded.account_code,
@@ -1181,6 +1195,8 @@ export function importData(data: {
        term_months = excluded.term_months,
        escrow_payment_cents = excluded.escrow_payment_cents,
        escrow_target = excluded.escrow_target,
+       website_url = excluded.website_url,
+       notes = excluded.notes,
        updated_at = excluded.updated_at,
        deleted_at = excluded.deleted_at`
   );
@@ -1228,6 +1244,8 @@ export function importData(data: {
         term_months: a.termMonths ?? null,
         escrow_payment_cents: a.escrowPaymentCents ?? null,
         escrow_target: a.escrowTarget ?? null,
+        website_url: a.websiteUrl ?? null,
+        notes: a.notes ?? null,
         created_at: a.createdAt ?? ts,
         updated_at: ts,
         deleted_at: a.deletedAt ?? null,

@@ -4,6 +4,14 @@
 
 import type { AggregateData, Transaction, TransactionSplit } from "../shared/types";
 
+/**
+ * Sentinel `categoryId` value meaning "match transactions that have no category".
+ * A transaction is uncategorized when it has no inline category and none of its
+ * (non-deleted) split legs carry a category, and it is not a transfer. Chosen to
+ * never collide with a real category id.
+ */
+export const UNCATEGORIZED_CATEGORY_ID = "__uncategorized__";
+
 /** Search criteria. Any field left null/empty is ignored. */
 export interface SearchCriteria {
   /** Restrict to a single account (matches from/to or a transfer-leg split). Null = all. */
@@ -16,7 +24,8 @@ export interface SearchCriteria {
   payee: string;
   /** Case-insensitive substring match on memo (tx memo OR any split leg memo). */
   memo: string;
-  /** Category id: matches the tx category OR any split leg category. Empty = ignore. */
+  /** Category id: matches the tx category OR any split leg category. Empty = ignore.
+   *  UNCATEGORIZED_CATEGORY_ID matches transactions with no category at all. */
   categoryId: string;
   /** Amount magnitude in cents (abs match on tx.amountCents), or null to ignore. */
   amountCents: number | null;
@@ -69,9 +78,23 @@ export function matchesCriteria(
   }
 
   if (c.categoryId) {
-    const inTx = tx.categoryId === c.categoryId;
-    const inLeg = splits.some((s) => s.categoryId === c.categoryId);
-    if (!inTx && !inLeg) return false;
+    if (c.categoryId === UNCATEGORIZED_CATEGORY_ID) {
+      // Uncategorized: no inline category and no split leg carries a category.
+      // Transfers are excluded (they have no category by design, but aren't
+      // "uncategorized" spending/income): a transaction is a transfer when both
+      // from/to accounts are set, or when any split leg is a transfer leg.
+      const hasInline = tx.categoryId != null && tx.categoryId !== "";
+      const hasLegCategory = splits.some((s) => s.categoryId != null && s.categoryId !== "");
+      if (hasInline || hasLegCategory) return false;
+      const isTransfer =
+        (tx.fromAccountId != null && tx.toAccountId != null) ||
+        splits.some((s) => s.transferAccountId != null);
+      if (isTransfer) return false;
+    } else {
+      const inTx = tx.categoryId === c.categoryId;
+      const inLeg = splits.some((s) => s.categoryId === c.categoryId);
+      if (!inTx && !inLeg) return false;
+    }
   }
 
   if (c.amountCents != null) {

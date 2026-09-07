@@ -23,6 +23,7 @@ import { displaySign, formatCents } from "./core/money";
 import { isReconciledForAccount } from "./core/reconcile";
 import { ledgerToHtml } from "./core/export/html";
 import { LedgerGrid } from "./components/LedgerGrid";
+import { GlobeIcon } from "./components/GlobeIcon";
 import type { CategoryChoice } from "./components/CategoryAccountEditor";
 import { NewAccountDialog } from "./components/NewAccountDialog";
 import { SplitEditorDialog } from "./components/SplitEditorDialog";
@@ -86,6 +87,9 @@ export function App() {
   const [categoryUsage, setCategoryUsage] = useState<Record<string, number>>({});
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [showInvestmentImport, setShowInvestmentImport] = useState(false);
+  // For investment accounts, importing can add either cash-side transactions or
+  // investment (trade) history. When true, a small chooser asks which one.
+  const [showImportChooser, setShowImportChooser] = useState(false);
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [showCharts, setShowCharts] = useState(false);
   const [showProjection, setShowProjection] = useState(false);
@@ -128,6 +132,13 @@ export function App() {
   const [dedupePairs, setDedupePairs] = useState<DuplicatePair[]>([]);
   const [dedupeIndex, setDedupeIndex] = useState(0);
   const [dedupeScanning, setDedupeScanning] = useState(false);
+  // Split legs (per transaction id) for the scanned pairs, so the review dialog
+  // can show "Split" in the Category line. The scanned account id orients the
+  // To/From label for transfers.
+  const [dedupeSplits, setDedupeSplits] = useState<Map<string, TransactionSplit[]>>(
+    new Map()
+  );
+  const [dedupeAccountId, setDedupeAccountId] = useState<string | null>(null);
   // When AI is available and responding, we first ask the user whether to use it
   // for this de-dupe pass. Null = no prompt showing.
   const [dedupeAskAI, setDedupeAskAI] = useState(false);
@@ -244,6 +255,13 @@ export function App() {
       const txns = rows
         .filter((r) => r.kind === "transaction" && r.transaction)
         .map((r) => r.transaction!);
+      // Capture split legs per transaction so the review dialog can show "Split".
+      const splitMap = new Map<string, TransactionSplit[]>();
+      for (const r of rows) {
+        if (r.transaction && r.isSplit && r.splits && r.splits.length > 0) {
+          splitMap.set(r.transaction.id, r.splits);
+        }
+      }
       const pairs = await resolveDuplicatePairs(txns, (a, b) =>
         window.ledger.arePairSimilar(
           a.payee ?? null,
@@ -257,6 +275,8 @@ export function App() {
         setToast("No duplicate transactions found.");
         return;
       }
+      setDedupeSplits(splitMap);
+      setDedupeAccountId(acct.id);
       setDedupePairs(pairs);
       setDedupeIndex(0);
     } finally {
@@ -493,8 +513,7 @@ export function App() {
     window.ledger.onMenuImport(() => {
       const acct = selectedRef.current;
       if (!acct) return;
-      if (acct.type === "investment") setShowInvestmentImport(true);
-      else setShowImportDialog(true);
+      startImport(acct);
     });
     window.ledger.onMenuExport(() => {
       if (selectedRef.current) setShowExportDialog(true);
@@ -625,16 +644,6 @@ export function App() {
     [refreshAccounts]
   );
 
-  const createTransaction = useCallback(
-    async (input: NewTransactionInput) => {
-      await window.ledger.createTransaction(input);
-      setShowTxDialog(false);
-      if (selectedId) await refreshLedger(selectedId);
-      await refreshAccounts(); // balances change
-    },
-    [selectedId, refreshLedger, refreshAccounts]
-  );
-
   // Build a paycheck into its transaction(s) and persist them: the net-deposit
   // split (gross income + deduction legs) plus any separate employer-contribution
   // transfers. Refresh the ledger + balances afterward and toast on success.
@@ -670,8 +679,13 @@ export function App() {
     [selectedId, refreshLedger, refreshAccounts]
   );
 
-  // Open the asset-record dialog, loading the account's currently-held items
-  // (non-deleted assets) for the Sell/Lost pickers.
+  // Begin an import for the given account. Investment accounts can import either
+  // cash-side transactions or investment (trade) history, so they get a small
+  // chooser first; every other account type goes straight to the cash importer.
+  const startImport = useCallback((acct: Account) => {
+    if (acct.type === "investment") setShowImportChooser(true);
+    else setShowImportDialog(true);
+  }, []);
   const openAssetRecord = useCallback(async () => {
     if (!selected) return;
     setHeldAssets(await window.ledger.listAssets(selected.id));
@@ -945,6 +959,50 @@ export function App() {
       });
     },
     [accounts, refreshCategories]
+  );
+
+  const createTransaction = useCallback(
+    async (input: NewTransactionInput) => {
+      const created = await window.ledger.createTransaction(input);
+      setShowTxDialog(false);
+      if (selectedId) await refreshLedger(selectedId);
+      await refreshAccounts(); // balances change
+
+      // Loan-payment auto-split: when the new transaction is a plain (non-split)
+      // transfer whose DESTINATION is a loan account, treat it as a loan payment
+      // and open the split editor pre-seeded with the interest/escrow/principal
+      // legs — mirroring the inline Category-cell picker. Import/paycheck paths
+      // intentionally do NOT do this.
+      const isPlainTransfer =
+        !!created.fromAccountId &&
+        !!created.toAccountId &&
+        (!input.splits || input.splits.length < 2);
+      const target = created.toAccountId
+        ? accounts.find((a) => a.id === created.toAccountId)
+        : undefined;
+      if (isPlainTransfer && target?.type === "loan") {
+        // Scope the split editor to the paying (from) account.
+        const fromAccount = accounts.find((a) => a.id === created.fromAccountId);
+        if (fromAccount) {
+          const rows = await window.ledger.getLedger(fromAccount.id);
+          const row = rows.find((r) => r.transaction?.id === created.id);
+          if (row?.transaction) {
+            await openSplitEditor(
+              row.transaction,
+              fromAccount,
+              false,
+              undefined,
+              row.signedAmountCents,
+              async () => {
+                if (selectedId) await refreshLedger(selectedId);
+                await refreshAccounts();
+              }
+            );
+          }
+        }
+      }
+    },
+    [selectedId, refreshLedger, refreshAccounts, accounts, openSplitEditor]
   );
 
   // Apply a category/none/transfer change to a transaction. Always clears any
@@ -1404,6 +1462,37 @@ export function App() {
                 );
               }}
             >
+              {(() => {
+                const url = (a.websiteUrl ?? "").trim();
+                if (!url) {
+                  // No URL: show a grayed-out, non-interactive icon.
+                  return (
+                    <span
+                      className="account-web disabled"
+                      aria-hidden="true"
+                      title="No website URL set"
+                    >
+                      <GlobeIcon />
+                    </span>
+                  );
+                }
+                const href = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+                return (
+                  <button
+                    type="button"
+                    className="account-web"
+                    title={`Open ${href}`}
+                    aria-label={`Open website for ${a.name}`}
+                    onClick={(e) => {
+                      // Don't let the click also select the account row.
+                      e.stopPropagation();
+                      void window.ledger.openExternal(href);
+                    }}
+                  >
+                    <GlobeIcon />
+                  </button>
+                );
+              })()}
               <div className="account-main">
                 <div className="account-name">{a.name}</div>
                 {a.accountCode && (
@@ -1558,11 +1647,7 @@ export function App() {
                 className="secondary icon-btn"
                 title="Import transactions…"
                 aria-label="Import transactions"
-                onClick={() =>
-                  selected.type === "investment"
-                    ? setShowInvestmentImport(true)
-                    : setShowImportDialog(true)
-                }
+                onClick={() => startImport(selected)}
               >
                 <svg
                   width="16"
@@ -1603,8 +1688,8 @@ export function App() {
                 </svg>
               </button>
               {selected.type === "asset" ? (
-                <button title="Record a new asset" onClick={() => void openAssetRecord()}>
-                  + New Asset
+                <button title="Record an asset (buy / sell / lost)" onClick={() => void openAssetRecord()}>
+                  +/- New Asset
                 </button>
               ) : (
                 <>
@@ -1870,6 +1955,45 @@ export function App() {
           }}
         />
       )}
+      {showImportChooser && selected && selected.type === "investment" && (
+        <div className="dialog-backdrop" onClick={() => setShowImportChooser(false)}>
+          <div className="dialog" style={{ width: 420 }} onClick={(e) => e.stopPropagation()}>
+            <h3>Import into {selected.name}</h3>
+            <p style={{ fontSize: 13, color: "var(--muted)", marginTop: 0 }}>
+              This is an investment account. What would you like to import?
+            </p>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 8 }}>
+              <button
+                onClick={() => {
+                  setShowImportChooser(false);
+                  setShowImportDialog(true);
+                }}
+              >
+                Cash transactions
+                <span style={{ display: "block", fontSize: 12, opacity: 0.8, fontWeight: "normal" }}>
+                  CSV, Excel, OFX/QFX/QBO, QIF, or a statement PDF (e.g. HSA spending)
+                </span>
+              </button>
+              <button
+                onClick={() => {
+                  setShowImportChooser(false);
+                  setShowInvestmentImport(true);
+                }}
+              >
+                Investment transactions
+                <span style={{ display: "block", fontSize: 12, opacity: 0.8, fontWeight: "normal" }}>
+                  Trade/history CSV (buys, sells, dividends)
+                </span>
+              </button>
+            </div>
+            <div className="dialog-actions">
+              <button className="secondary" onClick={() => setShowImportChooser(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {showInvestmentImport && selected && selected.type === "investment" && (
         <InvestmentImportDialog
           account={selected}
@@ -2039,6 +2163,9 @@ export function App() {
               b={pair.b}
               currency={selected?.currency ?? "USD"}
               accounts={accounts}
+              categories={categories}
+              splitsByTx={dedupeSplits}
+              accountId={dedupeAccountId}
               progressLabel={`${dedupeIndex + 1} of ${dedupePairs.length}`}
               onDelete={(id) => void handleDedupeDelete(id)}
               onSkip={handleDedupeSkip}

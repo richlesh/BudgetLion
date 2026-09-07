@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useState } from "react";
-import type { Account, AggregateData, Category, LedgerRow, Transaction, TransactionSplit } from "../shared/types";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { Account, AggregateData, Category, LedgerRow, LedgerTradeInfo, Transaction, TransactionSplit } from "../shared/types";
 import { buildLedger } from "../core/balances";
 import { LedgerGrid } from "./LedgerGrid";
 import type { CategoryChoice } from "./CategoryAccountEditor";
@@ -43,6 +43,30 @@ export function SearchResults({ data, criteria, dark, onClose, onReload, onToast
     [data, matchingIds, criteria.accountId]
   );
 
+  // Investment trade info (ticker/shares/price) for the matched transactions, so
+  // trade rows show the same derived memo as the main ledger. AggregateData has
+  // no investment data, so we fetch it for the matched ids (Option 2).
+  const [tradeByTxn, setTradeByTxn] = useState<Map<string, LedgerTradeInfo>>(new Map());
+  useEffect(() => {
+    const ids = [...matchingIds];
+    if (ids.length === 0) {
+      setTradeByTxn(new Map());
+      return;
+    }
+    let alive = true;
+    void window.ledger
+      .tradeInfoByTxnIds(ids)
+      .then((rec) => {
+        if (alive) setTradeByTxn(new Map(Object.entries(rec)));
+      })
+      .catch(() => {
+        if (alive) setTradeByTxn(new Map());
+      });
+    return () => {
+      alive = false;
+    };
+  }, [matchingIds]);
+
   const accountById = useMemo(() => {
     const m = new Map<string, Account>();
     data.accounts.forEach((a) => m.set(a.id, a));
@@ -64,12 +88,12 @@ export function SearchResults({ data, criteria, dark, onClose, onReload, onToast
   // the synthetic opening row is never a search result).
   const rowsForAccount = useCallback(
     (account: Account): LedgerRow[] => {
-      const rows = buildLedger(account, data.transactions, splitsByTx);
+      const rows = buildLedger(account, data.transactions, splitsByTx, tradeByTxn);
       return rows.filter(
         (r) => r.kind === "transaction" && r.transaction && matchingIds.has(r.transaction.id)
       );
     },
-    [data.transactions, splitsByTx, matchingIds]
+    [data.transactions, splitsByTx, matchingIds, tradeByTxn]
   );
 
   // Account-scoped edit handlers (mirror the main ledger, minus opening-row edits

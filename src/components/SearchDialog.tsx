@@ -3,7 +3,7 @@ import type { Account, Category } from "../shared/types";
 import { categoryOptions } from "../core/categories";
 import { parseCents } from "../core/money";
 import type { SearchCriteria } from "../core/search";
-import { isEmptyCriteria } from "../core/search";
+import { isEmptyCriteria, UNCATEGORIZED_CATEGORY_ID } from "../core/search";
 
 interface Props {
   accounts: Account[];
@@ -97,6 +97,7 @@ export function SearchDialog({ accounts, categories, initialAccountId = null, on
           <label>Category</label>
           <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
             <option value="">Any category</option>
+            <option value={UNCATEGORIZED_CATEGORY_ID}>— Uncategorized —</option>
             {catChoices.map((o) => (
               <option key={o.category.id} value={o.category.id}>
                 {o.display}

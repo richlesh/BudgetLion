@@ -37,7 +37,9 @@ import {
 import { refreshPrices } from "../prices/index.js";
 import { backfillMonthlyHistory } from "../prices/index.js";
 import { lookupSymbols } from "../prices/index.js";
+import { fetchPriceOnDate } from "../prices/index.js";
 import { extractPdfText } from "../paycheck/pdfText.js";
+import { isExcelFile, excelToGrid } from "../import/excel.js";
 import { extractTransactions } from "../ai/extract.js";
 import { parsePaycheckText } from "../../src/core/paycheckParse.js";
 import * as undoJournal from "../db/undo.js";
@@ -165,6 +167,9 @@ export function registerIpcHandlers(): void {
   });
 
   ipcMain.handle(IPC.lookupSecuritySymbol, (_e, query: string) => lookupSymbols(query));
+  ipcMain.handle(IPC.fetchPriceForDate, (_e, symbol: string, dateISO: string) =>
+    fetchPriceOnDate(symbol, dateISO)
+  );
 
   ipcMain.handle(IPC.listCategories, () => repo.listCategories());
   ipcMain.handle(IPC.createCategory, (_e, input: NewCategoryInput) =>
@@ -193,10 +198,16 @@ export function registerIpcHandlers(): void {
     return buildLedger(account, txns, splitsByTx, tradeByTxn);
   });
 
+  ipcMain.handle(IPC.tradeInfoByTxnIds, (_e, txnIds: string[]) => {
+    const map = repo.tradeInfoByTxnId(txnIds);
+    // Map isn't part of our JSON-friendly contract; return a plain record.
+    return Object.fromEntries(map);
+  });
+
   ipcMain.handle(IPC.createTransaction, (_e, input: NewTransactionInput) => {
     const result = validateTransaction(input);
     if (!result.ok) throw new Error(result.errors.join(" "));
-    repo.createTransaction(input);
+    return repo.createTransaction(input);
   });
 
   ipcMain.handle(IPC.updateTransaction, (_e, input: UpdateTransactionInput) => {
@@ -274,15 +285,23 @@ export function registerIpcHandlers(): void {
       title: "Import Transactions",
       properties: ["openFile"],
       filters: [
-        { name: "Bank Files", extensions: ["csv", "ofx", "qfx", "qif"] },
+        { name: "Bank Files", extensions: ["csv", "ofx", "qfx", "qbo", "qif", "xlsx", "xls"] },
         { name: "CSV", extensions: ["csv"] },
-        { name: "OFX", extensions: ["ofx", "qfx"] },
+        { name: "Excel", extensions: ["xlsx", "xls", "xlsm", "xlsb"] },
+        { name: "OFX", extensions: ["ofx", "qfx", "qbo"] },
         { name: "QIF", extensions: ["qif"] },
         { name: "All Files", extensions: ["*"] },
       ],
     });
     if (canceled || filePaths.length === 0) return null;
     const filePath = filePaths[0];
+    // Excel workbooks are binary: parse the first sheet into a grid the renderer
+    // reuses via the CSV column-mapping flow. Text formats return their content.
+    if (isExcelFile(filePath)) {
+      const bytes = new Uint8Array(readFileSync(filePath));
+      const grid = excelToGrid(bytes);
+      return { fileName: basename(filePath), text: "", grid };
+    }
     const text = readFileSync(filePath, "utf8");
     return { fileName: basename(filePath), text };
   });

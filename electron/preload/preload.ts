@@ -57,12 +57,15 @@ const api: LedgerApi = {
   refreshPrices: (accountId?: string) => ipcRenderer.invoke(IPC.refreshPrices, accountId),
   backfillPriceHistory: (assetId: string) => ipcRenderer.invoke(IPC.backfillPriceHistory, assetId),
   lookupSecuritySymbol: (query: string) => ipcRenderer.invoke(IPC.lookupSecuritySymbol, query),
+  fetchPriceForDate: (symbol: string, dateISO: string) =>
+    ipcRenderer.invoke(IPC.fetchPriceForDate, symbol, dateISO),
   listCategories: () => ipcRenderer.invoke(IPC.listCategories),
   createCategory: (input: NewCategoryInput) => ipcRenderer.invoke(IPC.createCategory, input),
   updateCategory: (input: UpdateCategoryInput) => ipcRenderer.invoke(IPC.updateCategory, input),
   deleteCategory: (id: string) => ipcRenderer.invoke(IPC.deleteCategory, id),
   getCategoryUsage: () => ipcRenderer.invoke(IPC.getCategoryUsage),
   getLedger: (accountId: string) => ipcRenderer.invoke(IPC.getLedger, accountId),
+  tradeInfoByTxnIds: (txnIds: string[]) => ipcRenderer.invoke(IPC.tradeInfoByTxnIds, txnIds),
   createTransaction: (input: NewTransactionInput) =>
     ipcRenderer.invoke(IPC.createTransaction, input),
   updateTransaction: (input: UpdateTransactionInput) =>
@@ -143,6 +146,7 @@ const api: LedgerApi = {
   getSettings: () => ipcRenderer.invoke(IPC.getSettings),
   saveSettings: (patch: Partial<AppSettings>) => ipcRenderer.invoke(IPC.saveSettings, patch),
   notifyAccountType: (type: string | null) => ipcRenderer.send("account-type-changed", type),
+  openExternal: (url: string) => ipcRenderer.invoke("open-external", url),
   onSettingsChanged: (cb: (settings: AppSettings) => void) => {
     ipcRenderer.on("settings-changed", (_e, settings: AppSettings) => cb(settings));
   },

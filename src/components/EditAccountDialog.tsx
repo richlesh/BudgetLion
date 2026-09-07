@@ -43,6 +43,8 @@ export function EditAccountDialog({ account, categories, accounts, onCancel, onS
       : ""
   );
   const [escrowTarget, setEscrowTarget] = useState(account.escrowTarget ?? "");
+  const [websiteUrl, setWebsiteUrl] = useState(account.websiteUrl ?? "");
+  const [notes, setNotes] = useState(account.notes ?? "");
   const [error, setError] = useState<string | null>(null);
   // Whether this account has reconciled transactions (owned side or a reconciled
   // transfer leg). If so, changing the opening balance shifts every reconciled
@@ -95,6 +97,9 @@ export function EditAccountDialog({ account, categories, accounts, onCancel, onS
       // Escrow applies to a mortgage (loan); cleared for other types, null if blank.
       escrowPaymentCents: type === "loan" ? parseCents(escrow) : null,
       escrowTarget: type === "loan" ? escrowTarget || null : null,
+      // Free-form metadata; store null when blank so empty strings don't linger.
+      websiteUrl: websiteUrl.trim() || null,
+      notes: notes.trim() ? notes : null,
     };
     // Warn if the opening balance (amount or date) changed while the account has
     // reconciled transactions — this shifts every reconciled running balance.
@@ -182,6 +187,24 @@ export function EditAccountDialog({ account, categories, accounts, onCancel, onS
             type="date"
             value={openingDate}
             onChange={(e) => setOpeningDate(e.target.value)}
+          />
+        </div>
+        <div className="field">
+          <label>Website URL</label>
+          <input
+            type="url"
+            value={websiteUrl}
+            onChange={(e) => setWebsiteUrl(e.target.value)}
+            placeholder="https://…"
+          />
+        </div>
+        <div className="field">
+          <label>Notes</label>
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            rows={5}
+            placeholder="Notes about this account"
           />
         </div>
         {error && <div className="error">{error}</div>}

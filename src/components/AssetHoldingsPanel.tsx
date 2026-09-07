@@ -6,6 +6,8 @@ import { parseAssetMeta, mergeAssetMeta } from "../core/assetRecord";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { HoldingHistoryPanel } from "./HoldingHistoryPanel";
 import { ValuationsEditor } from "./ValuationsEditor";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { TrashIcon } from "./TrashIcon";
 
 interface Props {
   account: Account; // an asset account
@@ -42,6 +44,8 @@ export function AssetHoldingsPanel({ account, reloadKey, dark = false }: Props) 
   const [valuationsFor, setValuationsFor] = useState<SecurityHolding | null>(null);
   const [editing, setEditing] = useState<{ assetId: string; field: EditField } | null>(null);
   const [draft, setDraft] = useState("");
+  // Item staged for deletion, pending the "sell/lost instead?" confirmation.
+  const [deleteFor, setDeleteFor] = useState<AssetHolding | null>(null);
 
   const load = useCallback(async () => {
     setHoldings(await window.ledger.getHoldings(account.id));
@@ -124,6 +128,21 @@ export function AssetHoldingsPanel({ account, reloadKey, dark = false }: Props) 
   const currency = account.currency;
   const total = holdings.reduce((s, h) => s + h.valueCents, 0);
 
+  // Delete the asset (soft delete of the item + its valuations) after the user
+  // confirms. Does NOT record a disposition — the warning steers the user toward
+  // a Sell/Lost transaction when that's what they actually want.
+  const confirmDelete = useCallback(async () => {
+    const h = deleteFor;
+    setDeleteFor(null);
+    if (!h) return;
+    try {
+      await window.ledger.deleteAsset(h.asset.id);
+      await load();
+    } catch {
+      await load();
+    }
+  }, [deleteFor, load]);
+
   // A double-clickable text cell (Description/Model/Serial) with inline edit.
   function editableCell(h: AssetHolding, field: EditField, value: string, placeholder: string) {
     const isEditing = editing?.assetId === h.asset.id && editing.field === field;
@@ -168,6 +187,7 @@ export function AssetHoldingsPanel({ account, reloadKey, dark = false }: Props) 
               <th>Purchased</th>
               <th className="num">Purchase Price</th>
               <th className="num">Market Value</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -242,6 +262,19 @@ export function AssetHoldingsPanel({ account, reloadKey, dark = false }: Props) 
                     )}
                   </td>
                   <td className="num">{priced ? formatCents(h.valueCents, currency) : "—"}</td>
+                  <td className="num">
+                    <button
+                      className="secondary icon-btn"
+                      title="Delete this asset"
+                      aria-label={`Delete ${h.asset.name}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDeleteFor(h);
+                      }}
+                    >
+                      <TrashIcon />
+                    </button>
+                  </td>
                 </tr>
               );
             })}
@@ -254,6 +287,7 @@ export function AssetHoldingsPanel({ account, reloadKey, dark = false }: Props) 
               <td></td>
               <td className="num"></td>
               <td className="num">{formatCents(total, currency)}</td>
+              <td></td>
             </tr>
           </tfoot>
         </table>
@@ -269,6 +303,19 @@ export function AssetHoldingsPanel({ account, reloadKey, dark = false }: Props) 
           currency={currency}
           onClose={() => setValuationsFor(null)}
           onChanged={() => void load()}
+        />
+      )}
+      {deleteFor && (
+        <ConfirmDialog
+          title={`Delete ${deleteFor.asset.name}?`}
+          message={
+            `This removes the asset and its stored values from ${account.name}. ` +
+            `It does NOT record a sale or loss, so it won't create a cash entry or affect your history. ` +
+            `If you actually sold this item or it was lost, cancel and enter a Sell or Lost transaction instead (via New Asset). Delete anyway?`
+          }
+          confirmLabel="Delete asset"
+          onConfirm={() => void confirmDelete()}
+          onCancel={() => setDeleteFor(null)}
         />
       )}
     </div>

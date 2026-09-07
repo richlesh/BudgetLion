@@ -33,20 +33,61 @@ const LEADING_DATE = /^(\d{1,2})\/(\d{1,2})(?:\s+\d{1,2}\/\d{1,2})?\s+(.*)$/;
 
 // A trailing signed money amount: optional leading "-" or "(", digits with
 // commas, a decimal, and optional trailing "-"/"CR"/"DR". Captures the number.
-const TRAILING_AMOUNT = /(-?\$?\s*\(?\s*[\d,]+\.\d{2}\s*\)?-?)\s*(CR|DR)?\.?$/i;
+// The leading minus may be separated from the "$" by spaces (e.g. "- $92.64",
+// as printed by some Capital One statements), so that sign isn't lost.
+const TRAILING_AMOUNT = /(-?\s*\$?\s*\(?\s*[\d,]+\.\d{2}\s*\)?-?)\s*(CR|DR)?\.?$/i;
 
 // A line that is *only* a money amount (a wrapped amount continuation line).
-const LONE_AMOUNT = /^(-?\$?\s*\(?\s*[\d,]+\.\d{2}\s*\)?-?)\s*(CR|DR)?$/i;
+const LONE_AMOUNT = /^(-?\s*\$?\s*\(?\s*[\d,]+\.\d{2}\s*\)?-?)\s*(CR|DR)?$/i;
 
 // Full ISO date lines "YYYY-MM-DD DESC … AMOUNT" (some statements print these).
 const LEADING_ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})\s+(.*)$/;
 
-// A US full date "MM/DD/YYYY DESC … AMOUNT".
-const LEADING_US_DATE = /^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(.*)$/;
+// A US full date "MM/DD/YYYY DESC … AMOUNT" or "MM/DD/YY …", optionally followed
+// by a second (posting) date in the same format. Captures the FIRST date's
+// month/day/year and the rest; the optional second date is consumed but ignored.
+const LEADING_US_DATE =
+  /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})(?:\s+\d{1,2}\/\d{1,2}\/\d{2,4})?\s+(.*)$/;
+
+// A month-name date "Mon D [Mon D] DESC … AMOUNT" (e.g. Capital One / Kohl's:
+// "Jul 30 Jul 30 ELECTRONIC PAYMENT - $92.64"). The optional second date is the
+// posting date; we capture the first (transaction) month/day and the rest.
+const LEADING_MONTHNAME_DATE =
+  /^([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:\s+[A-Za-z]{3,9}\.?\s+\d{1,2})?\s+(.*)$/;
+
+// Month name/abbreviation -> 1-based month number.
+const MONTHS: Record<string, number> = {
+  jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+  jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12,
+};
+
+/** Parse a (possibly full) month name to its 1-based number, or null. */
+function monthNumber(name: string): number | null {
+  return MONTHS[name.slice(0, 3).toLowerCase()] ?? null;
+}
+
+// A closing / period date printed with a month name and year, e.g.
+// "Aug 11, 2026" or "Jul 12, 2026 - Aug 11, 2026 | 31 days in Billing Cycle".
+// Captures the LAST such date on the line (the period END = closing date).
+const CLOSING_DATE_NAME = /([A-Za-z]{3,9})\.?\s+(\d{1,2}),\s*(\d{4})/g;
 
 // Statement period like "December 16 - January 15, 2026" or "… , 2026".
 const PERIOD_YEAR = /\b(\d{4})\b\s*$/;
-const CLOSING_DATE = /closing date[^0-9]*(\d{1,2})\/(\d{1,2})\/(\d{4})/i;
+const CLOSING_DATE = /closing date[^0-9]*(\d{1,2})\/(\d{1,2})\/(\d{2,4})/i;
+
+// Citi-style "Billing Period: 07/24/26-08/25/26" (2-digit year). Captures the
+// period END (the second date) = the statement closing date.
+const BILLING_PERIOD_MDY =
+  /billing period[^0-9]*\d{1,2}\/\d{1,2}\/\d{2,4}\s*[-–]\s*(\d{1,2})\/(\d{1,2})\/(\d{2,4})/i;
+
+// "New balance as of MM/DD/YYYY" — the statement closing date (some cards, e.g.
+// PayPal Cashback Mastercard). Captured month/day/year.
+const BALANCE_AS_OF_MDY =
+  /new balance as of\s+(\d{1,2})\/(\d{1,2})\/(\d{2,4})/i;
+
+// "… billing cycle from MM/DD/YYYY to MM/DD/YYYY" — take the END (closing) date.
+const BILLING_CYCLE_TO_MDY =
+  /billing cycle[^0-9]*\d{1,2}\/\d{1,2}\/\d{2,4}\s*(?:to|-|–)\s*(\d{1,2})\/(\d{1,2})\/(\d{2,4})/i;
 
 /** Section kinds that flip the sign of following rows. */
 type Section = "charge" | "credit" | "unknown";
@@ -68,14 +109,49 @@ function isNoiseLine(line: string): boolean {
   return false;
 }
 
-/** Detect a section header line, returning the sign context it establishes. */
+/** Detect a section header line, returning the sign context it establishes.
+ *
+ * A section header is a SHORT, standalone line whose text is essentially just
+ * the header phrase (e.g. "Standard Purchases", "Payments, Credits and
+ * Adjustments"). Prose that merely mentions "credit", "purchases", or
+ * "interest" (statement legalese is full of it) must NOT be treated as a
+ * header — otherwise it would silently flip the sign of every following row.
+ * Statements without section headers rely on per-amount signs (a trailing "-"
+ * marks a credit) and default unsigned amounts to charges. */
 function sectionOf(line: string): Section | null {
-  const l = line.toLowerCase();
-  if (/payments?\s+and\s+other\s+credits/.test(l)) return "credit";
-  if (/\bcredits?\b/.test(l) && !/\bpurchase/.test(l)) return "credit";
-  if (/purchases?\s+and\s+adjustments/.test(l)) return "charge";
-  if (/interest\s+charged/.test(l)) return "charge";
-  if (/fees?\s+charged/.test(l)) return "charge";
+  const trimmed = line.trim();
+  // Some issuers prefix a per-cardholder header with a name, e.g.
+  // "SANDRA J LESH #4447: Payments, Credits and Adjustments". Test the text
+  // AFTER the last colon as the candidate header in that case.
+  const afterColon = trimmed.includes(":") ? trimmed.slice(trimmed.lastIndexOf(":") + 1).trim() : "";
+  // The header candidate is the post-colon suffix (if any) or the whole line.
+  const candidate = afterColon || trimmed;
+  // Real section headers are short. Anything long is prose, not a header. (The
+  // candidate excludes any name prefix, so per-cardholder headers still pass.)
+  if (candidate.length > 40) return null;
+  const l = candidate.toLowerCase();
+  const nospace = l.replace(/\s+/g, "");
+  // Strip trailing punctuation/colon so "Transactions:" and "Purchases" compare cleanly.
+  const core = l.replace(/[:.]+$/, "").trim();
+
+  // ---- Credit sections (payments / credits) ----
+  if (/payments?\s+and\s+other\s+credits/.test(core)) return "credit";
+  if (/payments?,?\s+credits\s+and\s+adjustments/.test(core)) return "credit";
+  if (nospace.includes("paymentscreditsandadjustments")) return "credit";
+  // A header that is essentially just "Credits" / "Payments and Credits".
+  if (/^(payments?\s+(and\s+)?)?credits?$/.test(core)) return "credit";
+
+  // ---- Charge sections (purchases / fees / interest) ----
+  // Capital One / Kohl's per-cardholder "… : Transactions".
+  if (/^transactions$/.test(core)) return "charge";
+  if (/purchases?\s+and\s+adjustments/.test(core)) return "charge";
+  // A header that is essentially just "(Standard) Purchases" (also handles the
+  // pdf.js glyph split "Standard P urchases").
+  if (/^(standard\s+)?purchases?$/.test(core)) return "charge";
+  if (nospace === "standardpurchases" || nospace === "purchases") return "charge";
+  if (/^interest\s+charged$/.test(core) || nospace === "interestcharged") return "charge";
+  if (/^fees?\s+charged$/.test(core) || nospace === "feescharged") return "charge";
+
   return null;
 }
 
@@ -97,6 +173,53 @@ function stripTrailingRefs(desc: string): string {
   // Remove trailing runs of standalone 3-6 digit tokens (reference + acct last4),
   // e.g. "… OPENAI.COM CA 7689 9487" -> "… OPENAI.COM CA".
   return desc.replace(/(?:\s+\d{3,6})+\s*$/g, "").trim();
+}
+
+/**
+ * Strip a LEADING reference/confirmation code from a description — a single long
+ * (>=10 char) all-caps alphanumeric token that contains a digit, followed by more
+ * text (e.g. PayPal/Synchrony "P928300KP00Y2V35K Payment - Thank You" ->
+ * "Payment - Thank You"). Conservative: only fires when the token has a digit and
+ * real description text follows, so ordinary payees aren't clipped.
+ */
+function stripLeadingRef(desc: string): string {
+  const m = desc.match(/^([A-Z0-9]{10,})\s+(\S.*)$/);
+  if (m && /[0-9]/.test(m[1]) && /[A-Z]/.test(m[1])) return m[2].trim();
+  return desc;
+}
+
+/**
+ * Tidy a captured description for the preview: drop a trailing UNBALANCED
+ * parenthesis fragment left behind when a "(…)" note wrapped across lines and
+ * only its opening part survived (e.g. "Investment: VIGIX (Card Transaction" or
+ * "Investment: VIGIX ("). Balanced parentheses are preserved. Also trims stray
+ * trailing separators/brackets.
+ */
+function tidyDescription(desc: string): string {
+  let s = desc.trim();
+  // Remove a trailing UNBALANCED "(" fragment: scan left-to-right tracking paren
+  // depth and, if we end with unmatched opens, cut from the FIRST open paren that
+  // was never closed. This turns "VIGIX ( Card Transaction (" -> "VIGIX" while
+  // leaving balanced notes like "(Tax year: 2026)" untouched.
+  let depth = 0;
+  let firstUnmatchedOpen = -1;
+  for (let k = 0; k < s.length; k++) {
+    const ch = s[k];
+    if (ch === "(") {
+      if (depth === 0) firstUnmatchedOpen = k;
+      depth++;
+    } else if (ch === ")") {
+      if (depth > 0) depth--;
+      if (depth === 0) firstUnmatchedOpen = -1;
+    }
+  }
+  if (depth > 0 && firstUnmatchedOpen >= 0) {
+    s = s.slice(0, firstUnmatchedOpen).trim();
+  }
+  // Trim leftover trailing separators and a dangling OPEN paren/bracket, but
+  // keep a balanced closing ")" so "(Tax year: 2026)" stays intact.
+  s = s.replace(/[\s({\[,;:.-]+$/g, "").trim();
+  return s;
 }
 
 /**
@@ -128,7 +251,57 @@ function isoFromMonthDay(
 function findClosing(lines: string[]): { year: number | null; month: number | null } {
   for (const line of lines) {
     const m = CLOSING_DATE.exec(line);
-    if (m) return { month: Number(m[1]), year: Number(m[3]) };
+    if (m) {
+      const yr = Number(m[3]);
+      return { month: Number(m[1]), year: yr < 100 ? 2000 + yr : yr };
+    }
+  }
+  // Citi-style "Billing Period: 07/24/26-08/25/26" -> closing month/year from
+  // the period END. A 2-digit year is normalized to 20YY.
+  for (const line of lines) {
+    const m = BILLING_PERIOD_MDY.exec(line);
+    if (m) {
+      const yr = Number(m[3]);
+      return { month: Number(m[1]), year: yr < 100 ? 2000 + yr : yr };
+    }
+  }
+  // "New balance as of MM/DD/YYYY" (e.g. PayPal Cashback Mastercard).
+  for (const line of lines) {
+    const m = BALANCE_AS_OF_MDY.exec(line);
+    if (m) {
+      const yr = Number(m[3]);
+      return { month: Number(m[1]), year: yr < 100 ? 2000 + yr : yr };
+    }
+  }
+  // "… billing cycle from MM/DD/YYYY to MM/DD/YYYY" -> the END date.
+  for (const line of lines) {
+    const m = BILLING_CYCLE_TO_MDY.exec(line);
+    if (m) {
+      const yr = Number(m[3]);
+      return { month: Number(m[1]), year: yr < 100 ? 2000 + yr : yr };
+    }
+  }
+  // Month-name billing-cycle line, e.g. "Jul 12, 2026 - Aug 11, 2026 | 31 days
+  // in Billing Cycle". The period END (last date on the line) is the closing
+  // date, which anchors year inference for the transaction rows.
+  for (const line of lines) {
+    if (!/billing cycle/i.test(line)) continue;
+    const matches = [...line.matchAll(CLOSING_DATE_NAME)];
+    const last = matches[matches.length - 1];
+    if (last) {
+      const mon = monthNumber(last[1]);
+      if (mon) return { month: mon, year: Number(last[3]) };
+    }
+  }
+  // Otherwise, any month-name date with a year (first seen), e.g. a closing-date
+  // header printed as "Aug 11, 2026".
+  for (const line of lines) {
+    const m = CLOSING_DATE_NAME.exec(line);
+    CLOSING_DATE_NAME.lastIndex = 0; // reset the /g regex between lines
+    if (m) {
+      const mon = monthNumber(m[1]);
+      if (mon) return { month: mon, year: Number(m[3]) };
+    }
   }
   // Fall back to a trailing 4-digit year on a period line ("… , 2026").
   for (const line of lines) {
@@ -138,6 +311,23 @@ function findClosing(lines: string[]): { year: number | null; month: number | nu
     }
   }
   return { year: null, month: null };
+}
+
+/**
+ * Detect a transaction table that has BOTH an "Amount" and a running "Balance"
+ * column (e.g. an HSA "Transaction History": "Date Transaction Amount HSA Cash
+ * Balance"). When present, a transaction row ends with TWO money values — the
+ * amount followed by the balance — and we must take the FIRST, not the trailing
+ * balance. Detected from a short, non-transaction header line that names both a
+ * balance and an amount column.
+ */
+function hasBalanceColumn(lines: string[]): boolean {
+  for (const line of lines) {
+    const l = line.toLowerCase();
+    if (l.length > 60) continue; // headers are short; skip prose
+    if (/\bbalance\b/.test(l) && /\bamount\b/.test(l)) return true;
+  }
+  return false;
 }
 
 /**
@@ -153,6 +343,7 @@ export function parseStatementText(text: string): PdfParseResult {
   }
 
   const { year: closingYear, month: closingMonth } = findClosing(lines);
+  const balanceColumn = hasBalanceColumn(lines);
   const rows: ParsedRow[] = [];
   let section: Section = "unknown";
 
@@ -163,8 +354,15 @@ export function parseStatementText(text: string): PdfParseResult {
     // section headers — this prevents a description containing the word "credit"
     // (e.g. "API CREDIT …") from being mistaken for a "Payments and Other
     // Credits" section header and flipping the sign of the rows that follow.
+    // A month-name prefix only counts as a date when the word is a real month
+    // (so headers like "SANDRA … : Transactions" aren't mistaken for dates).
+    const monMatch = LEADING_MONTHNAME_DATE.exec(line);
+    const startsWithMonthName = !!monMatch && monthNumber(monMatch[1]) != null;
     const startsWithDate =
-      LEADING_ISO_DATE.test(line) || LEADING_US_DATE.test(line) || LEADING_DATE.test(line);
+      LEADING_ISO_DATE.test(line) ||
+      LEADING_US_DATE.test(line) ||
+      LEADING_DATE.test(line) ||
+      startsWithMonthName;
 
     if (!startsWithDate) {
       // Track section context (affects sign for MM/DD rows without a printed sign).
@@ -191,18 +389,40 @@ export function parseStatementText(text: string): PdfParseResult {
     } else if (us) {
       const mm = Number(us[1]);
       const dd = Number(us[2]);
+      let yy = Number(us[3]);
+      if (yy < 100) yy += 2000; // 2-digit year -> 20YY
       if (mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31) {
-        date = `${us[3]}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+        date = `${yy}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
         rest = us[4];
       }
     } else if (md) {
       date = isoFromMonthDay(Number(md[1]), Number(md[2]), closingYear, closingMonth);
       rest = md[3];
+    } else if (startsWithMonthName && monMatch) {
+      const mon = monthNumber(monMatch[1]);
+      if (mon != null) {
+        date = isoFromMonthDay(mon, Number(monMatch[2]), closingYear, closingMonth);
+        rest = monMatch[3];
+      }
     }
     if (!date || rest == null) continue;
 
     // Find the amount on this line, or on the next line if it wrapped.
     let amountToken: string | null = null;
+    // When the table has a trailing running-balance column, the row ends with
+    // two money values: "<amount> <balance>". Strip the balance first so the
+    // amount (the value we want) becomes the trailing token.
+    if (balanceColumn) {
+      const balMatch = TRAILING_AMOUNT.exec(rest);
+      if (balMatch) {
+        const withoutBalance = rest.slice(0, balMatch.index).trim();
+        // Only treat it as a balance if an amount token remains before it;
+        // otherwise this single value IS the amount (fall through below).
+        if (TRAILING_AMOUNT.test(withoutBalance)) {
+          rest = withoutBalance;
+        }
+      }
+    }
     const am = TRAILING_AMOUNT.exec(rest);
     if (am) {
       amountToken = am[1] + (am[2] ?? "");
@@ -233,7 +453,62 @@ export function parseStatementText(text: string): PdfParseResult {
       signed = Math.abs(magnitude); // charge / purchase / interest / fee
     }
 
-    const desc = cleanDescription(stripTrailingRefs(rest) || null);
+    // Description recovery for wrapped rows: some layouts print the description
+    // on the line ABOVE the date/amount line (e.g. HSA card transactions:
+    //   "Amazon Mktpl*…, WA (Card Transaction"
+    //   "7/24/2026 ($42.00) $2,837.93").
+    // If what's left on the date line is empty or just punctuation, borrow the
+    // previous line as the description when it isn't itself a transaction/header.
+    let descSource = rest;
+    if (/^[\s(){}\[\].,;:-]*$/.test(rest)) {
+      const prev = lines[i - 1] ?? "";
+      const prevIsDate =
+        LEADING_ISO_DATE.test(prev) ||
+        LEADING_US_DATE.test(prev) ||
+        LEADING_DATE.test(prev) ||
+        (() => {
+          const m = LEADING_MONTHNAME_DATE.exec(prev);
+          return !!m && monthNumber(m[1]) != null;
+        })();
+      if (prev && !prevIsDate && !sectionOf(prev) && !isNoiseLine(prev) && !LONE_AMOUNT.test(prev)) {
+        // Combine the wrapped prefix with any punctuation remnant.
+        descSource = `${prev} ${rest}`.trim();
+      }
+    }
+
+    let desc = cleanDescription(
+      tidyDescription(stripLeadingRef(stripTrailingRefs(descSource))) || null
+    );
+
+    // PayPal Cashback Mastercard: the description line is a generic
+    // "PAYPAL PURCHASE SAN JOSE CA" and the ACTUAL merchant is printed on the
+    // FOLLOWING line (e.g. "FASTSPRING", "OLIVE GARDEN 0021841"). When we see the
+    // generic text and the next line is a plain merchant (no date/amount, not a
+    // section header or noise), use that merchant as the payee and consume it.
+    if (desc && /paypal\s+purchase/i.test(desc)) {
+      const nextLine = lines[i + 1] ?? "";
+      const nextIsDate =
+        LEADING_ISO_DATE.test(nextLine) ||
+        LEADING_US_DATE.test(nextLine) ||
+        LEADING_DATE.test(nextLine) ||
+        (() => {
+          const m = LEADING_MONTHNAME_DATE.exec(nextLine);
+          return !!m && monthNumber(m[1]) != null;
+        })();
+      const merchant = stripTrailingRefs(nextLine.trim());
+      if (
+        merchant &&
+        !nextIsDate &&
+        !LONE_AMOUNT.test(nextLine) &&
+        !TRAILING_AMOUNT.test(nextLine) &&
+        !sectionOf(nextLine) &&
+        !isNoiseLine(nextLine)
+      ) {
+        desc = cleanDescription(tidyDescription(merchant) || null);
+        i += 1; // consume the merchant line
+      }
+    }
+
     rows.push({
       date,
       payee: desc,

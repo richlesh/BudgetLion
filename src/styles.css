@@ -101,6 +101,105 @@ body,
 
 .account-main {
   min-width: 0;
+  flex: 1;
+}
+
+/* Website link icon at the left of each account row. */
+.account-web {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  padding: 2px;
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  border-radius: 4px;
+  line-height: 0;
+}
+
+.account-web:hover:not(.disabled) {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* Grayed-out, non-interactive when the account has no website URL. */
+.account-web.disabled {
+  color: var(--muted);
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Keep the icon legible on the active (accent) row. */
+.account-item.active .account-web {
+  color: white;
+}
+
+.account-item.active .account-web.disabled {
+  color: rgba(255, 255, 255, 0.55);
+}
+
+/* Price-on-date lookup button in the investment dialog (next to Price per Share). */
+.price-lookup-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  padding: 7px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--accent);
+  cursor: pointer;
+  line-height: 0;
+}
+
+.price-lookup-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.price-lookup-btn:disabled {
+  color: var(--muted);
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Shares/Price/Amount row: a lock toggle on the left, then the input. */
+.lock-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.lock-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  padding: 7px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  line-height: 0;
+}
+
+.lock-btn:hover {
+  border-color: var(--accent);
+}
+
+/* Engaged (locked) state stands out in the accent color. */
+.lock-btn.on {
+  color: white;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* A locked field's input is read-only until unlocked. */
+.field input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .account-name {
@@ -238,13 +337,33 @@ button:disabled {
 }
 
 .field input,
-.field select {
+.field select,
+.field textarea {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--text);
   padding: 7px 8px;
   font-size: 13px;
+}
+
+.field textarea {
+  font-family: inherit;
+  resize: vertical;
+  min-height: 72px;
+  line-height: 1.4;
+}
+
+/* Clickable URLs rendered in read-only dialog fields (e.g. account Website/Notes). */
+.field a {
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+  word-break: break-all;
+}
+
+.field a:hover {
+  filter: brightness(1.15);
 }
 
 .dialog-actions {
@@ -477,6 +596,11 @@ button.danger {
 }
 
 .context-menu-item:hover:not(.disabled) {
+  background: var(--accent);
+  color: white;
+}
+
+.context-menu-item.highlighted:not(.disabled) {
   background: var(--accent);
   color: white;
 }

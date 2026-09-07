@@ -179,7 +179,20 @@ ipcMain.handle("settings-patch", (_e, partial: Partial<Settings>) => {
   mainWinRef?.webContents.send("settings-changed", s);
   return s;
 });
-ipcMain.handle("open-external", (_e, url: string) => shell.openExternal(url));
+// Open a URL in the user's default browser. Only http(s) is allowed so a
+// crafted value (e.g. from a user-entered account field) can't launch
+// file:, javascript:, or other potentially dangerous schemes.
+ipcMain.handle("open-external", (_e, url: string) => {
+  try {
+    const u = new URL(String(url));
+    if (u.protocol === "http:" || u.protocol === "https:") {
+      return shell.openExternal(u.toString());
+    }
+  } catch {
+    // fall through: invalid URL
+  }
+  return Promise.resolve();
+});
 
 // ---- Native application menu ----
 export function buildMenu(mainWin: BrowserWindow): void {

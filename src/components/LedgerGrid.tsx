@@ -356,11 +356,16 @@ export function LedgerGrid({
       {
         field: "payee",
         headerName: "Payee",
-        // Payee is auto-generated for transfers ("From/To <account>"), derived for
-        // splits, and set to the action (Buy/Sell/…) for trades, so it's editable
-        // only for ordinary transactions.
+        // Payee is auto-generated for transfers ("From/To <account>") and for the
+        // TO side of a split (a foreign transfer-leg counterparty), and set to the
+        // action (Buy/Sell/…) for trades, so it's read-only in those cases. An
+        // OWNED split still keeps a real stored payee, so it stays editable — and
+        // reconciliation does NOT lock the payee (only date/amount/counterparty).
         editable: (p) =>
-          isTxRow(p) && !p.data?.isTransfer && !p.data?.isSplit && !p.data?.isTrade,
+          isTxRow(p) &&
+          !p.data?.isTransfer &&
+          !p.data?.isForeignSplit &&
+          !p.data?.isTrade,
         cellEditor: AutocompleteCellEditor,
         cellEditorParams: () => ({ suggestions: payeeSuggestionsRef.current }),
         flex: 1,
