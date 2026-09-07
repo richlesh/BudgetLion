@@ -5,9 +5,20 @@
 // (microsoft/amazon/ibm) resolve to null so callers can report "not usable".
 
 import { loadVendors } from "./vendors.js";
-import { loadSettings } from "../settings.js";
+import { loadSettings, recordAiRequest } from "../settings.js";
 
 const stripSlash = (u: string) => u.replace(/\/+$/, "");
+
+// Optional hook invoked once per real AI request with the new persisted request
+// count. Registered by the main process (main.ts) to drive the purchase nag,
+// kept as a callback so this lightweight network module doesn't import the
+// dialog/window layer (avoids a circular dependency).
+let aiRequestHook: ((count: number) => void) | null = null;
+
+/** Register a callback fired after each AI request with the running count. */
+export function setAiRequestHook(fn: ((count: number) => void) | null): void {
+  aiRequestHook = fn;
+}
 
 /** Resolve base URL + auth headers for an OpenAI-compatible vendor, or null. */
 export function resolveEndpoint(
@@ -138,6 +149,16 @@ export async function chat(
 ): Promise<string> {
   const cfg = resolveConfig();
   if (!cfg) throw new Error("AI not configured");
+
+  // A real, configured AI request is about to go out: bump the persistent
+  // counter and let the registered hook (purchase nag) react to the new total.
+  try {
+    const count = recordAiRequest();
+    aiRequestHook?.(count);
+  } catch {
+    // Never let counting/nag logic break an actual AI call.
+  }
+
   const { vendor, model, keys } = cfg;
   const maxTokens = opts.maxTokens ?? 1024;
   const timeoutMs = opts.timeoutMs ?? 30000;

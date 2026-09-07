@@ -33,6 +33,9 @@ export interface Settings {
   // Phase 2: automated price fetching (opt-in, off by default).
   priceFetchEnabled?: boolean;
   priceSource?: "yahoo";
+  // Total number of AI requests made (persisted across launches); used to
+  // periodically nag unlicensed users to purchase.
+  aiRequestCount?: number;
 }
 
 const SETTINGS_PATH = join(homedir(), ".budgetlion-settings.json");
@@ -66,4 +69,20 @@ export function saveSettings(settings: Settings): void {
 
 export function settingsPath(): string {
   return SETTINGS_PATH;
+}
+
+/**
+ * Increment the persisted AI-request counter and return the new total. Survives
+ * across launches (stored in the settings JSON). Best-effort: if persistence
+ * fails, still returns the in-memory incremented value.
+ */
+export function recordAiRequest(): number {
+  const settings = loadSettings();
+  const count = (settings.aiRequestCount ?? 0) + 1;
+  try {
+    saveSettings({ ...settings, aiRequestCount: count });
+  } catch {
+    // Ignore write failures; the caller still gets the incremented count.
+  }
+  return count;
 }

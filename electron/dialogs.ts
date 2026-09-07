@@ -65,6 +65,18 @@ export function showSplash(): void {
 }
 ipcMain.on("splash-close", () => splashWin?.close());
 
+/**
+ * Nag hook for the AI-request counter: every 5th request, show the purchase
+ * splash — but never for a validly licensed user. `count` is the running total
+ * from settings (persisted across launches).
+ */
+export function maybeNagForAiRequest(count: number): void {
+  if (count <= 0 || count % 5 !== 0) return;
+  const s = loadSettings();
+  if (s.licenseKey && s.userName && isValidLicense(s.licenseKey, s.userName)) return;
+  showSplash();
+}
+
 // ---- About ----
 let aboutWin: BrowserWindow | null = null;
 function showAbout(): void {
