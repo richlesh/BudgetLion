@@ -1214,10 +1214,12 @@ export function importData(data: {
     `INSERT INTO recurring_rules
        (id, name, amount_cents, estimate_mode, from_account_id, to_account_id, category_id,
         frequency, interval_count, start_date, end_date, day_of_month,
+        day_of_month2, day_of_week, weekend_adjust,
         created_at, updated_at, deleted_at)
      VALUES
        (@id, @name, @amount_cents, @estimate_mode, @from_account_id, @to_account_id, @category_id,
         @frequency, @interval_count, @start_date, @end_date, @day_of_month,
+        @day_of_month2, @day_of_week, @weekend_adjust,
         @created_at, @updated_at, @deleted_at)
      ON CONFLICT(id) DO UPDATE SET
        name = excluded.name, amount_cents = excluded.amount_cents,
@@ -1226,6 +1228,8 @@ export function importData(data: {
        category_id = excluded.category_id, frequency = excluded.frequency,
        interval_count = excluded.interval_count, start_date = excluded.start_date,
        end_date = excluded.end_date, day_of_month = excluded.day_of_month,
+       day_of_month2 = excluded.day_of_month2, day_of_week = excluded.day_of_week,
+       weekend_adjust = excluded.weekend_adjust,
        updated_at = excluded.updated_at, deleted_at = excluded.deleted_at`
   );
 
@@ -1279,6 +1283,9 @@ export function importData(data: {
         start_date: r.startDate,
         end_date: r.endDate ?? null,
         day_of_month: r.dayOfMonth ?? null,
+        day_of_month2: r.dayOfMonth2 ?? null,
+        day_of_week: r.dayOfWeek ?? null,
+        weekend_adjust: r.weekendAdjust ?? "on",
         created_at: r.createdAt ?? ts,
         updated_at: ts,
         deleted_at: r.deletedAt ?? null,
@@ -1305,6 +1312,9 @@ interface RuleRow {
   start_date: string;
   end_date: string | null;
   day_of_month: number | null;
+  day_of_month2: number | null;
+  day_of_week: number | null;
+  weekend_adjust: string;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -1324,6 +1334,9 @@ function toRule(r: RuleRow): RecurringRule {
     startDate: r.start_date,
     endDate: r.end_date,
     dayOfMonth: r.day_of_month,
+    dayOfMonth2: r.day_of_month2,
+    dayOfWeek: r.day_of_week,
+    weekendAdjust: (r.weekend_adjust ?? "on") as RecurringRule["weekendAdjust"],
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     deletedAt: r.deleted_at,
@@ -1354,6 +1367,9 @@ export function createRecurringRule(input: NewRecurringRuleInput): RecurringRule
     start_date: input.startDate,
     end_date: input.endDate ?? null,
     day_of_month: input.dayOfMonth ?? null,
+    day_of_month2: input.dayOfMonth2 ?? null,
+    day_of_week: input.dayOfWeek ?? null,
+    weekend_adjust: input.weekendAdjust ?? "on",
     created_at: ts,
     updated_at: ts,
     deleted_at: null,
@@ -1362,10 +1378,12 @@ export function createRecurringRule(input: NewRecurringRuleInput): RecurringRule
     `INSERT INTO recurring_rules
        (id, name, amount_cents, estimate_mode, from_account_id, to_account_id,
         category_id, frequency, interval_count, start_date, end_date, day_of_month,
+        day_of_month2, day_of_week, weekend_adjust,
         created_at, updated_at, deleted_at)
      VALUES
        (@id, @name, @amount_cents, @estimate_mode, @from_account_id, @to_account_id,
         @category_id, @frequency, @interval_count, @start_date, @end_date, @day_of_month,
+        @day_of_month2, @day_of_week, @weekend_adjust,
         @created_at, @updated_at, @deleted_at)`
   ).run(row);
   return toRule(row);
@@ -1387,6 +1405,9 @@ export function updateRecurringRule(input: UpdateRecurringRuleInput): void {
     ["startDate", "start_date"],
     ["endDate", "end_date"],
     ["dayOfMonth", "day_of_month"],
+    ["dayOfMonth2", "day_of_month2"],
+    ["dayOfWeek", "day_of_week"],
+    ["weekendAdjust", "weekend_adjust"],
   ];
   for (const [key, col] of map) {
     if (input[key] !== undefined) {

@@ -6,9 +6,11 @@ import type {
   Frequency,
   NewRecurringRuleInput,
   RecurringRule,
+  WeekendAdjust,
 } from "../shared/types";
 import { formatCents, parseCents } from "../core/money";
 import { categoryOptions } from "../core/categories";
+import { TrashIcon } from "./TrashIcon";
 
 interface Props {
   accounts: Account[];
@@ -21,10 +23,29 @@ interface Props {
 
 const FREQS: { value: Frequency; label: string }[] = [
   { value: "weekly", label: "Weekly" },
-  { value: "biweekly", label: "Bi-weekly" },
+  { value: "biweekly", label: "Bi-weekly (every 2 weeks)" },
   { value: "monthly", label: "Monthly" },
+  { value: "bimonthly", label: "Bi-Monthly (twice a month)" },
   { value: "yearly", label: "Yearly" },
 ];
+
+// Day-of-week options for weekly/bi-weekly pay day (0=Sun..6=Sat).
+const DOW: { value: number; label: string }[] = [
+  { value: 0, label: "Sunday" },
+  { value: 1, label: "Monday" },
+  { value: 2, label: "Tuesday" },
+  { value: 3, label: "Wednesday" },
+  { value: 4, label: "Thursday" },
+  { value: 5, label: "Friday" },
+  { value: 6, label: "Saturday" },
+];
+
+// Pay-date options 1-31 for monthly/bi-monthly; 31 is labeled "31 or last day"
+// since 30/31 clamp to the last day of shorter months.
+const PAY_DAYS: { value: number; label: string }[] = Array.from({ length: 31 }, (_, i) => ({
+  value: i + 1,
+  label: i + 1 === 31 ? "31 or last day" : String(i + 1),
+}));
 
 const MODES: { value: EstimateMode; label: string }[] = [
   { value: "fixed", label: "Fixed amount" },
@@ -48,6 +69,9 @@ const BLANK: NewRecurringRuleInput = {
   startDate: today(),
   endDate: null,
   dayOfMonth: null,
+  dayOfMonth2: null,
+  dayOfWeek: null,
+  weekendAdjust: "on",
 };
 
 export function RecurringRulesDialog({ accounts, categories, initialSeed, onClose, onChanged }: Props) {
@@ -80,6 +104,9 @@ export function RecurringRulesDialog({ accounts, categories, initialSeed, onClos
       startDate: r.startDate,
       endDate: r.endDate,
       dayOfMonth: r.dayOfMonth,
+      dayOfMonth2: r.dayOfMonth2,
+      dayOfWeek: r.dayOfWeek,
+      weekendAdjust: r.weekendAdjust,
     });
     setAmountStr(((r.amountCents ?? 0) / 100).toFixed(2));
     setError(null);
@@ -182,14 +209,15 @@ export function RecurringRulesDialog({ accounts, categories, initialSeed, onClos
                     </div>
                   </div>
                   <button
-                    className="secondary"
-                    style={{ padding: "2px 8px" }}
+                    className="secondary icon-btn"
+                    title="Delete rule"
+                    aria-label={`Delete ${r.name}`}
                     onClick={(e) => {
                       e.stopPropagation();
                       void remove(r.id);
                     }}
                   >
-                    Delete
+                    <TrashIcon />
                   </button>
                 </div>
               ))
@@ -262,6 +290,80 @@ export function RecurringRulesDialog({ accounts, categories, initialSeed, onClos
                 />
               </div>
             </div>
+            {(form.frequency === "weekly" || form.frequency === "biweekly") && (
+              <div className="field">
+                <label>Pay day of week</label>
+                <select
+                  value={form.dayOfWeek ?? ""}
+                  onChange={(e) => set("dayOfWeek", e.target.value === "" ? null : Number(e.target.value))}
+                >
+                  <option value="">Same weekday as start date</option>
+                  {DOW.map((d) => (
+                    <option key={d.value} value={d.value}>{d.label}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {form.frequency === "monthly" && (
+              <div className="field">
+                <label>Pay date</label>
+                <select
+                  value={form.dayOfMonth ?? ""}
+                  onChange={(e) => set("dayOfMonth", e.target.value === "" ? null : Number(e.target.value))}
+                >
+                  <option value="">Same day as start date</option>
+                  {PAY_DAYS.map((d) => (
+                    <option key={d.value} value={d.value}>{d.label}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {form.frequency === "bimonthly" && (
+              <div style={{ display: "flex", gap: 8 }}>
+                <div className="field" style={{ flex: 1 }}>
+                  <label>First pay date</label>
+                  <select
+                    value={form.dayOfMonth ?? 15}
+                    onChange={(e) => set("dayOfMonth", Number(e.target.value))}
+                  >
+                    {PAY_DAYS.map((d) => (
+                      <option key={d.value} value={d.value}>{d.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="field" style={{ flex: 1 }}>
+                  <label>Second pay date</label>
+                  <select
+                    value={form.dayOfMonth2 ?? 31}
+                    onChange={(e) => set("dayOfMonth2", Number(e.target.value))}
+                  >
+                    {PAY_DAYS.map((d) => (
+                      <option key={d.value} value={d.value}>{d.label}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
+            {form.frequency === "yearly" && (
+              <div className="account-type" style={{ marginTop: -2 }}>
+                Pays on the same month and day as the start date every year.
+              </div>
+            )}
+            {/* Weekend adjustment applies to date-anchored pay dates (monthly,
+                bi-monthly, yearly). Weekly/bi-weekly already pick a weekday. */}
+            {form.frequency !== "weekly" && form.frequency !== "biweekly" && (
+              <div className="field">
+                <label>If a pay date falls on a weekend</label>
+                <select
+                  value={form.weekendAdjust ?? "on"}
+                  onChange={(e) => set("weekendAdjust", e.target.value as WeekendAdjust)}
+                >
+                  <option value="before">Pay before (previous Friday)</option>
+                  <option value="on">Pay on the date</option>
+                  <option value="after">Pay after (following Monday)</option>
+                </select>
+              </div>
+            )}
             <div style={{ display: "flex", gap: 8 }}>
               <div className="field" style={{ flex: 1 }}>
                 <label>Start date</label>

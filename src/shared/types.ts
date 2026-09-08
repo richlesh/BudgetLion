@@ -613,8 +613,11 @@ export interface AggregateData {
 
 // ---- Recurring rules & projection (M4) ----
 
-export type Frequency = "weekly" | "biweekly" | "monthly" | "yearly";
+export type Frequency = "weekly" | "biweekly" | "monthly" | "bimonthly" | "yearly";
 export type EstimateMode = "fixed" | "average" | "last";
+
+/** How to adjust a pay date that lands on a weekend (Sat/Sun). */
+export type WeekendAdjust = "before" | "on" | "after";
 
 export interface RecurringRule {
   id: string;
@@ -628,7 +631,10 @@ export interface RecurringRule {
   intervalCount: number; // every N periods (>=1)
   startDate: string; // ISO date
   endDate: string | null; // ISO date or null = indefinite
-  dayOfMonth: number | null; // for monthly/yearly anchoring (1-31)
+  dayOfMonth: number | null; // monthly pay date, and bi-monthly's FIRST pay date (1-31; 30/31 clamp)
+  dayOfMonth2: number | null; // bi-monthly's SECOND pay date (1-31; 30/31 clamp)
+  dayOfWeek: number | null; // weekly/biweekly pay day (0=Sun .. 6=Sat)
+  weekendAdjust: WeekendAdjust; // shift date-anchored pay dates off weekends
   createdAt: string;
   updatedAt: string;
   deletedAt: string | null;
@@ -646,6 +652,9 @@ export interface NewRecurringRuleInput {
   startDate: string;
   endDate?: string | null;
   dayOfMonth?: number | null;
+  dayOfMonth2?: number | null;
+  dayOfWeek?: number | null;
+  weekendAdjust?: WeekendAdjust;
 }
 
 export interface UpdateRecurringRuleInput extends Partial<NewRecurringRuleInput> {

@@ -105,6 +105,27 @@ function runMigrations(instance: Database.Database): void {
     instance.exec("ALTER TABLE categories ADD COLUMN applicability TEXT NOT NULL DEFAULT 'both'");
   }
 
+  // recurring_rules: per-frequency pay-date fields + weekend adjustment. These
+  // are new nullable columns (weekend_adjust has a default), so plain ADD COLUMN
+  // is safe and idempotent. Done BEFORE any recurring_rules table rebuild below
+  // so the rebuild copies them.
+  const ruleCols = instance
+    .prepare("PRAGMA table_info(recurring_rules)")
+    .all() as Array<{ name: string }>;
+  if (ruleCols.length > 0) {
+    if (!ruleCols.some((c) => c.name === "day_of_month2")) {
+      instance.exec("ALTER TABLE recurring_rules ADD COLUMN day_of_month2 INTEGER");
+    }
+    if (!ruleCols.some((c) => c.name === "day_of_week")) {
+      instance.exec("ALTER TABLE recurring_rules ADD COLUMN day_of_week INTEGER");
+    }
+    if (!ruleCols.some((c) => c.name === "weekend_adjust")) {
+      instance.exec(
+        "ALTER TABLE recurring_rules ADD COLUMN weekend_adjust TEXT NOT NULL DEFAULT 'on'"
+      );
+    }
+  }
+
   // investment_transactions.income_txn_id: link to the categorized income leg for
   // grant/reinvest (added after the table's initial release). ALTER ADD COLUMN is
   // safe here because it's a nullable column with no CHECK/constraint change.
@@ -328,6 +349,73 @@ function runMigrations(instance: Database.Database): void {
       if (violations.length > 0) {
         throw new Error(
           `accounts migration left ${violations.length} foreign-key violation(s)`
+        );
+      }
+    } finally {
+      instance.pragma("foreign_keys = ON");
+    }
+  }
+
+  // Widen recurring_rules.frequency CHECK to allow 'bimonthly' (semi-monthly:
+  // 15th + last day). SQLite can't ALTER a CHECK, so rebuild the table only when
+  // the stored SQL still has the old (narrow) constraint. Same FK-toggle dance:
+  // PRAGMA foreign_keys is a no-op inside a transaction, so toggle it OUTSIDE.
+  const rulesSql = (
+    instance
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'recurring_rules'")
+      .get() as { sql: string } | undefined
+  )?.sql;
+  if (rulesSql && !rulesSql.includes("'bimonthly'")) {
+    instance.pragma("foreign_keys = OFF");
+    const rebuild = instance.transaction(() => {
+      instance.exec(`
+        CREATE TABLE recurring_rules_new (
+          id              TEXT PRIMARY KEY,
+          name            TEXT NOT NULL,
+          amount_cents    INTEGER,
+          estimate_mode   TEXT NOT NULL DEFAULT 'fixed'
+                            CHECK (estimate_mode IN ('fixed','average','last')),
+          from_account_id TEXT REFERENCES accounts(id),
+          to_account_id   TEXT REFERENCES accounts(id),
+          category_id     TEXT REFERENCES categories(id),
+          frequency       TEXT NOT NULL
+                            CHECK (frequency IN ('weekly','biweekly','monthly','bimonthly','yearly')),
+          interval_count  INTEGER NOT NULL DEFAULT 1,
+          start_date      TEXT NOT NULL,
+          end_date        TEXT,
+          day_of_month    INTEGER,
+          day_of_month2   INTEGER,
+          day_of_week     INTEGER,
+          weekend_adjust  TEXT NOT NULL DEFAULT 'on'
+                            CHECK (weekend_adjust IN ('before','on','after')),
+          created_at      TEXT NOT NULL,
+          updated_at      TEXT NOT NULL,
+          deleted_at      TEXT,
+          CHECK (from_account_id IS NOT NULL OR to_account_id IS NOT NULL)
+        )
+      `);
+      instance.exec(`
+        INSERT INTO recurring_rules_new
+          (id, name, amount_cents, estimate_mode, from_account_id, to_account_id, category_id,
+           frequency, interval_count, start_date, end_date, day_of_month, day_of_month2, day_of_week, weekend_adjust,
+           created_at, updated_at, deleted_at)
+        SELECT
+           id, name, amount_cents, estimate_mode, from_account_id, to_account_id, category_id,
+           frequency, interval_count, start_date, end_date, day_of_month, day_of_month2, day_of_week, weekend_adjust,
+           created_at, updated_at, deleted_at
+        FROM recurring_rules
+      `);
+      instance.exec("DROP TABLE recurring_rules");
+      instance.exec("ALTER TABLE recurring_rules_new RENAME TO recurring_rules");
+      instance.exec("CREATE INDEX IF NOT EXISTS idx_rule_from ON recurring_rules(from_account_id)");
+      instance.exec("CREATE INDEX IF NOT EXISTS idx_rule_to   ON recurring_rules(to_account_id)");
+    });
+    try {
+      rebuild();
+      const violations = instance.pragma("foreign_key_check") as unknown[];
+      if (violations.length > 0) {
+        throw new Error(
+          `recurring_rules migration left ${violations.length} foreign-key violation(s)`
         );
       }
     } finally {

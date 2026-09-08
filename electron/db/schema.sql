@@ -99,12 +99,16 @@ CREATE TABLE IF NOT EXISTS recurring_rules (
   from_account_id TEXT REFERENCES accounts(id),   -- money leaves here (nullable)
   to_account_id   TEXT REFERENCES accounts(id),   -- money arrives here (nullable)
   category_id     TEXT REFERENCES categories(id),
-  frequency       TEXT NOT NULL                   -- 'weekly'|'biweekly'|'monthly'|'yearly'
-                    CHECK (frequency IN ('weekly','biweekly','monthly','yearly')),
+  frequency       TEXT NOT NULL                   -- 'weekly'|'biweekly'|'monthly'|'bimonthly'|'yearly'
+                    CHECK (frequency IN ('weekly','biweekly','monthly','bimonthly','yearly')),
   interval_count  INTEGER NOT NULL DEFAULT 1,     -- every N periods
   start_date      TEXT NOT NULL,                  -- ISO date
   end_date        TEXT,                           -- ISO date or null = indefinite
-  day_of_month    INTEGER,                        -- monthly/yearly anchor (1-31)
+  day_of_month    INTEGER,                        -- monthly pay date & bi-monthly 1st (1-31; 30/31 clamp)
+  day_of_month2   INTEGER,                        -- bi-monthly 2nd pay date (1-31; 30/31 clamp)
+  day_of_week     INTEGER,                        -- weekly/biweekly pay day (0=Sun..6=Sat)
+  weekend_adjust  TEXT NOT NULL DEFAULT 'on'      -- 'before' | 'on' | 'after' (weekend pay-date shift)
+                    CHECK (weekend_adjust IN ('before','on','after')),
   created_at      TEXT NOT NULL,
   updated_at      TEXT NOT NULL,
   deleted_at      TEXT,

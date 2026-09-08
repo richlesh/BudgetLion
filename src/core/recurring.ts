@@ -4,11 +4,11 @@
 import type {
   Account,
   ForecastPoint,
-  Frequency,
   ProjectedOccurrence,
   ProjectionRow,
   RecurringRule,
   Transaction,
+  WeekendAdjust,
 } from "../shared/types";
 import { currentBalance, signedAmountFor } from "./balances";
 
@@ -40,17 +40,9 @@ function addMonths(d: Date, n: number, dayOfMonth: number | null): Date {
   return new Date(Date.UTC(targetYear, targetMonth, day));
 }
 
-function stepDate(from: Date, freq: Frequency, interval: number, dayOfMonth: number | null): Date {
-  switch (freq) {
-    case "weekly":
-      return addDays(from, 7 * interval);
-    case "biweekly":
-      return addDays(from, 14 * interval);
-    case "monthly":
-      return addMonths(from, interval, dayOfMonth);
-    case "yearly":
-      return addMonths(from, 12 * interval, dayOfMonth);
-  }
+/** Last calendar day (1-31) of the month containing date d (UTC). */
+function lastDayOfMonth(year: number, month0: number): number {
+  return new Date(Date.UTC(year, month0 + 1, 0)).getUTCDate();
 }
 
 /** Add N months to an ISO date (for horizon computation). */
@@ -58,9 +50,44 @@ export function addMonthsISO(iso: string, n: number): string {
   return toISO(addMonths(parseISO(iso), n, null));
 }
 
+/** A day-of-month (1-31) clamped to the given month's actual length. */
+function clampDay(year: number, month0: number, day: number): number {
+  return Math.min(Math.max(1, day), lastDayOfMonth(year, month0));
+}
+
+/**
+ * Shift a date off the weekend per the rule's weekendAdjust:
+ *   'before' -> Saturday moves to Friday (-1), Sunday to Friday (-2)
+ *   'after'  -> Saturday moves to Monday (+2), Sunday to Monday (+1)
+ *   'on'     -> unchanged
+ * Weekdays are never moved.
+ */
+function applyWeekendAdjust(d: Date, adjust: WeekendAdjust): Date {
+  const dow = d.getUTCDay(); // 0=Sun .. 6=Sat
+  if (adjust === "before") {
+    if (dow === 6) return addDays(d, -1);
+    if (dow === 0) return addDays(d, -2);
+  } else if (adjust === "after") {
+    if (dow === 6) return addDays(d, 2);
+    if (dow === 0) return addDays(d, 1);
+  }
+  return d;
+}
+
 /**
  * Expand a rule into occurrence dates within [rangeStart, rangeEnd] inclusive.
- * Stops at the rule's endDate if earlier than rangeEnd. Guards against runaway loops.
+ * Stops at the rule's endDate if earlier than rangeEnd.
+ *
+ * Anchoring by frequency:
+ *   weekly/biweekly — the rule's dayOfWeek (0=Sun..6=Sat); falls back to the
+ *                     start date's weekday. Stepped 7/14 days. (No weekend shift.)
+ *   monthly         — dayOfMonth (1-31, clamped to month length); falls back to
+ *                     the start date's day. One occurrence per `interval` months.
+ *   bimonthly       — TWO days a month: dayOfMonth and dayOfMonth2 (each clamped);
+ *                     falls back to the 15th and last day. Every `interval` months.
+ *   yearly          — the start date's month/day each `interval` years (clamped).
+ * For the date-anchored frequencies (monthly/bimonthly/yearly) a pay date landing
+ * on a weekend is shifted per weekendAdjust.
  */
 export function expandDates(
   rule: RecurringRule,
@@ -70,17 +97,84 @@ export function expandDates(
   const interval = Math.max(1, rule.intervalCount || 1);
   const hardEnd = rule.endDate && rule.endDate < rangeEnd ? rule.endDate : rangeEnd;
 
-  const dates: string[] = [];
-  let cursor = parseISO(rule.startDate);
+  const ruleStart = parseISO(rule.startDate);
   const endD = parseISO(hardEnd);
   const startD = parseISO(rangeStart);
+  const adjust: WeekendAdjust = rule.weekendAdjust ?? "on";
 
-  let guard = 0;
-  while (cursor <= endD && guard < 10000) {
-    guard++;
-    if (cursor >= startD) dates.push(toISO(cursor));
-    cursor = stepDate(cursor, rule.frequency, interval, rule.dayOfMonth);
+  // Emit a candidate raw date: apply weekend adjustment, then keep it only if it
+  // falls within [ruleStart, endD] and [startD (=rangeStart), endD].
+  const dates: string[] = [];
+  const emit = (raw: Date, weekendShift: boolean) => {
+    const d = weekendShift ? applyWeekendAdjust(raw, adjust) : raw;
+    if (d >= ruleStart && d >= startD && d <= endD) dates.push(toISO(d));
+  };
+
+  // ---- Weekly / bi-weekly: anchor to a day-of-week, step 7/14 days ----
+  if (rule.frequency === "weekly" || rule.frequency === "biweekly") {
+    const stepDays = (rule.frequency === "weekly" ? 7 : 14) * interval;
+    const targetDow = rule.dayOfWeek ?? ruleStart.getUTCDay();
+    // First occurrence: the first matching weekday on/after the start date.
+    let cursor = new Date(ruleStart);
+    const delta = ((targetDow - cursor.getUTCDay()) % 7 + 7) % 7;
+    cursor = addDays(cursor, delta);
+    let guard = 0;
+    while (cursor <= endD && guard < 10000) {
+      guard++;
+      emit(cursor, false); // day-of-week is already chosen; no weekend shift
+      cursor = addDays(cursor, stepDays);
+    }
+    return dates;
   }
+
+  // ---- Yearly: start date's month/day each `interval` years ----
+  if (rule.frequency === "yearly") {
+    const month0 = ruleStart.getUTCMonth();
+    const day = ruleStart.getUTCDate();
+    let year = ruleStart.getUTCFullYear();
+    let guard = 0;
+    while (guard < 10000) {
+      guard++;
+      const occ = new Date(Date.UTC(year, month0, clampDay(year, month0, day)));
+      if (occ > endD) break;
+      emit(occ, true);
+      year += interval;
+    }
+    return dates;
+  }
+
+  // ---- Monthly / bi-monthly: one or two clamped pay dates per month ----
+  // Monthly uses dayOfMonth (or the start day). Bi-monthly uses dayOfMonth and
+  // dayOfMonth2 (or 15 and last-day as a sensible default), sorted & de-duped.
+  const isBi = rule.frequency === "bimonthly";
+  let year = ruleStart.getUTCFullYear();
+  let month0 = ruleStart.getUTCMonth();
+  let guard = 0;
+  while (guard < 10000) {
+    guard++;
+    const monthStart = new Date(Date.UTC(year, month0, 1));
+    if (monthStart > endD) break;
+
+    const last = lastDayOfMonth(year, month0);
+    let days: number[];
+    if (isBi) {
+      const d1 = rule.dayOfMonth ?? 15;
+      const d2 = rule.dayOfMonth2 ?? last;
+      days = [...new Set([clampDay(year, month0, d1), clampDay(year, month0, d2)])].sort(
+        (a, b) => a - b
+      );
+    } else {
+      days = [clampDay(year, month0, rule.dayOfMonth ?? ruleStart.getUTCDate())];
+    }
+    for (const day of days) emit(new Date(Date.UTC(year, month0, day)), true);
+
+    const next = month0 + interval;
+    year += Math.floor(next / 12);
+    month0 = ((next % 12) + 12) % 12;
+  }
+  // Weekend shifts can reorder dates slightly (e.g. the 1st→prior Fri crossing a
+  // month boundary), so sort the final list ascending.
+  dates.sort();
   return dates;
 }
 
@@ -199,7 +293,12 @@ export function projectOccurrencesForAccount(
     if (dates.length === 0) continue;
 
     const magnitude = estimateMagnitude(rule, history);
-    const sign = ruleSignedAmount(rule, account.id) < 0 ? -1 : 1;
+    // Sign from DIRECTION relative to this account, not from a signed amount:
+    // for average/last rules `amountCents` is null/0, so ruleSignedAmount would
+    // collapse to -0 (which is NOT < 0) and mis-sign outflows as positive.
+    // Outflow (this account is the "from" side) => negative; inflow => positive.
+    const isOutflow = rule.fromAccountId === account.id && rule.toAccountId !== account.id;
+    const sign = isOutflow ? -1 : 1;
 
     const isLoanPayment =
       account.type === "loan" &&
