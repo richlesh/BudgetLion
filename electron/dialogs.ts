@@ -65,6 +65,12 @@ export function showSplash(): void {
 }
 ipcMain.on("splash-close", () => splashWin?.close());
 
+/** True when the current settings carry a valid (key + name) license. */
+export function isLicensed(): boolean {
+  const s = loadSettings();
+  return !!(s.licenseKey && s.userName && isValidLicense(s.licenseKey, s.userName));
+}
+
 /**
  * Record ONE AI usage (one dedupe scan, or one AI import/extract — not one model
  * call): increment the persistent counter and, every 5th use, show the purchase
@@ -72,10 +78,8 @@ ipcMain.on("splash-close", () => splashWin?.close());
  */
 export function recordAiUsage(): number {
   const count = recordAiRequest();
-  if (count > 0 && count % 5 === 0) {
-    const s = loadSettings();
-    const licensed = !!(s.licenseKey && s.userName && isValidLicense(s.licenseKey, s.userName));
-    if (!licensed) showSplash();
+  if (count > 0 && count % 5 === 0 && !isLicensed()) {
+    showSplash();
   }
   return count;
 }

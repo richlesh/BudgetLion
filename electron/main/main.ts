@@ -4,7 +4,7 @@ import { app, BrowserWindow } from "electron";
 import { join } from "node:path";
 import { closeDb, getDb } from "../db/index.js";
 import { registerIpcHandlers } from "../ipc/handlers.js";
-import { buildMenu, showSplash } from "../dialogs.js";
+import { buildMenu, showSplash, isLicensed } from "../dialogs.js";
 import { loadSettings, saveSettings } from "../settings.js";
 import { applyDbTitle, initDatabaseFromSettings } from "../db/manage.js";
 
@@ -77,7 +77,8 @@ app.whenReady().then(() => {
   initDatabaseFromSettings(); // adopt the saved DB folder if present
   getDb(); // initialize schema on startup
   registerIpcHandlers();
-  showSplash();
+  // Show the purchase splash on launch only for unlicensed users.
+  if (!isLicensed()) showSplash();
   createWindow();
 });
 
