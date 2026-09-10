@@ -34,6 +34,12 @@ import type {
   SecurityHolding,
   InvestmentImportRow,
   LoanPaymentSplitResult,
+  LoanPlan,
+  NewLoanPlanInput,
+  RecordPlanPurchaseInput,
+  UpdateLoanPlanInput,
+  PlanBalance,
+  PlanLedgerEntry,
 } from "./types";
 
 export interface AppSettings {
@@ -297,6 +303,22 @@ export interface LedgerApi {
   deleteRecurringRule(id: string): Promise<void>;
   getProjection(accountId: string, horizonMonths: number): Promise<AccountProjection>;
 
+  // Installment / BNPL plans
+  listLoanPlans(accountId: string): Promise<LoanPlan[]>;
+  createLoanPlan(input: NewLoanPlanInput): Promise<LoanPlan>;
+  updateLoanPlan(input: UpdateLoanPlanInput): Promise<void>;
+  deleteLoanPlan(id: string): Promise<void>;
+  /** Per-plan computed remaining balances for an installment account. */
+  planBalances(accountId: string): Promise<PlanBalance[]>;
+  /** A single plan's transaction history with a running balance. */
+  planLedger(planId: string): Promise<PlanLedgerEntry[]>;
+  /** Interest category id from the most recent prior payment on this account, or null. */
+  planLastInterestCategory(accountId: string): Promise<string | null>;
+  /** Whether a plan already has an originating purchase transaction recorded. */
+  planHasPurchase(planId: string): Promise<boolean>;
+  /** Record an originating purchase for an existing plan (retroactive). Returns the txn id. */
+  recordPlanPurchase(input: RecordPlanPurchaseInput): Promise<string>;
+
   // Accounts/Categories JSON data exchange
   openJsonFile(): Promise<OpenedFile | null>;
   getData(): Promise<DataBundle>;
@@ -433,6 +455,15 @@ export const IPC = {
   updateRecurringRule: "recurring:update",
   deleteRecurringRule: "recurring:delete",
   getProjection: "recurring:projection",
+  listLoanPlans: "plans:list",
+  createLoanPlan: "plans:create",
+  updateLoanPlan: "plans:update",
+  deleteLoanPlan: "plans:delete",
+  planBalances: "plans:balances",
+  planLedger: "plans:ledger",
+  planLastInterestCategory: "plans:lastInterestCategory",
+  planHasPurchase: "plans:hasPurchase",
+  recordPlanPurchase: "plans:recordPurchase",
   saveTextFile: "export:text",
   saveDataUrl: "export:dataurl",
   exportPdf: "export:pdf",

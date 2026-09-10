@@ -11,6 +11,7 @@ import type {
 import { formatCents, parseCents } from "../core/money";
 import { categoryOptions } from "../core/categories";
 import { TrashIcon } from "./TrashIcon";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 interface Props {
   accounts: Account[];
@@ -81,6 +82,8 @@ export function RecurringRulesDialog({ accounts, categories, initialSeed, onClos
   const [form, setForm] = useState<NewRecurringRuleInput>(seeded);
   const [amountStr, setAmountStr] = useState(((seeded.amountCents ?? 0) / 100).toFixed(2));
   const [error, setError] = useState<string | null>(null);
+  // Rule staged for deletion, pending the confirmation ("chicken test").
+  const [pendingDelete, setPendingDelete] = useState<RecurringRule | null>(null);
 
   // Category options sorted by full display name for the picker.
   const categoryChoices = categoryOptions(categories);
@@ -153,7 +156,9 @@ export function RecurringRulesDialog({ accounts, categories, initialSeed, onClos
     }
   }
 
+  // Perform the actual deletion (called after the user confirms).
   async function remove(id: string) {
+    setPendingDelete(null);
     await window.ledger.deleteRecurringRule(id);
     await refresh();
     onChanged();
@@ -214,7 +219,7 @@ export function RecurringRulesDialog({ accounts, categories, initialSeed, onClos
                     aria-label={`Delete ${r.name}`}
                     onClick={(e) => {
                       e.stopPropagation();
-                      void remove(r.id);
+                      setPendingDelete(r);
                     }}
                   >
                     <TrashIcon />
@@ -386,6 +391,15 @@ export function RecurringRulesDialog({ accounts, categories, initialSeed, onClos
           </div>
         </div>
       </div>
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Delete recurring rule?"
+          message={`Delete the recurring rule "${pendingDelete.name}"? This can't be undone. Past transactions it created are not affected.`}
+          confirmLabel="Delete rule"
+          onConfirm={() => void remove(pendingDelete.id)}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
     </div>
   );
 }

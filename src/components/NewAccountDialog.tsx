@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Account, AccountType, Category, NewAccountInput } from "../shared/types";
-import { displaySign, isLiability, parseCents, percentToBps } from "../core/money";
+import { displaySign, parseCents, percentToBps } from "../core/money";
 import { categoriesForDirection, categoryOptions } from "../core/categories";
 
 interface Props {
@@ -15,6 +15,7 @@ const TYPES: { value: AccountType; label: string }[] = [
   { value: "savings", label: "Savings" },
   { value: "credit_card", label: "Credit Card" },
   { value: "loan", label: "Loan / Mortgage" },
+  { value: "installment", label: "Installment / BNPL" },
   { value: "investment", label: "Investment" },
   { value: "asset", label: "Asset" },
 ];
@@ -33,6 +34,9 @@ export function NewAccountDialog({ categories, accounts, onCancel, onCreate }: P
   const [escrow, setEscrow] = useState("");
   // Escrow destination: "" = default Escrow category, else "cat:<id>" | "acct:<id>".
   const [escrowTarget, setEscrowTarget] = useState("");
+  const [paymentAllocation, setPaymentAllocation] = useState<"per_plan" | "waterfall_soonest">(
+    "waterfall_soonest"
+  );
   const [error, setError] = useState<string | null>(null);
 
   const expenseCats = categoryOptions(categoriesForDirection(categories, "expense"));
@@ -56,11 +60,14 @@ export function NewAccountDialog({ categories, accounts, onCancel, onCreate }: P
       accountCode: accountCode.trim() || null,
       openingBalanceCents: isAsset ? 0 : cents,
       openingBalanceDate: isAsset ? null : openingDate || null,
-      // Interest rate applies only to liability accounts; stored in basis points.
-      interestRateBps: isLiability(type) ? percentToBps(interestRate) : null,
+      // Interest rate applies to credit-card/loan (installment plans carry their
+      // own per-plan rate); stored in basis points.
+      interestRateBps: type === "credit_card" || type === "loan" ? percentToBps(interestRate) : null,
       // Escrow applies to a mortgage (loan); blank => null.
       escrowPaymentCents: type === "loan" ? parseCents(escrow) : null,
       escrowTarget: type === "loan" ? escrowTarget || null : null,
+      // Installment/BNPL payment allocation strategy (null for other types).
+      paymentAllocation: type === "installment" ? paymentAllocation : null,
     });
   }
 
@@ -82,7 +89,7 @@ export function NewAccountDialog({ categories, accounts, onCancel, onCreate }: P
             ))}
           </select>
         </div>
-        {isLiability(type) && (
+        {(type === "credit_card" || type === "loan") && (
           <div className="field">
             <label>Annual interest rate (%)</label>
             <input
@@ -90,6 +97,20 @@ export function NewAccountDialog({ categories, accounts, onCancel, onCreate }: P
               onChange={(e) => setInterestRate(e.target.value)}
               placeholder="e.g. 4.25"
             />
+          </div>
+        )}
+        {type === "installment" && (
+          <div className="field">
+            <label>Payment allocation</label>
+            <select
+              value={paymentAllocation}
+              onChange={(e) => setPaymentAllocation(e.target.value as "per_plan" | "waterfall_soonest")}
+            >
+              <option value="per_plan">Per plan (each plan paid separately — e.g. Affirm)</option>
+              <option value="waterfall_soonest">
+                Waterfall (one payment, soonest-expiring first — e.g. PayPal Pay Later)
+              </option>
+            </select>
           </div>
         )}
         {type === "loan" && (

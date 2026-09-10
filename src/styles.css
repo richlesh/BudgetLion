@@ -910,6 +910,12 @@ button.danger {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
+  /* Never let a long panel (e.g. many installment plans) consume the whole
+     flex column and starve the ledger grid below it: cap the height and scroll
+     internally. flex-shrink keeps it from forcing the grid off-screen. */
+  flex: 0 1 auto;
+  max-height: 45vh;
+  overflow: auto;
 }
 
 .holdings-head {

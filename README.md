@@ -1,6 +1,6 @@
 ![app_icon_256](resources/app_icon_256.png)
 
-# BudgetLion v1.4.0
+# BudgetLion v1.5.0
 
 A cross-platform personal-finance ledger with double-entry accounting, built with Electron, React, and SQLite.
 
@@ -11,10 +11,10 @@ A cross-platform personal-finance ledger with double-entry accounting, built wit
 ## Features
 
 ### Accounts
-- **Account types** — Checking, Savings, Credit Card, Loan/Mortgage, Investment/Brokerage, and Asset
+- **Account types** — Checking, Savings, Credit Card, Loan/Mortgage, Investment/Brokerage, Asset, and Installment/BNPL
 - **Opening balances** — Set an opening balance and date; shown as an editable, sortable ledger row
 - **Loan/mortgage fields** — Annual interest rate (basis points, up to 3 decimal places), principal, and term
-- **Liability sign convention** — Credit card and loan ledgers display charges as positive and payments as negative, statement-style, while stored data stays consistent
+- **Liability sign convention** — Credit card, loan, and installment ledgers display charges as positive and payments as negative, statement-style, while stored data stays consistent
 - **Balances** — Running balance per row and current balance per account in the sidebar
 - **Website URL & Notes** — Optional per-account website/login URL and free-form notes (Edit account); the sidebar shows an internet icon that opens the account's website in your browser, and URLs in these fields are clickable in the account details view
 - **Delete empty accounts** — Right-click an account to delete it, available only when it has no transactions or holdings
@@ -67,6 +67,16 @@ A cross-platform personal-finance ledger with double-entry accounting, built wit
 - **Asset accounts** — Track physical assets (property, vehicles, collectibles) as pure holdings (no cash). A "+/- New Asset" dialog records Buy/Sell/Lost items with description, model number, serial number, and purchase/sale price; the holdings view shows Description, Model, Serial, Purchase Price, Purchased date, and Market Value, each editable by double-click, with a per-row trash button that warns you to record a Sell or Lost transaction instead when appropriate
 - **Net worth** — Per-account worth combines cash balance with the current value of holdings; investment/asset accounts show their worth in the sidebar
 
+### Installment / BNPL
+- **Installment accounts** — Track Buy-Now-Pay-Later and installment financing (Affirm, PayPal Pay Later, Klarna, store financing). Ledgers use the statement-style liability sign convention
+- **Plans** — One plan per financed purchase, each with a label, principal, APR (0% supported), term (number of payments), installment amount, origination date, and optional expiration date; fields are double-click editable in the Plans panel, which sorts by soonest next-due date
+- **Payment allocation** — Each account has a mode: **per-plan** (Affirm-style — a payment is matched to one plan) or **waterfall (soonest first)** (PayPal-style — a single payment cascades across plans, soonest-expiring first)
+- **Apply payment** — A dialog previews how a payment splits into principal and interest across plans; the interest category defaults to the last payment's, and you can pick a specific plan (required when the amount doesn't match a plan installment, and overridable by double-clicking a matched plan). Payments can also come from an owned account or be recorded with no external source
+- **Computed balances & payoff** — Plan remaining balances are computed from attributed principal payments (never stored stale), with a consolidated monthly payoff projection (payoff date and remaining interest)
+- **Record the purchase** — Optionally post the originating purchase as a charge against the account, attributed to one expense category or **split across several categories**, so financed spending shows up in your reports; available at plan creation or retroactively per plan
+- **Per-plan history** — Double-click a plan's Remaining cell for that plan's transaction history with a running balance
+- **Categorize an existing transfer** — Pointing an existing (e.g. imported checking) transaction at an installment account opens the Apply-payment dialog to build the principal/interest split; bulk category changes exclude installment accounts (use Apply payment instead)
+
 ### Categories
 - **Subcategories** — Parent:Child hierarchy with income / expense / both applicability
 - **Inline rename** — Double-click a category name to edit its base name
@@ -82,6 +92,7 @@ A cross-platform personal-finance ledger with double-entry accounting, built wit
 
 ### Charts
 - **Spending/Income pie** — Breakdown by category with an Expenses ⟷ Income toggle
+- **Drill down & inspect** — Single-click a pie wedge to drill into its subcategories; **double-click** any wedge (including rolled-up ones and "Other") to open a Search of every transaction that accumulated into it, scoped to the chart's account, date range, and expenses/income side
 - **Monthly bar chart** — Spending vs. income by month
 - **Scope & date range** — Chart a single account or all accounts over any date range
 - **Export** — Export any chart as PNG or SVG
@@ -104,6 +115,7 @@ A cross-platform personal-finance ledger with double-entry accounting, built wit
 - **Search dialog** — Filter across the whole database by account (default All), date range, payee, memo, category, and amount; empty fields are ignored
 - **Uncategorized filter** — The category picker includes an "Uncategorized" option to find transactions with no category (transfers excluded)
 - Results open in a ledger-style view (grouped by account) that reuses the same table and inline-edit mechanisms
+- **Category-matched amounts** — When a transaction matches via a split leg's category, the results show that leg's amount (summed if several legs match), not the whole transaction total; the running-balance column is hidden since it isn't meaningful across a filtered set
 - Right-click actions and the Split editor work directly in Search results; scoping to a single account groups results under just that account
 
 ### Import & Export

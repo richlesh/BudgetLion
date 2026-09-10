@@ -12,7 +12,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS accounts (
   id                    TEXT PRIMARY KEY,
   name                  TEXT NOT NULL,
-  type                  TEXT NOT NULL CHECK (type IN ('checking','savings','credit_card','loan','investment','asset')),
+  type                  TEXT NOT NULL CHECK (type IN ('checking','savings','credit_card','loan','installment','investment','asset')),
   currency              TEXT NOT NULL DEFAULT 'USD',
   opening_balance_cents INTEGER NOT NULL DEFAULT 0,
   opening_balance_date  TEXT,             -- ISO 8601 date for the opening balance (nullable)
@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   escrow_target         TEXT,             -- escrow destination: 'cat:<id>' | 'acct:<id>' (null = default Escrow category)
   website_url           TEXT,             -- account website / login URL (nullable)
   notes                 TEXT,             -- free-form account notes (nullable)
+  payment_allocation    TEXT,             -- installment/BNPL: 'per_plan' | 'waterfall_soonest' (nullable)
   created_at            TEXT NOT NULL,
   updated_at            TEXT NOT NULL,
   deleted_at            TEXT
@@ -65,6 +66,30 @@ CREATE INDEX IF NOT EXISTS idx_tx_to     ON transactions(to_account_id, date);
 CREATE INDEX IF NOT EXISTS idx_tx_import ON transactions(import_id);
 CREATE INDEX IF NOT EXISTS idx_tx_date   ON transactions(date);
 
+-- Installment / BNPL plans (Affirm, PayPal Pay Later, etc.). Each belongs to an
+-- 'installment' account and represents one financed purchase with its own
+-- origination date, principal, APR, and payment count. A plan's remaining balance
+-- is COMPUTED (principal minus attributed principal payments via transaction_splits
+-- .plan_id), never stored, consistent with BudgetLion's computed-balance principle.
+CREATE TABLE IF NOT EXISTS loan_plans (
+  id                TEXT PRIMARY KEY,
+  account_id        TEXT NOT NULL REFERENCES accounts(id),
+  label             TEXT NOT NULL,                 -- user label, e.g. "Wayfair couch — Mar 2026"
+  origination_date  TEXT NOT NULL,                 -- ISO 8601 date the plan started
+  expiration_date   TEXT,                          -- ISO 8601 date the plan ends (for waterfall ordering; nullable)
+  principal_cents   INTEGER NOT NULL,              -- original financed amount
+  rate_bps          INTEGER NOT NULL DEFAULT 0,    -- annual APR in basis points (0 = interest-free)
+  num_payments      INTEGER NOT NULL DEFAULT 1,    -- scheduled installment count
+  payment_cents     INTEGER NOT NULL DEFAULT 0,    -- fixed installment amount (0 = derive)
+  purchase_category_id TEXT REFERENCES categories(id), -- optional expense category for the originating purchase
+  purchase_txn_id   TEXT REFERENCES transactions(id), -- the originating purchase transaction (null = none recorded)
+  created_at        TEXT NOT NULL,
+  updated_at        TEXT NOT NULL,
+  deleted_at        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_plan_account ON loan_plans(account_id);
+
 -- Split line items for a transaction (Option 1: only present when a transaction
 -- is split; unsplit transactions store their single category/counterparty inline).
 -- amount_cents is SIGNED relative to the owning account (the transaction's from/to
@@ -79,6 +104,7 @@ CREATE TABLE IF NOT EXISTS transaction_splits (
   transfer_account_id TEXT REFERENCES accounts(id),   -- transfer leg (the other account)
   memo                TEXT,
   reconciled          INTEGER NOT NULL DEFAULT 0,     -- transfer-leg counterparty reconciled (0/1)
+  plan_id             TEXT REFERENCES loan_plans(id), -- installment plan this leg pays down (nullable)
   created_at          TEXT NOT NULL,
   updated_at          TEXT NOT NULL,
   deleted_at          TEXT,

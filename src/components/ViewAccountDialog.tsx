@@ -12,6 +12,7 @@ const TYPE_LABELS: Record<Account["type"], string> = {
   savings: "Savings",
   credit_card: "Credit Card",
   loan: "Loan / Mortgage",
+  installment: "Installment / BNPL",
   investment: "Investment",
   asset: "Asset",
 };

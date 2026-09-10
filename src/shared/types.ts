@@ -7,8 +7,12 @@ export type AccountType =
   | "savings"
   | "credit_card"
   | "loan"
+  | "installment"
   | "investment"
   | "asset";
+
+/** Payment-allocation strategy for an installment/BNPL account. */
+export type PaymentAllocation = "per_plan" | "waterfall_soonest";
 
 /** Clearance state of a transaction. */
 export enum ClearedState {
@@ -41,6 +45,7 @@ export interface Account {
   escrowTarget: string | null; // escrow destination: 'cat:<id>' | 'acct:<id>' (null = default Escrow category)
   websiteUrl: string | null; // account website / login URL
   notes: string | null; // free-form account notes
+  paymentAllocation: PaymentAllocation | null; // installment/BNPL allocation mode (null otherwise)
   createdAt: string; // ISO 8601
   updatedAt: string; // ISO 8601
   deletedAt: string | null; // soft delete
@@ -99,6 +104,8 @@ export interface TransactionSplit {
   memo: string | null;
   /** For transfer legs: whether the counterparty (transferAccountId) side is reconciled (0/1). */
   reconciled: number;
+  /** Installment plan this leg pays down (installment/BNPL accounts), or null. */
+  planId: string | null;
   createdAt: string;
   updatedAt: string;
   deletedAt: string | null;
@@ -110,6 +117,7 @@ export interface NewSplitInput {
   categoryId?: string | null;
   transferAccountId?: string | null;
   memo?: string | null;
+  planId?: string | null;
 }
 
 /**
@@ -187,6 +195,7 @@ export interface NewAccountInput {
   escrowTarget?: string | null;
   websiteUrl?: string | null;
   notes?: string | null;
+  paymentAllocation?: PaymentAllocation | null;
 }
 
 /** Partial update for an account (id required). Only provided fields change. */
@@ -203,6 +212,100 @@ export interface UpdateAccountInput {
   escrowTarget?: string | null;
   websiteUrl?: string | null;
   notes?: string | null;
+  paymentAllocation?: PaymentAllocation | null;
+}
+
+// ---- Installment / BNPL plans ----
+
+/** One financed installment plan within an installment/BNPL account. */
+export interface LoanPlan {
+  id: string;
+  accountId: string;
+  label: string; // user label, e.g. "Wayfair couch — Mar 2026"
+  originationDate: string; // ISO date
+  expirationDate: string | null; // ISO date; drives the waterfall ordering
+  principalCents: number; // original financed amount
+  rateBps: number; // annual APR in basis points (0 = interest-free)
+  numPayments: number; // scheduled installment count
+  paymentCents: number; // fixed installment amount (0 = derive)
+  purchaseCategoryId: string | null; // primary expense category for the originating purchase (first leg; null = uncategorized)
+  purchaseTxnId: string | null; // the originating purchase transaction id (null = none recorded)
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
+/** One category leg of an originating purchase (amounts are positive magnitudes;
+ *  they must sum to the plan principal). A null categoryId is uncategorized. */
+export interface PurchaseCategoryLeg {
+  categoryId: string | null;
+  amountCents: number;
+  memo?: string | null;
+}
+
+export interface NewLoanPlanInput {
+  accountId: string;
+  label: string;
+  originationDate: string;
+  expirationDate?: string | null;
+  principalCents: number;
+  rateBps?: number;
+  numPayments?: number;
+  paymentCents?: number;
+  /** When true, post the originating purchase transaction on creation. The
+   *  purchase is a charge against the installment account (raising its liability
+   *  by the principal) with one or more expense category legs. */
+  recordPurchase?: boolean;
+  /** Single expense category for the purchase (convenience for one leg; null =
+   *  uncategorized). Ignored when purchaseSplits is provided. */
+  purchaseCategoryId?: string | null;
+  /** Multiple expense category legs for the purchase (must sum to principal).
+   *  Takes precedence over purchaseCategoryId when non-empty. */
+  purchaseSplits?: PurchaseCategoryLeg[];
+}
+
+export interface UpdateLoanPlanInput {
+  id: string;
+  label?: string;
+  originationDate?: string;
+  expirationDate?: string | null;
+  principalCents?: number;
+  rateBps?: number;
+  numPayments?: number;
+  paymentCents?: number;
+  purchaseCategoryId?: string | null;
+}
+
+/** Record an originating purchase for an EXISTING plan (retroactive). */
+export interface RecordPlanPurchaseInput {
+  planId: string;
+  /** Single expense category (null = uncategorized). Ignored when splits given. */
+  categoryId?: string | null;
+  /** Multiple expense category legs (must sum to principal). */
+  splits?: PurchaseCategoryLeg[];
+}
+
+/** A plan plus its COMPUTED remaining balance and payment progress. */
+export interface PlanBalance {
+  plan: LoanPlan;
+  /** Remaining principal in cents = principal − attributed principal payments. */
+  remainingCents: number;
+  /** Number of payments attributed to this plan so far. */
+  paymentsMade: number;
+}
+
+/** One entry in a plan's transaction history (a principal payment + running balance). */
+export interface PlanLedgerEntry {
+  transactionId: string;
+  date: string;
+  payee: string | null;
+  memo: string | null;
+  /** Principal applied to the plan by this entry (positive cents). */
+  principalCents: number;
+  /** Interest paid alongside this principal on the same transaction (positive cents). */
+  interestCents: number;
+  /** Remaining plan balance after this entry (cents). */
+  runningBalanceCents: number;
 }
 
 // ---- Assets & valuations (Phase 1) ----
@@ -489,6 +592,13 @@ export interface LedgerRow {
   transaction: Transaction | null;
   /** Signed effect on THIS account, in cents (inflow positive, outflow negative). */
   signedAmountCents: number;
+  /**
+   * Optional display-only amount override for the Amount cell (does NOT affect the
+   * running balance). Used by Search results to show the matched split-leg amount
+   * instead of the whole transaction total when a category search matched via a
+   * split leg. When undefined, the Amount cell shows signedAmountCents.
+   */
+  displayAmountCents?: number;
   /** Running balance of THIS account after this transaction, in cents. */
   runningBalanceCents: number;
   /** True when this transaction has stored split legs (derived from split rows). */

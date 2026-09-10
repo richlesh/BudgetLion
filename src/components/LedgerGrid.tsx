@@ -65,6 +65,9 @@ interface Props {
   memoSuggestions?: string[];
   /** Fires with the ids of the currently selected transaction rows (no opening row). */
   onSelectionChange?: (ids: string[]) => void;
+  /** Hide the running-balance column (e.g. Search results, where a per-account
+   *  running balance across a filtered set is meaningless). */
+  hideRunningBalance?: boolean;
 }
 
 // Flat row shape fed to AG Grid.
@@ -117,6 +120,7 @@ export function LedgerGrid({
   payeeSuggestions,
   memoSuggestions,
   onSelectionChange,
+  hideRunningBalance,
 }: Props) {
   // Keep the latest callbacks/data in refs so `columnDefs` can be built once and
   // stay referentially stable. If columnDefs changed identity on every edit (e.g.
@@ -324,7 +328,9 @@ export function LedgerGrid({
           payee: payeeFor(r),
           memo: memoFor(r),
           categoryName: categoryFor(r),
-          signedAmountCents: r.signedAmountCents * sign,
+          // Amount cell: prefer a display-only override (Search shows the matched
+          // split-leg amount) but keep the running balance from the true effect.
+          signedAmountCents: (r.displayAmountCents ?? r.signedAmountCents) * sign,
           runningBalanceCents: r.runningBalanceCents * sign,
           isTransfer: !!(t.fromAccountId && t.toAccountId),
           isOpening: false,
@@ -349,7 +355,8 @@ export function LedgerGrid({
   );
 
   const columnDefs = useMemo<ColDef<GridRow>[]>(
-    () => [
+    () => {
+      const cols: ColDef<GridRow>[] = [
       // Date is editable for transactions and the opening row, but locked once a
       // transaction is reconciled.
       { field: "date", headerName: "Date", editable: (p) => !p.data?.reconcileLocked, width: 120, sort: "asc" },
@@ -403,9 +410,11 @@ export function LedgerGrid({
           accounts: otherAccountsRef.current,
           // Preselect the row's current category/transfer/split in the list.
           initialValue: initialEditorValue(p.data.id),
-          // Reconciled rows: keep category editable but hide transfer accounts so
-          // the counterparty can't be changed (locked when either side is reconciled).
-          hideAccounts: !!p.data.reconcileLocked,
+          // Reconciled TRANSFER rows: hide transfer accounts so the locked
+          // counterparty can't be changed. A reconciled non-transfer stays fully
+          // editable (category OR convert to a transfer) — consistent with the
+          // `editable` predicate above, and the new counterparty side is unreconciled.
+          hideAccounts: !!p.data.reconcileLocked && !!p.data.isTransfer,
           // Which categories are offered is driven by the NORMALIZED (stored)
           // sign, not the display sign: a stored positive => income/both, a
           // stored negative => expense/both. For liability accounts the display
@@ -465,10 +474,16 @@ export function LedgerGrid({
             </button>
           ),
       },
-    ],
+      ];
+      // Search results hide the running-balance column (a per-account running
+      // balance over a filtered set is meaningless).
+      return hideRunningBalance
+        ? cols.filter((c) => c.field !== "runningBalanceCents")
+        : cols;
+    },
     // Built once (stable): volatile callbacks/data are read via refs so edits
     // don't recreate the column definitions and reset user column widths.
-    [money]
+    [money, hideRunningBalance]
   );
 
   const onCellValueChanged = useCallback(

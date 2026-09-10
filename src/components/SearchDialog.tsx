@@ -25,6 +25,7 @@ export function SearchDialog({ accounts, categories, initialAccountId = null, on
   const [payee, setPayee] = useState("");
   const [memo, setMemo] = useState("");
   const [categoryId, setCategoryId] = useState("");
+  const [toAccountId, setToAccountId] = useState("");
   const [amount, setAmount] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -38,6 +39,7 @@ export function SearchDialog({ accounts, categories, initialAccountId = null, on
     }
     const criteria: SearchCriteria = {
       accountId: accountId || null,
+      toAccountId: toAccountId || null,
       startDate: startDate || null,
       endDate: endDate || null,
       payee,
@@ -101,6 +103,18 @@ export function SearchDialog({ accounts, categories, initialAccountId = null, on
             {catChoices.map((o) => (
               <option key={o.category.id} value={o.category.id}>
                 {o.display}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="field">
+          <label>To account (transfers)</label>
+          <select value={toAccountId} onChange={(e) => setToAccountId(e.target.value)}>
+            <option value="">Any destination</option>
+            {accounts.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
               </option>
             ))}
           </select>

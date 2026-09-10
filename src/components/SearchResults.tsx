@@ -2,11 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Account, AggregateData, Category, LedgerRow, LedgerTradeInfo, Transaction, TransactionSplit } from "../shared/types";
 import { buildLedger } from "../core/balances";
 import { LedgerGrid } from "./LedgerGrid";
+import { isReconciledEitherSide } from "../core/reconcile";
+import { ConfirmDialog } from "./ConfirmDialog";
 import type { CategoryChoice } from "./CategoryAccountEditor";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { categoryOptions } from "../core/categories";
 import type { SearchCriteria } from "../core/search";
-import { searchTransactionIds, accountsWithMatches } from "../core/search";
+import { searchTransactionIds, accountsWithMatches, UNCATEGORIZED_CATEGORY_ID } from "../core/search";
 
 interface Props {
   data: AggregateData;
@@ -27,6 +29,15 @@ interface Props {
     splits: TransactionSplit[] | undefined,
     signedTotalCents: number
   ) => void;
+  /**
+   * A result is being pointed at an installment/BNPL account (an outflow). The
+   * app opens the plan-apply dialog seeded with this transaction, rewriting it
+   * as a plan-attributed split instead of a plain transfer.
+   */
+  onApplyToInstallment: (
+    installment: Account,
+    tx: { id: string; amountCents: number; date: string; fromAccountId: string | null }
+  ) => void;
 }
 
 /**
@@ -36,7 +47,7 @@ interface Props {
  * table and inline-edit mechanisms as the main ledger. Edits are account-scoped
  * and reload the search data on success.
  */
-export function SearchResults({ data, criteria, dark, onClose, onReload, onToast, onEditSplit }: Props) {
+export function SearchResults({ data, criteria, dark, onClose, onReload, onToast, onEditSplit, onApplyToInstallment }: Props) {
   const matchingIds = useMemo(() => searchTransactionIds(data, criteria), [data, criteria]);
   const groupAccountIds = useMemo(
     () => accountsWithMatches(data, matchingIds, criteria.accountId),
@@ -84,16 +95,42 @@ export function SearchResults({ data, criteria, dark, onClose, onReload, onToast
     return m;
   }, [data.splits]);
 
+  // The set of category ids the search matched on (single categoryId or the
+  // categoryIds set from a pie double-click). Used to show the matched split-leg
+  // amount instead of the whole transaction total. Excludes the Uncategorized
+  // sentinel (that isn't a real category to sum).
+  const matchedCategorySet = useMemo(() => {
+    const ids = new Set<string>();
+    if (criteria.categoryId && criteria.categoryId !== UNCATEGORIZED_CATEGORY_ID) ids.add(criteria.categoryId);
+    for (const id of criteria.categoryIds ?? []) {
+      if (id !== UNCATEGORIZED_CATEGORY_ID) ids.add(id);
+    }
+    return ids;
+  }, [criteria.categoryId, criteria.categoryIds]);
+
   // Build the matching ledger rows for one account (real transaction rows only;
   // the synthetic opening row is never a search result).
   const rowsForAccount = useCallback(
     (account: Account): LedgerRow[] => {
       const rows = buildLedger(account, data.transactions, splitsByTx, tradeByTxn);
-      return rows.filter(
+      const matched = rows.filter(
         (r) => r.kind === "transaction" && r.transaction && matchingIds.has(r.transaction.id)
       );
+      if (matchedCategorySet.size === 0) return matched;
+      // When the search matched a category, a split transaction should show only
+      // the matched legs' amount (not the whole transaction). Sum the legs whose
+      // category is in the matched set; leave non-split / unmatched rows as-is.
+      return matched.map((r) => {
+        if (!r.isSplit || !r.splits || r.splits.length === 0) return r;
+        const legs = r.splits.filter(
+          (s) => s.deletedAt == null && s.categoryId != null && matchedCategorySet.has(s.categoryId)
+        );
+        if (legs.length === 0) return r; // matched via something else (memo, etc.)
+        const legSum = legs.reduce((sum, s) => sum + s.amountCents, 0);
+        return { ...r, displayAmountCents: legSum };
+      });
     },
-    [data.transactions, splitsByTx, matchingIds, tradeByTxn]
+    [data.transactions, splitsByTx, matchingIds, tradeByTxn, matchedCategorySet]
   );
 
   // Account-scoped edit handlers (mirror the main ledger, minus opening-row edits
@@ -147,10 +184,23 @@ export function SearchResults({ data, criteria, dark, onClose, onReload, onToast
         if (choice.kind === "transfer") {
           const target = data.accounts.find((a) => a.id === choice.accountId);
           const row = rowsForAccount(account).find((r) => r.transaction?.id === id);
+          // Transfer INTO an installment/BNPL account: this is a plan payment.
+          // Hand off to the app's plan-apply dialog seeded with THIS transaction,
+          // which rewrites it as a plan-attributed split (principal + interest)
+          // instead of committing a plain transfer. Mirrors the ledger handler.
+          const outflow = accountIsFrom || (row?.signedAmountCents ?? 0) < 0;
+          if (target?.type === "installment" && outflow) {
+            onApplyToInstallment(target, {
+              id: tx.id,
+              amountCents: Math.abs(tx.amountCents),
+              date: tx.date,
+              fromAccountId: accountIsFrom ? account.id : tx.fromAccountId,
+            });
+            return;
+          }
           // Fire the loan auto-split for any NON-SPLIT outflow changed to a loan
           // transfer (uncategorized or categorized); only existing splits are exempt.
           const notSplit = !row?.isSplit;
-          const outflow = accountIsFrom || (row?.signedAmountCents ?? 0) < 0;
           const autoLoanSplit = target?.type === "loan" && notSplit && outflow;
 
           await window.ledger.updateTransaction({
@@ -186,21 +236,34 @@ export function SearchResults({ data, criteria, dark, onClose, onReload, onToast
         onToast(e instanceof Error ? e.message : "Change failed.");
       }
     },
-    [data.transactions, data.accounts, onReload, onToast, rowsForAccount, onEditSplit]
+    [data.transactions, data.accounts, onReload, onToast, rowsForAccount, onEditSplit, onApplyToInstallment]
   );
 
   const deleteFor = useCallback(
     () => async (id: string) => {
-      await window.ledger.deleteTransaction(id);
-      onReload();
+      // Reconciled transactions are locked against deletion (either side). Rather
+      // than silently doing nothing, tell the user to un-reconcile it first.
+      const tx = data.transactions.find((t) => t.id === id);
+      if (tx && isReconciledEitherSide(tx, splitsByTx.get(id))) {
+        setReconciledBlock(true);
+        return;
+      }
+      try {
+        await window.ledger.deleteTransaction(id);
+        onReload();
+      } catch (e) {
+        onToast(e instanceof Error ? e.message : "Could not delete the transaction.");
+      }
     },
-    [onReload]
+    [onReload, onToast, data.transactions, splitsByTx]
   );
 
   // Context menu (right-click) state for the search grids.
   const [menu, setMenu] = useState<{ x: number; y: number; items: ContextMenuItem[] } | null>(
     null
   );
+  // True when the user tried to delete a reconciled transaction (shows a notice).
+  const [reconciledBlock, setReconciledBlock] = useState(false);
 
   // Bulk-apply a category/uncategorized/transfer to the given rows in an account.
   const bulkSetCategory = useCallback(
@@ -266,11 +329,20 @@ export function SearchResults({ data, criteria, dark, onClose, onReload, onToast
       }));
       const accts: ContextMenuItem[] = data.accounts
         .filter((a) => a.id !== account.id)
-        .map((a) => ({
-          label: `→ ${a.name}`,
-          onClick: () =>
-            void bulkSetCategory(account, ids, { kind: "transfer", accountId: a.id, label: a.name }),
-        }));
+        .map((a) => {
+          // Installment/BNPL accounts require a per-transaction principal/interest
+          // allocation (the Apply-payment dialog), which can't be applied in bulk,
+          // so they're disabled here rather than silently posting plain transfers.
+          const isInstallment = a.type === "installment";
+          return {
+            label: isInstallment ? `→ ${a.name} (use Apply payment)` : `→ ${a.name}`,
+            disabled: isInstallment,
+            onClick: isInstallment
+              ? undefined
+              : () =>
+                  void bulkSetCategory(account, ids, { kind: "transfer", accountId: a.id, label: a.name }),
+          };
+        });
       return [
         {
           label: "— Uncategorized —",
@@ -392,6 +464,7 @@ export function SearchResults({ data, criteria, dark, onClose, onReload, onToast
                       onSetCategoryOrTransfer={setCategoryFor(account)}
                       onDelete={deleteFor()}
                       onCellContext={cellContextFor(account)}
+                      hideRunningBalance
                     />
                   </div>
                 </div>
@@ -402,6 +475,16 @@ export function SearchResults({ data, criteria, dark, onClose, onReload, onToast
       </div>
       {menu && (
         <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />
+      )}
+      {reconciledBlock && (
+        <ConfirmDialog
+          title="Can't delete a reconciled transaction"
+          message="This transaction is reconciled, so it's locked against deletion. Un-reconcile it first (in the account's Reconcile dialog, or via the right-click Un-reconcile action in the ledger), then delete it."
+          confirmLabel="OK"
+          destructive={false}
+          onConfirm={() => setReconciledBlock(false)}
+          onCancel={() => setReconciledBlock(false)}
+        />
       )}
     </div>
   );

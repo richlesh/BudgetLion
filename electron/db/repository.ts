@@ -29,6 +29,13 @@ import type {
   LedgerTradeInfo,
   InvestmentImportRow,
   LoanPaymentSplitResult,
+  LoanPlan,
+  NewLoanPlanInput,
+  UpdateLoanPlanInput,
+  RecordPlanPurchaseInput,
+  PurchaseCategoryLeg,
+  PlanBalance,
+  PlanLedgerEntry,
 } from "../../src/shared/types.js";
 import { ClearedState } from "../../src/shared/types.js";
 import { MICRO } from "../../src/shared/types.js";
@@ -54,6 +61,7 @@ interface AccountRow {
   escrow_target: string | null;
   website_url: string | null;
   notes: string | null;
+  payment_allocation: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -94,6 +102,7 @@ function toAccount(r: AccountRow): Account {
     escrowTarget: r.escrow_target,
     websiteUrl: r.website_url,
     notes: r.notes,
+    paymentAllocation: (r.payment_allocation as Account["paymentAllocation"]) ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     deletedAt: r.deleted_at,
@@ -151,6 +160,7 @@ export function createAccount(input: NewAccountInput): Account {
     escrow_target: input.escrowTarget ?? null,
     website_url: input.websiteUrl ?? null,
     notes: input.notes ?? null,
+    payment_allocation: input.paymentAllocation ?? null,
     created_at: ts,
     updated_at: ts,
     deleted_at: null,
@@ -158,10 +168,10 @@ export function createAccount(input: NewAccountInput): Account {
   db.prepare(
     `INSERT INTO accounts
        (id, name, type, currency, account_code, opening_balance_cents, opening_balance_date,
-        interest_rate_bps, principal_cents, term_months, escrow_payment_cents, escrow_target, website_url, notes, created_at, updated_at, deleted_at)
+        interest_rate_bps, principal_cents, term_months, escrow_payment_cents, escrow_target, website_url, notes, payment_allocation, created_at, updated_at, deleted_at)
      VALUES
        (@id, @name, @type, @currency, @account_code, @opening_balance_cents, @opening_balance_date,
-        @interest_rate_bps, @principal_cents, @term_months, @escrow_payment_cents, @escrow_target, @website_url, @notes, @created_at, @updated_at, @deleted_at)`
+        @interest_rate_bps, @principal_cents, @term_months, @escrow_payment_cents, @escrow_target, @website_url, @notes, @payment_allocation, @created_at, @updated_at, @deleted_at)`
   ).run(row);
   return toAccount(row);
 }
@@ -207,6 +217,10 @@ export function updateAccount(input: UpdateAccountInput): void {
   if (input.notes !== undefined) {
     fields.push("notes = @notes");
     params.notes = input.notes;
+  }
+  if (input.paymentAllocation !== undefined) {
+    fields.push("payment_allocation = @payment_allocation");
+    params.payment_allocation = input.paymentAllocation;
   }
   if (input.openingBalanceCents !== undefined) {
     fields.push("opening_balance_cents = @opening_balance_cents");
@@ -332,7 +346,12 @@ export function transactionsByIds(ids: string[]): Transaction[] {
 export function createTransaction(input: NewTransactionInput): Transaction {
   const db = getDb();
   const ts = now();
-  const isSplit = !!(input.splits && input.splits.length >= 2);
+  // Persist as a split when there are 2+ legs, OR any leg carries a plan_id
+  // (installment/BNPL attribution must survive even for a single-plan payment).
+  const isSplit = !!(
+    input.splits &&
+    (input.splits.length >= 2 || input.splits.some((l) => l.planId != null))
+  );
   const row: TransactionRow = {
     id: randomUUID(),
     date: input.date,
@@ -402,7 +421,7 @@ export function updateTransaction(input: UpdateTransactionInput): void {
   const ts = params.updated_at as string;
   const wantsSplits = input.splits !== undefined;
   const splitLegs = input.splits ?? [];
-  const makeSplit = wantsSplits && splitLegs.length >= 2;
+  const makeSplit = wantsSplits && (splitLegs.length >= 2 || splitLegs.some((l) => l.planId != null));
   // When converting to a split, clear the inline single category.
   if (makeSplit && input.categoryId === undefined) {
     fields.push("category_id = @category_id");
@@ -668,6 +687,7 @@ interface SplitRow {
   transfer_account_id: string | null;
   memo: string | null;
   reconciled: number;
+  plan_id: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -682,6 +702,7 @@ function toSplit(r: SplitRow): TransactionSplit {
     transferAccountId: r.transfer_account_id,
     memo: r.memo,
     reconciled: r.reconciled ?? 0,
+    planId: r.plan_id ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     deletedAt: r.deleted_at,
@@ -727,10 +748,10 @@ function writeSplits(
   ).run(ts, ts, txId);
   const ins = db.prepare(
     `INSERT INTO transaction_splits
-       (id, transaction_id, amount_cents, category_id, transfer_account_id, memo, reconciled,
+       (id, transaction_id, amount_cents, category_id, transfer_account_id, memo, reconciled, plan_id,
         created_at, updated_at, deleted_at)
      VALUES
-       (@id, @transaction_id, @amount_cents, @category_id, @transfer_account_id, @memo, 0,
+       (@id, @transaction_id, @amount_cents, @category_id, @transfer_account_id, @memo, 0, @plan_id,
         @created_at, @updated_at, @deleted_at)`
   );
   for (const leg of splits) {
@@ -741,6 +762,7 @@ function writeSplits(
       category_id: leg.categoryId ?? null,
       transfer_account_id: leg.transferAccountId ?? null,
       memo: leg.memo ?? null,
+      plan_id: leg.planId ?? null,
       created_at: ts,
       updated_at: ts,
       deleted_at: null,
@@ -1181,10 +1203,10 @@ export function importData(data: {
   const upsertAccount = db.prepare(
     `INSERT INTO accounts
        (id, name, type, currency, account_code, opening_balance_cents, opening_balance_date,
-        interest_rate_bps, principal_cents, term_months, escrow_payment_cents, escrow_target, website_url, notes, created_at, updated_at, deleted_at)
+        interest_rate_bps, principal_cents, term_months, escrow_payment_cents, escrow_target, website_url, notes, payment_allocation, created_at, updated_at, deleted_at)
      VALUES
        (@id, @name, @type, @currency, @account_code, @opening_balance_cents, @opening_balance_date,
-        @interest_rate_bps, @principal_cents, @term_months, @escrow_payment_cents, @escrow_target, @website_url, @notes, @created_at, @updated_at, @deleted_at)
+        @interest_rate_bps, @principal_cents, @term_months, @escrow_payment_cents, @escrow_target, @website_url, @notes, @payment_allocation, @created_at, @updated_at, @deleted_at)
      ON CONFLICT(id) DO UPDATE SET
        name = excluded.name, type = excluded.type, currency = excluded.currency,
        account_code = excluded.account_code,
@@ -1197,6 +1219,7 @@ export function importData(data: {
        escrow_target = excluded.escrow_target,
        website_url = excluded.website_url,
        notes = excluded.notes,
+       payment_allocation = excluded.payment_allocation,
        updated_at = excluded.updated_at,
        deleted_at = excluded.deleted_at`
   );
@@ -1250,6 +1273,7 @@ export function importData(data: {
         escrow_target: a.escrowTarget ?? null,
         website_url: a.websiteUrl ?? null,
         notes: a.notes ?? null,
+        payment_allocation: a.paymentAllocation ?? null,
         created_at: a.createdAt ?? ts,
         updated_at: ts,
         deleted_at: a.deletedAt ?? null,
@@ -1426,6 +1450,360 @@ export function deleteRecurringRule(id: string): void {
     now(),
     id
   );
+}
+
+// ---- Installment / BNPL plans ----
+
+interface PlanRow {
+  id: string;
+  account_id: string;
+  label: string;
+  origination_date: string;
+  expiration_date: string | null;
+  principal_cents: number;
+  rate_bps: number;
+  num_payments: number;
+  payment_cents: number;
+  purchase_category_id: string | null;
+  purchase_txn_id: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+function toPlan(r: PlanRow): LoanPlan {
+  return {
+    id: r.id,
+    accountId: r.account_id,
+    label: r.label,
+    originationDate: r.origination_date,
+    expirationDate: r.expiration_date,
+    principalCents: r.principal_cents,
+    rateBps: r.rate_bps,
+    numPayments: r.num_payments,
+    paymentCents: r.payment_cents,
+    purchaseCategoryId: r.purchase_category_id ?? null,
+    purchaseTxnId: r.purchase_txn_id ?? null,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    deletedAt: r.deleted_at,
+  };
+}
+
+/** Non-deleted plans for an account, oldest expiration first (waterfall order). */
+export function listLoanPlans(accountId: string): LoanPlan[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT * FROM loan_plans WHERE deleted_at IS NULL AND account_id = ?
+        ORDER BY (expiration_date IS NULL), expiration_date, origination_date, id`
+    )
+    .all(accountId) as PlanRow[];
+  return rows.map(toPlan);
+}
+
+export function createLoanPlan(input: NewLoanPlanInput): LoanPlan {
+  const db = getDb();
+  const ts = now();
+  const primaryCat =
+    input.purchaseSplits && input.purchaseSplits.length > 0
+      ? input.purchaseSplits[0].categoryId ?? null
+      : input.purchaseCategoryId ?? null;
+  const row: PlanRow = {
+    id: randomUUID(),
+    account_id: input.accountId,
+    label: input.label,
+    origination_date: input.originationDate,
+    expiration_date: input.expirationDate ?? null,
+    principal_cents: input.principalCents,
+    rate_bps: input.rateBps ?? 0,
+    num_payments: input.numPayments ?? 1,
+    payment_cents: input.paymentCents ?? 0,
+    purchase_category_id: primaryCat,
+    purchase_txn_id: null,
+    created_at: ts,
+    updated_at: ts,
+    deleted_at: null,
+  };
+  db.prepare(
+    `INSERT INTO loan_plans
+       (id, account_id, label, origination_date, expiration_date, principal_cents, rate_bps,
+        num_payments, payment_cents, purchase_category_id, purchase_txn_id, created_at, updated_at, deleted_at)
+     VALUES
+       (@id, @account_id, @label, @origination_date, @expiration_date, @principal_cents, @rate_bps,
+        @num_payments, @payment_cents, @purchase_category_id, @purchase_txn_id, @created_at, @updated_at, @deleted_at)`
+  ).run(row);
+
+  // Optionally post the originating purchase transaction (a charge against the
+  // installment account for the principal, attributed to expense categories).
+  if (input.recordPurchase) {
+    postPlanPurchase(row.id, input.accountId, input.originationDate, input.principalCents, input.label, {
+      splits: input.purchaseSplits,
+      categoryId: input.purchaseCategoryId,
+    });
+  }
+  return toPlan(getLoanPlan(row.id) ?? row);
+}
+
+/** A single non-deleted plan by id, or null. */
+function getLoanPlan(planId: string): PlanRow | null {
+  const db = getDb();
+  return (
+    (db.prepare("SELECT * FROM loan_plans WHERE id = ? AND deleted_at IS NULL").get(planId) as
+      | PlanRow
+      | undefined) ?? null
+  );
+}
+
+/**
+ * Normalize an originating purchase into either an inline single category or a
+ * set of split legs, validating that the total equals the principal.
+ *  - A single category (or a single-element split list) → inline categoryId, no
+ *    legs. This stores the charge like any other single-category transaction so
+ *    it is searchable by category and shows its category in the ledger.
+ *  - Multiple categories → split legs, each NEGATIVE (an outflow/charge).
+ * No leg ever carries a plan_id, so the purchase never counts toward
+ * principal-paid in planBalances.
+ */
+function normalizePurchase(
+  principalCents: number,
+  opts: { splits?: PurchaseCategoryLeg[]; categoryId?: string | null }
+): { inlineCategoryId: string | null; legs: NewSplitInput[] } {
+  const rawLegs =
+    opts.splits && opts.splits.length > 0
+      ? opts.splits.map((l) => ({ amountCents: Math.abs(l.amountCents), categoryId: l.categoryId ?? null, memo: l.memo ?? null }))
+      : [{ amountCents: Math.abs(principalCents), categoryId: opts.categoryId ?? null, memo: null as string | null }];
+  const sum = rawLegs.reduce((s, l) => s + l.amountCents, 0);
+  if (sum !== principalCents) {
+    throw new Error(
+      `Purchase category legs (${sum}) must sum to the plan principal (${principalCents}).`
+    );
+  }
+  // Single leg → inline category (searchable, no split rows).
+  if (rawLegs.length === 1) {
+    return { inlineCategoryId: rawLegs[0].categoryId, legs: [] };
+  }
+  // Multiple legs → negative split legs (the charge is an outflow).
+  return {
+    inlineCategoryId: null,
+    legs: rawLegs.map((l) => ({ amountCents: -l.amountCents, categoryId: l.categoryId, memo: l.memo })),
+  };
+}
+
+/**
+ * Post the originating purchase for a plan and record its transaction id on the
+ * plan. Modeled like a credit-card charge: fromAccountId = the installment
+ * account, toAccountId = null, so the account's liability rises by the principal.
+ * A single category is stored inline (searchable); multiple categories are split
+ * legs. No plan_id on any leg.
+ */
+function postPlanPurchase(
+  planId: string,
+  accountId: string,
+  date: string,
+  principalCents: number,
+  label: string,
+  opts: { splits?: PurchaseCategoryLeg[]; categoryId?: string | null }
+): string {
+  if (principalCents <= 0) throw new Error("Plan principal must be positive to record a purchase.");
+  const { inlineCategoryId, legs } = normalizePurchase(principalCents, opts);
+  const tx = createTransaction({
+    date,
+    payee: label,
+    memo: "Purchase (financed)",
+    amountCents: principalCents,
+    fromAccountId: accountId,
+    toAccountId: null,
+    categoryId: legs.length > 0 ? null : inlineCategoryId,
+    splits: legs.length > 0 ? legs : undefined,
+  });
+  getDb()
+    .prepare("UPDATE loan_plans SET purchase_txn_id = @txn, updated_at = @ts WHERE id = @id")
+    .run({ txn: tx.id, ts: now(), id: planId });
+  return tx.id;
+}
+
+/** True when the plan has a live (non-deleted) originating purchase transaction. */
+export function planHasPurchaseTransaction(planId: string): boolean {
+  const db = getDb();
+  const plan = getLoanPlan(planId);
+  if (!plan || !plan.purchase_txn_id) return false;
+  const tx = db
+    .prepare("SELECT id FROM transactions WHERE id = ? AND deleted_at IS NULL")
+    .get(plan.purchase_txn_id) as { id: string } | undefined;
+  return !!tx;
+}
+
+/** Record an originating purchase for an existing plan (retroactive opt-in). */
+export function recordPlanPurchase(input: RecordPlanPurchaseInput): string {
+  const plan = getLoanPlan(input.planId);
+  if (!plan) throw new Error("Plan not found.");
+  if (planHasPurchaseTransaction(input.planId)) {
+    throw new Error("This plan already has a recorded purchase.");
+  }
+  const primaryCat =
+    input.splits && input.splits.length > 0 ? input.splits[0].categoryId ?? null : input.categoryId ?? null;
+  getDb()
+    .prepare("UPDATE loan_plans SET purchase_category_id = @cat, updated_at = @ts WHERE id = @id")
+    .run({ cat: primaryCat, ts: now(), id: input.planId });
+  return postPlanPurchase(
+    input.planId,
+    plan.account_id,
+    plan.origination_date,
+    plan.principal_cents,
+    plan.label,
+    { splits: input.splits, categoryId: input.categoryId }
+  );
+}
+
+export function updateLoanPlan(input: UpdateLoanPlanInput): void {
+  const db = getDb();
+  const fields: string[] = [];
+  const params: Record<string, unknown> = { id: input.id, updated_at: now() };
+  const map: Array<[keyof UpdateLoanPlanInput, string]> = [
+    ["label", "label"],
+    ["originationDate", "origination_date"],
+    ["expirationDate", "expiration_date"],
+    ["principalCents", "principal_cents"],
+    ["rateBps", "rate_bps"],
+    ["numPayments", "num_payments"],
+    ["paymentCents", "payment_cents"],
+    ["purchaseCategoryId", "purchase_category_id"],
+  ];
+  for (const [key, col] of map) {
+    if (input[key] !== undefined) {
+      fields.push(`${col} = @${col}`);
+      params[col] = input[key];
+    }
+  }
+  if (fields.length === 0) return;
+  fields.push("updated_at = @updated_at");
+  db.prepare(`UPDATE loan_plans SET ${fields.join(", ")} WHERE id = @id`).run(params);
+}
+
+export function deleteLoanPlan(id: string): void {
+  const db = getDb();
+  db.prepare("UPDATE loan_plans SET deleted_at = ?, updated_at = ? WHERE id = ?").run(
+    now(),
+    now(),
+    id
+  );
+}
+
+/**
+ * Per-plan computed balances for an account. A plan's remaining balance is its
+ * principal minus the PRINCIPAL payments attributed to it via split legs
+ * (transaction_splits.plan_id). Interest legs are category legs and are excluded
+ * by only counting transfer legs targeting the installment account. `paymentsMade`
+ * counts distinct non-deleted transactions with a principal leg for the plan.
+ */
+export function planBalances(accountId: string): PlanBalance[] {
+  const db = getDb();
+  const plans = listLoanPlans(accountId);
+  if (plans.length === 0) return [];
+
+  // Principal paid per plan = sum of |amount| of non-deleted transfer legs that
+  // target THIS account and carry a plan_id, from non-deleted transactions.
+  const rows = db
+    .prepare(
+      `SELECT s.plan_id AS plan_id,
+              SUM(ABS(s.amount_cents)) AS principal_paid,
+              COUNT(DISTINCT s.transaction_id) AS payments
+         FROM transaction_splits s
+         JOIN transactions t ON t.id = s.transaction_id
+        WHERE s.deleted_at IS NULL
+          AND t.deleted_at IS NULL
+          AND s.plan_id IS NOT NULL
+          AND s.transfer_account_id = ?
+        GROUP BY s.plan_id`
+    )
+    .all(accountId) as Array<{ plan_id: string; principal_paid: number; payments: number }>;
+  const paidByPlan = new Map<string, { principal: number; payments: number }>();
+  for (const r of rows) paidByPlan.set(r.plan_id, { principal: r.principal_paid, payments: r.payments });
+
+  return plans.map((plan) => {
+    const paid = paidByPlan.get(plan.id) ?? { principal: 0, payments: 0 };
+    const remaining = Math.max(0, plan.principalCents - paid.principal);
+    return { plan, remainingCents: remaining, paymentsMade: paid.payments };
+  });
+}
+
+/**
+ * Per-plan transaction history with a running remaining balance. Groups the plan's
+ * split legs by transaction (principal = transfer legs, interest = category legs),
+ * oldest first, and walks the balance down from the plan's principal.
+ */
+export function planLedger(planId: string): PlanLedgerEntry[] {
+  const db = getDb();
+  const plan = (
+    db.prepare("SELECT * FROM loan_plans WHERE id = ? AND deleted_at IS NULL").get(planId) as
+      | PlanRow
+      | undefined
+  );
+  if (!plan) return [];
+
+  // One row per transaction touching this plan, with principal (transfer legs) and
+  // interest (category legs) summed, ordered oldest-first for the running balance.
+  const rows = db
+    .prepare(
+      `SELECT t.id AS tx_id, t.date AS date, t.payee AS payee, t.memo AS memo,
+              SUM(CASE WHEN s.transfer_account_id IS NOT NULL THEN ABS(s.amount_cents) ELSE 0 END) AS principal,
+              SUM(CASE WHEN s.category_id IS NOT NULL THEN ABS(s.amount_cents) ELSE 0 END) AS interest
+         FROM transaction_splits s
+         JOIN transactions t ON t.id = s.transaction_id
+        WHERE s.deleted_at IS NULL AND t.deleted_at IS NULL AND s.plan_id = ?
+        GROUP BY t.id
+        ORDER BY t.date ASC, t.created_at ASC, t.id ASC`
+    )
+    .all(planId) as Array<{
+    tx_id: string;
+    date: string;
+    payee: string | null;
+    memo: string | null;
+    principal: number;
+    interest: number;
+  }>;
+
+  let running = plan.principal_cents;
+  return rows.map((r) => {
+    running = Math.max(0, running - r.principal);
+    return {
+      transactionId: r.tx_id,
+      date: r.date,
+      payee: r.payee,
+      memo: r.memo,
+      principalCents: r.principal,
+      interestCents: r.interest,
+      runningBalanceCents: running,
+    };
+  });
+}
+
+/**
+ * The interest expense category id used by the MOST RECENT prior payment for any
+ * plan on this installment account. An interest leg is a split carrying both a
+ * plan_id and a category_id. Returns null when no prior interest leg exists.
+ * Used to pre-fill the interest category in the Apply-payment dialog.
+ */
+export function lastInterestCategoryForAccount(accountId: string): string | null {
+  const db = getDb();
+  const row = db
+    .prepare(
+      `SELECT s.category_id AS category_id
+         FROM transaction_splits s
+         JOIN transactions t ON t.id = s.transaction_id
+         JOIN loan_plans p ON p.id = s.plan_id
+        WHERE s.deleted_at IS NULL
+          AND t.deleted_at IS NULL
+          AND p.deleted_at IS NULL
+          AND p.account_id = ?
+          AND s.plan_id IS NOT NULL
+          AND s.category_id IS NOT NULL
+        ORDER BY t.date DESC, t.created_at DESC, t.id DESC
+        LIMIT 1`
+    )
+    .get(accountId) as { category_id: string } | undefined;
+  return row?.category_id ?? null;
 }
 
 // ---- Assets & valuations (Phase 1) ----

@@ -20,6 +20,9 @@ import type {
   NewValuationInput,
   NewTradeInput,
   InvestmentImportRow,
+  NewLoanPlanInput,
+  UpdateLoanPlanInput,
+  RecordPlanPurchaseInput,
 } from "../../src/shared/types.js";
 
 const api: LedgerApi = {
@@ -109,6 +112,19 @@ const api: LedgerApi = {
   deleteRecurringRule: (id: string) => ipcRenderer.invoke(IPC.deleteRecurringRule, id),
   getProjection: (accountId: string, horizonMonths: number) =>
     ipcRenderer.invoke(IPC.getProjection, accountId, horizonMonths),
+
+  // Installment / BNPL plans
+  listLoanPlans: (accountId: string) => ipcRenderer.invoke(IPC.listLoanPlans, accountId),
+  createLoanPlan: (input: NewLoanPlanInput) => ipcRenderer.invoke(IPC.createLoanPlan, input),
+  updateLoanPlan: (input: UpdateLoanPlanInput) => ipcRenderer.invoke(IPC.updateLoanPlan, input),
+  deleteLoanPlan: (id: string) => ipcRenderer.invoke(IPC.deleteLoanPlan, id),
+  planBalances: (accountId: string) => ipcRenderer.invoke(IPC.planBalances, accountId),
+  planLedger: (planId: string) => ipcRenderer.invoke(IPC.planLedger, planId),
+  planLastInterestCategory: (accountId: string) =>
+    ipcRenderer.invoke(IPC.planLastInterestCategory, accountId),
+  planHasPurchase: (planId: string) => ipcRenderer.invoke(IPC.planHasPurchase, planId),
+  recordPlanPurchase: (input: RecordPlanPurchaseInput) =>
+    ipcRenderer.invoke(IPC.recordPlanPurchase, input),
 
   // Accounts/Categories JSON data exchange
   openJsonFile: (): Promise<OpenedFile | null> => ipcRenderer.invoke(IPC.openJsonFile),

@@ -96,6 +96,85 @@ function runMigrations(instance: Database.Database): void {
   if (!cols.some((c) => c.name === "notes")) {
     instance.exec("ALTER TABLE accounts ADD COLUMN notes TEXT");
   }
+  // Installment/BNPL payment allocation mode: 'per_plan' | 'waterfall_soonest' (nullable).
+  if (!cols.some((c) => c.name === "payment_allocation")) {
+    instance.exec("ALTER TABLE accounts ADD COLUMN payment_allocation TEXT");
+  }
+
+  // Installment/BNPL plans table (created for pre-existing databases). New nullable
+  // columns/tables only, so IF NOT EXISTS is safe and idempotent.
+  instance.exec(`
+    CREATE TABLE IF NOT EXISTS loan_plans (
+      id                TEXT PRIMARY KEY,
+      account_id        TEXT NOT NULL REFERENCES accounts(id),
+      label             TEXT NOT NULL,
+      origination_date  TEXT NOT NULL,
+      expiration_date   TEXT,
+      principal_cents   INTEGER NOT NULL,
+      rate_bps          INTEGER NOT NULL DEFAULT 0,
+      num_payments      INTEGER NOT NULL DEFAULT 1,
+      payment_cents     INTEGER NOT NULL DEFAULT 0,
+      purchase_category_id TEXT REFERENCES categories(id),
+      purchase_txn_id   TEXT REFERENCES transactions(id),
+      created_at        TEXT NOT NULL,
+      updated_at        TEXT NOT NULL,
+      deleted_at        TEXT
+    )
+  `);
+  instance.exec("CREATE INDEX IF NOT EXISTS idx_plan_account ON loan_plans(account_id)");
+
+  // loan_plans purchase linkage (added later): an optional expense category for
+  // the originating purchase, and the id of the originating purchase transaction
+  // (null = none recorded). New nullable columns → plain ADD COLUMN is idempotent.
+  const planCols = instance
+    .prepare("PRAGMA table_info(loan_plans)")
+    .all() as Array<{ name: string }>;
+  if (planCols.length > 0 && !planCols.some((c) => c.name === "purchase_category_id")) {
+    instance.exec("ALTER TABLE loan_plans ADD COLUMN purchase_category_id TEXT");
+  }
+  if (planCols.length > 0 && !planCols.some((c) => c.name === "purchase_txn_id")) {
+    instance.exec("ALTER TABLE loan_plans ADD COLUMN purchase_txn_id TEXT");
+  }
+
+  // Repair: early builds of the plan-purchase feature dropped a single purchase
+  // category leg (the split-persistence rule required 2+ legs or a plan_id, and a
+  // one-category purchase had neither), leaving the purchase transaction with a
+  // NULL category and no legs. Backfill the inline category from the plan's
+  // stored purchase_category_id for those linked purchase transactions. Idempotent:
+  // only affects transactions that currently have no category and no splits.
+  const planColsNow = instance
+    .prepare("PRAGMA table_info(loan_plans)")
+    .all() as Array<{ name: string }>;
+  if (planColsNow.some((c) => c.name === "purchase_txn_id")) {
+    instance.exec(`
+      UPDATE transactions
+         SET category_id = (
+               SELECT p.purchase_category_id FROM loan_plans p
+                WHERE p.purchase_txn_id = transactions.id AND p.deleted_at IS NULL
+                LIMIT 1
+             ),
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+       WHERE transactions.deleted_at IS NULL
+         AND transactions.category_id IS NULL
+         AND transactions.id IN (
+               SELECT purchase_txn_id FROM loan_plans
+                WHERE purchase_txn_id IS NOT NULL AND purchase_category_id IS NOT NULL
+                  AND deleted_at IS NULL
+             )
+         AND NOT EXISTS (
+               SELECT 1 FROM transaction_splits s
+                WHERE s.transaction_id = transactions.id AND s.deleted_at IS NULL
+             )
+    `);
+  }
+
+  // transaction_splits.plan_id: which installment plan a split leg pays down (nullable).
+  const splitCols = instance
+    .prepare("PRAGMA table_info(transaction_splits)")
+    .all() as Array<{ name: string }>;
+  if (splitCols.length > 0 && !splitCols.some((c) => c.name === "plan_id")) {
+    instance.exec("ALTER TABLE transaction_splits ADD COLUMN plan_id TEXT");
+  }
 
   // categories.applicability: 'income' | 'expense' | 'both' (default 'both').
   const catCols = instance
@@ -299,7 +378,7 @@ function runMigrations(instance: Database.Database): void {
       .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'accounts'")
       .get() as { sql: string } | undefined
   )?.sql;
-  if (accountsSql && !accountsSql.includes("'investment'")) {
+  if (accountsSql && (!accountsSql.includes("'investment'") || !accountsSql.includes("'installment'"))) {
     // SQLite requires the FK-rebuild dance in a specific order: PRAGMA foreign_keys
     // is a NO-OP inside a transaction, so it must be toggled OUTSIDE. See
     // https://sqlite.org/lang_altertable.html ("making other kinds of schema changes").
@@ -311,7 +390,7 @@ function runMigrations(instance: Database.Database): void {
         CREATE TABLE accounts_new (
           id                    TEXT PRIMARY KEY,
           name                  TEXT NOT NULL,
-          type                  TEXT NOT NULL CHECK (type IN ('checking','savings','credit_card','loan','investment','asset')),
+          type                  TEXT NOT NULL CHECK (type IN ('checking','savings','credit_card','loan','installment','investment','asset')),
           currency              TEXT NOT NULL DEFAULT 'USD',
           opening_balance_cents INTEGER NOT NULL DEFAULT 0,
           opening_balance_date  TEXT,
@@ -323,6 +402,7 @@ function runMigrations(instance: Database.Database): void {
           escrow_target         TEXT,
           website_url           TEXT,
           notes                 TEXT,
+          payment_allocation    TEXT,
           created_at            TEXT NOT NULL,
           updated_at            TEXT NOT NULL,
           deleted_at            TEXT
@@ -332,11 +412,11 @@ function runMigrations(instance: Database.Database): void {
         INSERT INTO accounts_new
           (id, name, type, currency, opening_balance_cents, opening_balance_date,
            account_code, interest_rate_bps, principal_cents, term_months, escrow_payment_cents, escrow_target,
-           website_url, notes, created_at, updated_at, deleted_at)
+           website_url, notes, payment_allocation, created_at, updated_at, deleted_at)
         SELECT
            id, name, type, currency, opening_balance_cents, opening_balance_date,
            account_code, interest_rate_bps, principal_cents, term_months, escrow_payment_cents, escrow_target,
-           website_url, notes, created_at, updated_at, deleted_at
+           website_url, notes, payment_allocation, created_at, updated_at, deleted_at
         FROM accounts
       `);
       instance.exec("DROP TABLE accounts");

@@ -6,7 +6,7 @@
 
 # BudgetLion User Guide
 
-**Version 1.4.0**
+**Version 1.5.0**
 
 BudgetLion is a cross-platform personal-finance ledger with double-entry accounting for Linux, macOS, and Windows. Track accounts, split transactions, forecast recurring income and expenses, and visualize your spending with confidence.
 
@@ -59,10 +59,10 @@ To begin tracking your finances:
 
 1. Add an account with **File → New Account…** (for example, a Checking account) and set its opening balance.
 2. Select the account in the sidebar to open its ledger.
-3. Add transactions with **New Transaction** (⌘N / Ctrl+N), or import them from your bank with **Import Transactions** (⌘I / Ctrl+I).
+3. Add transactions with **Account → New Transaction** (⌘N / Ctrl+N), or import them from your bank with **Account → Import Transactions** (⌘I / Ctrl+I).
 4. Assign categories, set up recurring rules, and explore the charts and reports.
 
-BudgetLion uses **double-entry accounting**: every transfer moves money between two tracked accounts, and every transaction keeps your books balanced.
+BudgetLion uses **double-entry accounting**: every transfer moves money between two tracked accounts, and every transaction keeps your books balanced.  Single account transactions can assign the transaction to a income/expense category that can be tracked.
 
 <div style="text-align: center;">
 

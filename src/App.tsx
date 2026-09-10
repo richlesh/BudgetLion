@@ -32,6 +32,8 @@ import { PaycheckDialog } from "./components/PaycheckDialog";
 import { buildPaycheckTransactions, isPaycheckSplit, reconstructPaycheckInput } from "./core/paycheck";
 import { NewInvestmentDialog } from "./components/NewInvestmentDialog";
 import { HoldingsPanel } from "./components/HoldingsPanel";
+import { PlansPanel } from "./components/PlansPanel";
+import { PlanPaymentDialog } from "./components/PlanPaymentDialog";
 import { AssetHoldingsPanel } from "./components/AssetHoldingsPanel";
 import { NetWorthReport } from "./components/NetWorthReport";
 import { CategoryReport } from "./components/CategoryReport";
@@ -90,6 +92,14 @@ export function App() {
   // For investment accounts, importing can add either cash-side transactions or
   // investment (trade) history. When true, a small chooser asks which one.
   const [showImportChooser, setShowImportChooser] = useState(false);
+  // Installment/BNPL account whose "Apply payment" dialog is open (null = closed).
+  const [planPaymentFor, setPlanPaymentFor] = useState<Account | null>(null);
+  // An existing transaction being categorized into an installment account: the
+  // installment account + the transaction to rewrite as a plan-attributed split.
+  const [planApplyExisting, setPlanApplyExisting] = useState<{
+    account: Account;
+    tx: { id: string; amountCents: number; date: string; fromAccountId: string | null };
+  } | null>(null);
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [showCharts, setShowCharts] = useState(false);
   const [showProjection, setShowProjection] = useState(false);
@@ -1019,6 +1029,24 @@ export function App() {
       const accountIsFrom = t.fromAccountId === selected.id;
       if (choice.kind === "transfer") {
         const target = accounts.find((a) => a.id === choice.accountId);
+        // Transfer INTO an installment/BNPL account: this is a plan payment. Open
+        // the plan-apply dialog seeded with THIS transaction (its amount/from),
+        // which rewrites it as a plan-attributed split (principal + interest).
+        // Do this instead of committing a plain transfer.
+        const outflowToInstallment =
+          target?.type === "installment" && (accountIsFrom || row!.signedAmountCents < 0);
+        if (outflowToInstallment && target) {
+          setPlanApplyExisting({
+            account: target,
+            tx: {
+              id: t.id,
+              amountCents: Math.abs(t.amountCents),
+              date: t.date,
+              fromAccountId: accountIsFrom ? selected.id : t.fromAccountId,
+            },
+          });
+          return;
+        }
         // When a NON-SPLIT outflow is pointed at a LOAN account, treat it as a
         // loan payment: apply the transfer, then open the split editor pre-seeded
         // with the auto principal/interest split. Fires from any prior category
@@ -1251,11 +1279,18 @@ export function App() {
       }));
       const acctItems: ContextMenuItem[] = accounts
         .filter((a) => a.id !== selected?.id)
-        .map((a) => ({
-          label: `→ ${a.name}`,
-          onClick: () =>
-            void bulkSetCategory(ids, { kind: "transfer", accountId: a.id, label: a.name }),
-        }));
+        .map((a) => {
+          // Installment/BNPL accounts need a per-transaction principal/interest
+          // allocation (Apply-payment), which can't be applied in bulk.
+          const isInstallment = a.type === "installment";
+          return {
+            label: isInstallment ? `→ ${a.name} (use Apply payment)` : `→ ${a.name}`,
+            disabled: isInstallment,
+            onClick: isInstallment
+              ? undefined
+              : () => void bulkSetCategory(ids, { kind: "transfer", accountId: a.id, label: a.name }),
+          };
+        });
       return [
         { label: "— Uncategorized —", onClick: () => void bulkSetCategory(ids, { kind: "none" }) },
         { label: "Split… (not available in bulk)", disabled: true },
@@ -1773,12 +1808,52 @@ export function App() {
             {selected.type === "asset" && (
               <AssetHoldingsPanel account={selected} reloadKey={holdingsReloadKey} dark={dark} />
             )}
+            {selected.type === "installment" && (
+              <PlansPanel
+                account={selected}
+                categories={categories}
+                reloadKey={holdingsReloadKey}
+                onApplyPayment={() => setPlanPaymentFor(selected)}
+                onChanged={() => {
+                  setHoldingsReloadKey((k) => k + 1);
+                  // Recording a purchase (or other plan change) posts/removes
+                  // transactions owned by this installment account, so refresh
+                  // the ledger grid and sidebar balances too.
+                  if (selectedId) void refreshLedger(selectedId);
+                  void refreshAccounts();
+                }}
+                onSplitPurchase={async (txId) => {
+                  // The purchase was just recorded (uncategorized). Open the split
+                  // editor on it so the user can divide it across categories.
+                  const rows = await window.ledger.getLedger(selected.id);
+                  const row = rows.find((r) => r.transaction?.id === txId);
+                  if (row?.transaction) {
+                    await openSplitEditor(
+                      row.transaction,
+                      selected,
+                      !!row.isSplit,
+                      row.splits,
+                      row.signedAmountCents,
+                      async () => {
+                        await refreshLedger(selected.id);
+                        await refreshAccounts();
+                        setHoldingsReloadKey((k) => k + 1);
+                      }
+                    );
+                  }
+                }}
+              />
+            )}
             {showCharts && (
               <ChartsPanel
                 account={selected}
                 dark={dark}
                 onClose={() => setShowCharts(false)}
                 onToast={setToast}
+                onOpenSearch={(criteria) => {
+                  setShowCharts(false);
+                  void runSearch(criteria);
+                }}
               />
             )}
             {showProjection && (
@@ -2013,6 +2088,62 @@ export function App() {
           }}
         />
       )}
+      {planApplyExisting && (
+        <PlanPaymentDialog
+          account={planApplyExisting.account}
+          accounts={accounts}
+          categories={categories}
+          existingTx={planApplyExisting.tx}
+          onCancel={() => setPlanApplyExisting(null)}
+          onSubmit={() => setPlanApplyExisting(null)}
+          onApplyToExisting={async (txId, splits) => {
+            const fromId = planApplyExisting.tx.fromAccountId;
+            setPlanApplyExisting(null);
+            try {
+              // The split is OWNED by the funding (from) account; the installment
+              // account is reached via the transfer legs (each tagged plan_id).
+              // toAccountId stays null so the owning side is unambiguous and the
+              // legs (negative outflow) sum to the owning signed total.
+              await window.ledger.updateTransaction({
+                id: txId,
+                fromAccountId: fromId,
+                toAccountId: null,
+                categoryId: null,
+                splits,
+              });
+              await refreshAccounts();
+              if (selectedId) await refreshLedger(selectedId);
+              setHoldingsReloadKey((k) => k + 1);
+              // If this was initiated from the Search results view, re-snapshot
+              // its data so the rewritten split shows there too.
+              if (searchData) await reloadSearch();
+              setToast("Applied to plan(s).");
+            } catch (e) {
+              setToast(e instanceof Error ? e.message : "Could not apply to plans.");
+            }
+          }}
+        />
+      )}
+      {planPaymentFor && (
+        <PlanPaymentDialog
+          account={planPaymentFor}
+          accounts={accounts}
+          categories={categories}
+          onCancel={() => setPlanPaymentFor(null)}
+          onSubmit={async (input) => {
+            setPlanPaymentFor(null);
+            try {
+              await window.ledger.createTransaction(input);
+              await refreshAccounts();
+              if (selectedId) await refreshLedger(selectedId);
+              setHoldingsReloadKey((k) => k + 1);
+              setToast("Payment applied across plans.");
+            } catch (e) {
+              setToast(e instanceof Error ? e.message : "Could not apply the payment.");
+            }
+          }}
+        />
+      )}
       {showExportDialog && selected && (
         <ExportDialog
           account={selected}
@@ -2199,6 +2330,9 @@ export function App() {
             void openSplitEditor(tx, account, isSplit, splits, signedTotalCents, () =>
               reloadSearch()
             )
+          }
+          onApplyToInstallment={(installment, tx) =>
+            setPlanApplyExisting({ account: installment, tx })
           }
         />
       )}

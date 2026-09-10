@@ -4,6 +4,7 @@ import type { EChartsOption } from "echarts";
 import * as echarts from "echarts";
 import type { Account, AggregateData, ChartScope, DateRange } from "../shared/types";
 import { categoryFlow, spendingByMonth, dataDateBounds, scopeLabel, pieWedges, OTHER_ID } from "../core/aggregate";
+import { UNCATEGORIZED_CATEGORY_ID, type SearchCriteria } from "../core/search";
 import { categoryDisplayName } from "../core/categories";
 import { formatCents } from "../core/money";
 
@@ -12,6 +13,8 @@ interface Props {
   dark: boolean;
   onClose: () => void;
   onToast: (msg: string) => void;
+  /** Open a Search window with the given criteria (double-click a pie wedge). */
+  onOpenSearch?: (criteria: SearchCriteria) => void;
 }
 
 const PALETTE = [
@@ -19,7 +22,7 @@ const PALETTE = [
   "#2d9cdb", "#f2c94c", "#219653", "#bb6bd9", "#56ccf2",
 ];
 
-export function ChartsPanel({ account, dark, onClose, onToast }: Props) {
+export function ChartsPanel({ account, dark, onClose, onToast, onOpenSearch }: Props) {
   const [data, setData] = useState<AggregateData | null>(null);
   const [scopeKind, setScopeKind] = useState<"account" | "all">(account ? "account" : "all");
   const [range, setRange] = useState<DateRange>({ start: null, end: null });
@@ -211,6 +214,80 @@ export function ChartsPanel({ account, dark, onClose, onToast }: Props) {
     setDrillPath((path) => [...path, cat.categoryId as string]);
   }
 
+  // Direct-children index for the current categories (built once per data change).
+  const childrenIndex = useMemo(() => {
+    const idx = new Map<string, string[]>();
+    if (!data) return idx;
+    for (const c of data.categories) {
+      if (c.deletedAt != null) continue;
+      if (c.parentId) {
+        const arr = idx.get(c.parentId) ?? [];
+        arr.push(c.id);
+        idx.set(c.parentId, arr);
+      }
+    }
+    return idx;
+  }, [data]);
+
+  // All category ids in a subtree (the category plus every descendant).
+  function subtreeIds(rootId: string): string[] {
+    const out: string[] = [];
+    const stack = [rootId];
+    while (stack.length) {
+      const id = stack.pop() as string;
+      out.push(id);
+      for (const child of childrenIndex.get(id) ?? []) stack.push(child);
+    }
+    return out;
+  }
+
+  // The small top-level slices pooled into the "Other" wedge: expand an "Other"
+  // double-click into its member categories. pieWedges(..., OTHER_ID) returns
+  // exactly those pooled small slices.
+  function otherMemberIds(): string[] {
+    if (!data) return [];
+    const members = pieWedges(categoryData, data.categories, OTHER_ID);
+    const ids: string[] = [];
+    for (const w of members) {
+      if (w.categoryId === null) ids.push(UNCATEGORIZED_CATEGORY_ID);
+      else ids.push(...subtreeIds(w.categoryId));
+    }
+    return ids;
+  }
+
+  // Double-click a wedge: open a Search window listing every transaction that
+  // accumulated into it. A rolled-up wedge matches its whole category subtree;
+  // the "Other" wedge matches all its pooled members; "Uncategorized" matches
+  // no-category spending. Scoped to the chart's account + date range.
+  function onPieDblClick(params: unknown): void {
+    if (!onOpenSearch || !data) return;
+    const p = params as { data?: { categoryId?: string | null } };
+    const cat = p.data;
+    if (!cat) return;
+    let categoryIds: string[];
+    if (cat.categoryId === OTHER_ID) {
+      categoryIds = otherMemberIds();
+    } else if (cat.categoryId == null) {
+      categoryIds = [UNCATEGORIZED_CATEGORY_ID];
+    } else {
+      categoryIds = subtreeIds(cat.categoryId);
+    }
+    if (categoryIds.length === 0) return;
+    const criteria: SearchCriteria = {
+      accountId: scope.kind === "account" ? scope.accountId : null,
+      toAccountId: null,
+      startDate: range.start,
+      endDate: range.end,
+      payee: "",
+      memo: "",
+      categoryId: "",
+      categoryIds,
+      direction: pieMode,
+      amountCents: null,
+    };
+    onOpenSearch(criteria);
+  }
+
   // Pop the drill path back to a given depth (0 = top level).
   function drillTo(depth: number): void {
     setDrillPath((path) => path.slice(0, depth));
@@ -297,7 +374,7 @@ export function ChartsPanel({ account, dark, onClose, onToast }: Props) {
               style={{ height: 320 }}
               notMerge
               theme={undefined}
-              onEvents={{ click: onPieClick }}
+              onEvents={{ click: onPieClick, dblclick: onPieDblClick }}
             />
             <div className="chart-actions">
               <button className="secondary" onClick={() => exportPng("pie")}>

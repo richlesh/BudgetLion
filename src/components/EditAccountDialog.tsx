@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Account, AccountType, Category, UpdateAccountInput } from "../shared/types";
-import { bpsToPercent, displaySign, formatCents, isLiability, parseCents, percentToBps } from "../core/money";
+import { bpsToPercent, displaySign, formatCents, parseCents, percentToBps } from "../core/money";
 import { categoriesForDirection, categoryOptions } from "../core/categories";
 import { ConfirmDialog } from "./ConfirmDialog";
 
@@ -17,6 +17,7 @@ const TYPES: { value: AccountType; label: string }[] = [
   { value: "savings", label: "Savings" },
   { value: "credit_card", label: "Credit Card" },
   { value: "loan", label: "Loan / Mortgage" },
+  { value: "installment", label: "Installment / BNPL" },
   { value: "investment", label: "Investment" },
   { value: "asset", label: "Asset" },
 ];
@@ -45,6 +46,9 @@ export function EditAccountDialog({ account, categories, accounts, onCancel, onS
   const [escrowTarget, setEscrowTarget] = useState(account.escrowTarget ?? "");
   const [websiteUrl, setWebsiteUrl] = useState(account.websiteUrl ?? "");
   const [notes, setNotes] = useState(account.notes ?? "");
+  const [paymentAllocation, setPaymentAllocation] = useState<"per_plan" | "waterfall_soonest">(
+    account.paymentAllocation ?? "waterfall_soonest"
+  );
   const [error, setError] = useState<string | null>(null);
   // Whether this account has reconciled transactions (owned side or a reconciled
   // transfer leg). If so, changing the opening balance shifts every reconciled
@@ -92,14 +96,17 @@ export function EditAccountDialog({ account, categories, accounts, onCancel, onS
       currency: currency.trim() || "USD",
       openingBalanceCents: storedOpening,
       openingBalanceDate: openingDate || null,
-      // Interest rate applies only to liability accounts; cleared otherwise.
-      interestRateBps: isLiability(type) ? percentToBps(interestRate) : null,
+      // Interest rate applies to credit-card/loan accounts (installment plans carry
+      // their own per-plan rate); cleared otherwise.
+      interestRateBps: type === "credit_card" || type === "loan" ? percentToBps(interestRate) : null,
       // Escrow applies to a mortgage (loan); cleared for other types, null if blank.
       escrowPaymentCents: type === "loan" ? parseCents(escrow) : null,
       escrowTarget: type === "loan" ? escrowTarget || null : null,
       // Free-form metadata; store null when blank so empty strings don't linger.
       websiteUrl: websiteUrl.trim() || null,
       notes: notes.trim() ? notes : null,
+      // Installment/BNPL payment allocation strategy (cleared for other types).
+      paymentAllocation: type === "installment" ? paymentAllocation : null,
     };
     // Warn if the opening balance (amount or date) changed while the account has
     // reconciled transactions — this shifts every reconciled running balance.
@@ -131,10 +138,24 @@ export function EditAccountDialog({ account, categories, accounts, onCancel, onS
             ))}
           </select>
         </div>
-        {isLiability(type) && (
+        {(type === "credit_card" || type === "loan") && (
           <div className="field">
             <label>Annual interest rate (%)</label>
             <input value={interestRate} onChange={(e) => setInterestRate(e.target.value)} />
+          </div>
+        )}
+        {type === "installment" && (
+          <div className="field">
+            <label>Payment allocation</label>
+            <select
+              value={paymentAllocation}
+              onChange={(e) => setPaymentAllocation(e.target.value as "per_plan" | "waterfall_soonest")}
+            >
+              <option value="per_plan">Per plan (each plan paid separately — e.g. Affirm)</option>
+              <option value="waterfall_soonest">
+                Waterfall (one payment, soonest-expiring first — e.g. PayPal Pay Later)
+              </option>
+            </select>
           </div>
         )}
         {type === "loan" && (

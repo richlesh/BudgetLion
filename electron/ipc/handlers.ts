@@ -27,6 +27,9 @@ import type {
   NewTradeInput,
   SecurityHolding,
   InvestmentImportRow,
+  NewLoanPlanInput,
+  UpdateLoanPlanInput,
+  RecordPlanPurchaseInput,
 } from "../../src/shared/types.js";
 import { buildLedger, currentBalance } from "../../src/core/balances.js";
 import {
@@ -261,6 +264,21 @@ export function registerIpcHandlers(): void {
     repo.updateRecurringRule(input)
   );
   ipcMain.handle(IPC.deleteRecurringRule, (_e, id: string) => repo.deleteRecurringRule(id));
+
+  // Installment / BNPL plans.
+  ipcMain.handle(IPC.listLoanPlans, (_e, accountId: string) => repo.listLoanPlans(accountId));
+  ipcMain.handle(IPC.createLoanPlan, (_e, input: NewLoanPlanInput) => repo.createLoanPlan(input));
+  ipcMain.handle(IPC.updateLoanPlan, (_e, input: UpdateLoanPlanInput) => repo.updateLoanPlan(input));
+  ipcMain.handle(IPC.deleteLoanPlan, (_e, id: string) => repo.deleteLoanPlan(id));
+  ipcMain.handle(IPC.planBalances, (_e, accountId: string) => repo.planBalances(accountId));
+  ipcMain.handle(IPC.planLedger, (_e, planId: string) => repo.planLedger(planId));
+  ipcMain.handle(IPC.planLastInterestCategory, (_e, accountId: string) =>
+    repo.lastInterestCategoryForAccount(accountId)
+  );
+  ipcMain.handle(IPC.planHasPurchase, (_e, planId: string) => repo.planHasPurchaseTransaction(planId));
+  ipcMain.handle(IPC.recordPlanPurchase, (_e, input: RecordPlanPurchaseInput) =>
+    repo.recordPlanPurchase(input)
+  );
 
   ipcMain.handle(
     IPC.getProjection,

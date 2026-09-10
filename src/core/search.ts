@@ -16,6 +16,9 @@ export const UNCATEGORIZED_CATEGORY_ID = "__uncategorized__";
 export interface SearchCriteria {
   /** Restrict to a single account (matches from/to or a transfer-leg split). Null = all. */
   accountId: string | null;
+  /** Match transfers whose destination (to-account, or a transfer-leg target) is
+   *  this account. Null = ignore. Helps find "money into X" transfers. */
+  toAccountId: string | null;
   /** Inclusive ISO date lower bound (YYYY-MM-DD), or null. */
   startDate: string | null;
   /** Inclusive ISO date upper bound (YYYY-MM-DD), or null. */
@@ -27,6 +30,17 @@ export interface SearchCriteria {
   /** Category id: matches the tx category OR any split leg category. Empty = ignore.
    *  UNCATEGORIZED_CATEGORY_ID matches transactions with no category at all. */
   categoryId: string;
+  /** Optional SET of category ids: matches when the tx category OR any split leg
+   *  category is in this set. Used by the pie chart to search a rolled-up wedge
+   *  (a category plus all its descendants). Empty/undefined = ignore. Applied in
+   *  addition to (AND with) categoryId when both are set. */
+  categoryIds?: string[];
+  /** Optional flow direction constraint (used by the pie chart so a wedge search
+   *  only returns the side the wedge represents): "expense" keeps outflows,
+   *  "income" keeps inflows. Undefined = ignore. Evaluated against the matched
+   *  category legs (or the inline-category transaction) using the same sign
+   *  convention as the charts (negative = expense, positive = income). */
+  direction?: "expense" | "income";
   /** Amount magnitude in cents (abs match on tx.amountCents), or null to ignore. */
   amountCents: number | null;
 }
@@ -35,11 +49,14 @@ export interface SearchCriteria {
 export function isEmptyCriteria(c: SearchCriteria): boolean {
   return (
     !c.accountId &&
+    !c.toAccountId &&
     !c.startDate &&
     !c.endDate &&
     c.payee.trim() === "" &&
     c.memo.trim() === "" &&
     c.categoryId === "" &&
+    (!c.categoryIds || c.categoryIds.length === 0) &&
+    !c.direction &&
     c.amountCents == null
   );
 }
@@ -62,6 +79,13 @@ export function matchesCriteria(
   if (tx.deletedAt != null) return false;
 
   if (c.accountId && !touchesAccount(tx, splits, c.accountId)) return false;
+  if (c.toAccountId) {
+    // Money INTO the target account: the transaction's to-account is it, or a
+    // split transfer leg targets it.
+    const toTx = tx.toAccountId === c.toAccountId;
+    const toLeg = splits.some((s) => s.transferAccountId === c.toAccountId);
+    if (!toTx && !toLeg) return false;
+  }
   if (c.startDate && tx.date < c.startDate) return false;
   if (c.endDate && tx.date > c.endDate) return false;
 
@@ -94,6 +118,63 @@ export function matchesCriteria(
       const inTx = tx.categoryId === c.categoryId;
       const inLeg = splits.some((s) => s.categoryId === c.categoryId);
       if (!inTx && !inLeg) return false;
+    }
+  }
+
+  if (c.categoryIds && c.categoryIds.length > 0) {
+    const set = new Set(c.categoryIds);
+    // A pie wedge's subtree of categories; UNCATEGORIZED_CATEGORY_ID in the set
+    // also matches transactions with no category (the "Uncategorized" wedge).
+    const wantUncategorized = set.has(UNCATEGORIZED_CATEGORY_ID);
+    const inTx = tx.categoryId != null && set.has(tx.categoryId);
+    const inLeg = splits.some((s) => s.categoryId != null && set.has(s.categoryId));
+    let matched = inTx || inLeg;
+    if (!matched && wantUncategorized) {
+      const hasInline = tx.categoryId != null && tx.categoryId !== "";
+      const hasLegCategory = splits.some((s) => s.categoryId != null && s.categoryId !== "");
+      const isTransfer =
+        (tx.fromAccountId != null && tx.toAccountId != null) ||
+        splits.some((s) => s.transferAccountId != null);
+      matched = !hasInline && !hasLegCategory && !isTransfer;
+    }
+    if (!matched) return false;
+  }
+
+  if (c.direction) {
+    // Keep only the requested side, mirroring the charts' sign convention:
+    //  - a matched CATEGORY SPLIT LEG is an expense when negative, income when positive;
+    //  - an unsplit INLINE-category transaction is an expense when it flows OUT to a
+    //    category (from set, to null) and income when it flows IN (to set, from null).
+    // Determine which category ids we're constraining to (categoryIds set, or the
+    // single categoryId, or — when neither — any category leg / inline category).
+    const set =
+      c.categoryIds && c.categoryIds.length > 0
+        ? new Set(c.categoryIds)
+        : c.categoryId && c.categoryId !== UNCATEGORIZED_CATEGORY_ID
+          ? new Set([c.categoryId])
+          : null;
+    const inSet = (id: string | null | undefined) => id != null && (set == null || set.has(id));
+
+    const catLegs = splits.filter((s) => s.categoryId != null && s.transferAccountId == null && inSet(s.categoryId));
+    let isExpense: boolean | null = null;
+    if (catLegs.length > 0) {
+      // Net the matched legs' signs (they should share a side for a given wedge).
+      const net = catLegs.reduce((sum, s) => sum + s.amountCents, 0);
+      isExpense = net < 0;
+    } else if (tx.categoryId != null && inSet(tx.categoryId)) {
+      // Unsplit inline category: expense = outflow toward a category.
+      if (tx.fromAccountId != null && tx.toAccountId == null) isExpense = true;
+      else if (tx.toAccountId != null && tx.fromAccountId == null) isExpense = false;
+    }
+    if (isExpense == null) {
+      // Uncategorized (or indeterminate) side: fall back to the transaction's
+      // external flow direction (outflow to external = expense).
+      if (tx.fromAccountId != null && tx.toAccountId == null) isExpense = true;
+      else if (tx.toAccountId != null && tx.fromAccountId == null) isExpense = false;
+    }
+    if (isExpense != null) {
+      if (c.direction === "expense" && !isExpense) return false;
+      if (c.direction === "income" && isExpense) return false;
     }
   }
 

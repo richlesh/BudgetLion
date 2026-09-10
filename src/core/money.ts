@@ -12,12 +12,12 @@ import type { AccountType } from "../shared/types";
  * displaying amounts and balances. This does NOT change stored data.
  */
 export function displaySign(type: AccountType): 1 | -1 {
-  return type === "credit_card" || type === "loan" ? -1 : 1;
+  return type === "credit_card" || type === "loan" || type === "installment" ? -1 : 1;
 }
 
-/** True for liability account types (credit card / loan), which carry interest. */
+/** True for liability account types (credit card / loan / installment), which carry interest. */
 export function isLiability(type: AccountType): boolean {
-  return type === "credit_card" || type === "loan";
+  return type === "credit_card" || type === "loan" || type === "installment";
 }
 
 /**
