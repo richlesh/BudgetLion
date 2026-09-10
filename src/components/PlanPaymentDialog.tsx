@@ -107,6 +107,34 @@ export function PlanPaymentDialog({ account, accounts, categories, existingTx, o
     [paymentCents, plans, account.paymentAllocation, forcedPlanId]
   );
 
+  // User overrides for the computed principal/interest per plan, stored as the
+  // RAW text the user typed (source of truth while editing) keyed by
+  // `${planId}:principal|interest`. A present entry means the user edited that
+  // cell; parsing it (parseCents) yields the override amount. Storing text — not
+  // a re-derived number — keeps the input from fighting the caret as you type.
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  useEffect(() => {
+    setDrafts({});
+  }, [paymentCents, forcedPlanId, account.paymentAllocation, plans]);
+
+  const draftKey = (planId: string, field: "principal" | "interest") => `${planId}:${field}`;
+
+  // The effective allocation: computed values with any user text overrides applied.
+  const effAlloc = useMemo(() => {
+    const perPlan = alloc.perPlan.map((a) => {
+      const pd = drafts[draftKey(a.planId, "principal")];
+      const idr = drafts[draftKey(a.planId, "interest")];
+      const pc = pd != null ? parseCents(pd) : null;
+      const ic = idr != null ? parseCents(idr) : null;
+      return {
+        ...a,
+        principalCents: pc != null ? Math.abs(pc) : a.principalCents,
+        interestCents: ic != null ? Math.abs(ic) : a.interestCents,
+      };
+    });
+    return { perPlan, unallocatedCents: alloc.unallocatedCents };
+  }, [alloc, drafts]);
+
   // For a per_plan account, when the amount doesn't exactly match an installment
   // and the user hasn't chosen a plan, they MUST pick one — the auto-fallback
   // (soonest expiration) is only a hint, not a safe default here.
@@ -116,7 +144,7 @@ export function PlanPaymentDialog({ account, accounts, categories, existingTx, o
     !exactMatch &&
     forcedPlanId === "";
 
-  const totalInterest = alloc.perPlan.reduce((s, a) => s + a.interestCents, 0);
+  const totalInterest = effAlloc.perPlan.reduce((s, a) => s + a.interestCents, 0);
   const planById = useMemo(() => new Map(plans.map((b) => [b.plan.id, b.plan.label])), [plans]);
 
   const submit = useCallback(async () => {
@@ -126,13 +154,13 @@ export function PlanPaymentDialog({ account, accounts, categories, existingTx, o
       setError("This amount doesn't match a plan's installment — choose which plan to apply it to.");
       return;
     }
-    if (alloc.perPlan.length === 0) { setError("No plans to apply this payment to."); return; }
+    if (effAlloc.perPlan.length === 0) { setError("No plans to apply this payment to."); return; }
 
     // Categorizing an EXISTING transfer (e.g. imported checking txn) into this
     // installment account: build the plan-attributed split legs and hand them to
     // onApplyToExisting, which updates the transaction in place.
     if (editingExisting && existingTx) {
-      if (alloc.unallocatedCents > 0) {
+      if (effAlloc.unallocatedCents > 0) {
         setError(
           "This payment exceeds the plans' remaining balances, so it can't be fully allocated. Adjust plan balances or split it manually."
         );
@@ -143,7 +171,7 @@ export function PlanPaymentDialog({ account, accounts, categories, existingTx, o
         return;
       }
       const legs: NewSplitInput[] = [];
-      for (const a of alloc.perPlan) {
+      for (const a of effAlloc.perPlan) {
         if (a.principalCents > 0) {
           legs.push({
             amountCents: -a.principalCents,
@@ -176,7 +204,7 @@ export function PlanPaymentDialog({ account, accounts, categories, existingTx, o
       // pre-history entries. Owner is the 'to' side, so legs sum to +applied.
       const legs: NewSplitInput[] = [];
       let applied = 0;
-      for (const a of alloc.perPlan) {
+      for (const a of effAlloc.perPlan) {
         if (a.principalCents <= 0) continue;
         legs.push({
           amountCents: a.principalCents,
@@ -209,7 +237,7 @@ export function PlanPaymentDialog({ account, accounts, categories, existingTx, o
     // funding account): principal -> transfer into this installment account tagged
     // with plan_id; interest -> categorized expense.
     const legs: NewSplitInput[] = [];
-    for (const a of alloc.perPlan) {
+    for (const a of effAlloc.perPlan) {
       if (a.principalCents > 0) {
         legs.push({
           amountCents: -a.principalCents,
@@ -227,7 +255,7 @@ export function PlanPaymentDialog({ account, accounts, categories, existingTx, o
         });
       }
     }
-    const applied = alloc.perPlan.reduce((s, a) => s + a.principalCents + a.interestCents, 0);
+    const applied = effAlloc.perPlan.reduce((s, a) => s + a.principalCents + a.interestCents, 0);
     if (applied <= 0 || legs.length === 0) { setError("Nothing to allocate."); return; }
 
     const input: NewTransactionInput = {
@@ -241,7 +269,7 @@ export function PlanPaymentDialog({ account, accounts, categories, existingTx, o
       splits: legs,
     };
     await onSubmit(input);
-  }, [paymentCents, fromAccountId, totalInterest, interestCategoryId, alloc, account, date, planById, onSubmit, editingExisting, existingTx, onApplyToExisting, needsPlanChoice]);
+  }, [paymentCents, fromAccountId, totalInterest, interestCategoryId, effAlloc, account, date, planById, onSubmit, editingExisting, existingTx, onApplyToExisting, needsPlanChoice]);
 
   const currency = account.currency;
   const modeLabel = account.paymentAllocation === "per_plan" ? "Per plan" : "Waterfall (soonest first)";
@@ -359,23 +387,67 @@ export function PlanPaymentDialog({ account, accounts, categories, existingTx, o
               </tr>
             </thead>
             <tbody>
-              {alloc.perPlan.length === 0 ? (
+              {effAlloc.perPlan.length === 0 ? (
                 <tr><td colSpan={3} className="empty">Enter an amount to preview the allocation.</td></tr>
               ) : (
-                alloc.perPlan.map((a) => (
+                effAlloc.perPlan.map((a) => (
                   <tr key={a.planId}>
                     <td>{a.label}</td>
-                    <td className="num">{formatCents(a.principalCents, currency)}</td>
-                    <td className="num">{a.interestCents > 0 ? formatCents(a.interestCents, currency) : "—"}</td>
+                    <td className="num">
+                      <input
+                        value={drafts[draftKey(a.planId, "principal")] ?? (a.principalCents / 100).toFixed(2)}
+                        title="Override the principal for this plan"
+                        style={{ width: 90, textAlign: "right" }}
+                        onChange={(e) =>
+                          setDrafts((prev) => ({ ...prev, [draftKey(a.planId, "principal")]: e.target.value }))
+                        }
+                      />
+                    </td>
+                    <td className="num">
+                      <input
+                        value={drafts[draftKey(a.planId, "interest")] ?? (a.interestCents / 100).toFixed(2)}
+                        title="Override the interest for this plan"
+                        style={{ width: 90, textAlign: "right" }}
+                        onChange={(e) =>
+                          setDrafts((prev) => ({ ...prev, [draftKey(a.planId, "interest")]: e.target.value }))
+                        }
+                      />
+                    </td>
                   </tr>
                 ))
               )}
             </tbody>
+            {effAlloc.perPlan.length > 0 && (
+              <tfoot>
+                <tr>
+                  <td>Total applied</td>
+                  <td className="num">
+                    {formatCents(effAlloc.perPlan.reduce((s, a) => s + a.principalCents, 0), currency)}
+                  </td>
+                  <td className="num">{formatCents(totalInterest, currency)}</td>
+                </tr>
+              </tfoot>
+            )}
           </table>
         </div>
-        {alloc.unallocatedCents > 0 && (
+        {(() => {
+          // When overrides are in play the applied total can differ from the
+          // entered amount; surface the difference so the user can reconcile.
+          const applied = effAlloc.perPlan.reduce((s, a) => s + a.principalCents + a.interestCents, 0);
+          const diff = applied - Math.abs(paymentCents);
+          if (paymentCents > 0 && diff !== 0) {
+            return (
+              <div className="account-type" style={{ marginTop: 4 }}>
+                Applied total {formatCents(applied, currency)} {diff > 0 ? "exceeds" : "is under"} the
+                entered amount {formatCents(Math.abs(paymentCents), currency)} by {formatCents(Math.abs(diff), currency)}.
+              </div>
+            );
+          }
+          return null;
+        })()}
+        {effAlloc.unallocatedCents > 0 && (
           <div className="account-type" style={{ marginTop: 4 }}>
-            {formatCents(alloc.unallocatedCents, currency)} of this payment exceeds the plans' balances and won't be applied.
+            {formatCents(effAlloc.unallocatedCents, currency)} of this payment exceeds the plans' balances and won't be applied.
           </div>
         )}
 

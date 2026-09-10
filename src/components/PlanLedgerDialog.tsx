@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { LoanPlan, PlanLedgerEntry } from "../shared/types";
 import { formatCents } from "../core/money";
+import { projectPlanSchedule } from "../core/installment";
 
 interface Props {
   plan: LoanPlan;
@@ -30,6 +31,25 @@ export function PlanLedgerDialog({ plan, currency, onClose }: Props) {
   const totalInterest = rows.reduce((s, r) => s + r.interestCents, 0);
   const remaining = rows.length > 0 ? rows[rows.length - 1].runningBalanceCents : plan.principalCents;
 
+  // Projected future payments (amortization tail): continue the schedule from the
+  // current remaining balance and the count of payments already posted, applying
+  // the plan's installment monthly until it pays off (or the term is reached).
+  const paymentsMade = rows.filter((r) => r.principalCents > 0).length;
+  const future = useMemo(
+    () =>
+      projectPlanSchedule(
+        remaining,
+        plan.rateBps,
+        plan.paymentCents,
+        plan.numPayments,
+        paymentsMade,
+        plan.originationDate
+      ),
+    [remaining, plan.rateBps, plan.paymentCents, plan.numPayments, paymentsMade, plan.originationDate]
+  );
+  const futureInterest = future.reduce((s, r) => s + r.interestCents, 0);
+  const payoffDate = future.length > 0 ? future[future.length - 1].date : null;
+
   return (
     <div className="dialog-backdrop dialog-backdrop-top" onClick={onClose}>
       <div className="dialog" style={{ width: "min(640px, 92vw)" }} onClick={(e) => e.stopPropagation()}>
@@ -41,6 +61,11 @@ export function PlanLedgerDialog({ plan, currency, onClose }: Props) {
         <div className="account-type" style={{ marginTop: 4 }}>
           Original {formatCents(plan.principalCents, currency)}
           {plan.rateBps > 0 ? ` · APR from statements` : " · 0% APR"}
+          {payoffDate
+            ? ` · projected payoff ${payoffDate}${futureInterest > 0 ? ` · remaining interest ${formatCents(futureInterest, currency)}` : ""}`
+            : remaining <= 0
+              ? " · paid off"
+              : ""}
         </div>
 
         <div style={{ maxHeight: "60vh", overflow: "auto", marginTop: 8 }}>
@@ -75,6 +100,25 @@ export function PlanLedgerDialog({ plan, currency, onClose }: Props) {
                     <td className="num">{formatCents(r.runningBalanceCents, currency)}</td>
                   </tr>
                 ))
+              )}
+              {/* Projected future payments (amortization tail). */}
+              {future.length > 0 && (
+                <>
+                  <tr>
+                    <td colSpan={5} className="account-type" style={{ paddingTop: 10, fontWeight: 700 }}>
+                      Projected payoff schedule
+                    </td>
+                  </tr>
+                  {future.map((f) => (
+                    <tr key={`future-${f.paymentNumber}`} style={{ opacity: 0.75, fontStyle: "italic" }}>
+                      <td>{f.date}</td>
+                      <td className="account-type">Payment {f.paymentNumber}{plan.numPayments > 0 ? ` of ${plan.numPayments}` : ""} (projected)</td>
+                      <td className="num">{formatCents(f.principalCents, currency)}</td>
+                      <td className="num">{f.interestCents > 0 ? formatCents(f.interestCents, currency) : "—"}</td>
+                      <td className="num">{formatCents(f.remainingCents, currency)}</td>
+                    </tr>
+                  ))}
+                </>
               )}
             </tbody>
             <tfoot>

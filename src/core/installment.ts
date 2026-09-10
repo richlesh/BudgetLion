@@ -266,3 +266,72 @@ export function projectPlanPayoff(plans: PlanBalance[], fromDate: string): Payof
 
   return { months, payoffDate, totalInterestCents: totalInterest, startingRemainingCents };
 }
+
+/** One projected future installment in a single plan's amortization tail. */
+export interface PlanScheduleEntry {
+  /** Installment number (1-based) within the plan's scheduled payments. */
+  paymentNumber: number;
+  /** Projected due date (ISO), origination + paymentNumber months. */
+  date: string;
+  paymentCents: number;
+  interestCents: number;
+  principalCents: number;
+  /** Remaining balance after this projected payment. */
+  remainingCents: number;
+}
+
+/** ISO date N months after `iso`, preserving the day-of-month where possible. */
+function addMonthsIso(iso: string, n: number): string {
+  const d = new Date(iso + "T00:00:00");
+  if (Number.isNaN(d.getTime())) return iso;
+  d.setMonth(d.getMonth() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Project the FUTURE payments for a single plan as an amortization tail: starting
+ * from `remainingCents`, apply the plan's fixed installment each month (interest =
+ * remaining × APR/12, principal = installment − interest, capped at remaining)
+ * until the balance reaches zero or the plan's scheduled payment count is reached.
+ * `paymentsMade` is how many payments have already posted (so numbering and dates
+ * continue from there). A plan with no installment amount is paid off in one final
+ * payment. Returns [] when nothing remains.
+ */
+export function projectPlanSchedule(
+  remainingCents: number,
+  rateBps: number,
+  installmentCents: number,
+  numPayments: number,
+  paymentsMade: number,
+  originationDate: string
+): PlanScheduleEntry[] {
+  const out: PlanScheduleEntry[] = [];
+  let remaining = Math.max(0, remainingCents);
+  let n = paymentsMade;
+  let guard = 0;
+  while (remaining > 0 && guard < 600) {
+    guard++;
+    // Stop once the scheduled number of payments is reached, unless a balance
+    // still remains (then emit a final catch-up payment so the tail pays off).
+    const scheduledExhausted = numPayments > 0 && n >= numPayments;
+    const interest = perInstallmentInterest(remaining, rateBps);
+    const baseInstallment = installmentCents > 0 ? installmentCents : remaining + interest;
+    // On the last scheduled (or catch-up) step, pay off the full remainder.
+    const installment = scheduledExhausted ? remaining + interest : Math.min(baseInstallment, remaining + interest);
+    const pay = Math.min(installment, remaining + interest);
+    const principal = Math.min(pay - interest, remaining);
+    if (principal <= 0 && interest <= 0) break; // no progress; avoid infinite loop
+    remaining -= principal;
+    n++;
+    out.push({
+      paymentNumber: n,
+      date: addMonthsIso(originationDate, n),
+      paymentCents: pay,
+      interestCents: interest,
+      principalCents: principal,
+      remainingCents: remaining,
+    });
+    if (scheduledExhausted && remaining <= 0) break;
+  }
+  return out;
+}

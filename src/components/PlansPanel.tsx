@@ -56,7 +56,7 @@ export function PlansPanel({ account, categories, reloadKey, onApplyPayment, onC
   // Plan whose transaction-history dialog is open (double-click the Remaining cell).
   const [historyFor, setHistoryFor] = useState<LoanPlan | null>(null);
   // Inline edit: which plan's field is being edited (label / rate / payment) + draft.
-  const [editing, setEditing] = useState<{ planId: string; field: "label" | "rate" | "payment" | "orig" | "exp" } | null>(null);
+  const [editing, setEditing] = useState<{ planId: string; field: "label" | "rate" | "payment" | "orig" | "exp" | "principal" } | null>(null);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   // New-plan draft fields.
@@ -193,7 +193,7 @@ export function PlansPanel({ account, categories, reloadKey, onApplyPayment, onC
   }, [deleteFor, load, onChanged]);
 
   // Begin editing a plan field (double-click). Seeds the draft from the value.
-  const beginEdit = useCallback((p: LoanPlan, field: "label" | "rate" | "payment" | "orig" | "exp") => {
+  const beginEdit = useCallback((p: LoanPlan, field: "label" | "rate" | "payment" | "orig" | "exp" | "principal") => {
     setError(null);
     setEditing({ planId: p.id, field });
     setDraft(
@@ -205,9 +205,11 @@ export function PlansPanel({ account, categories, reloadKey, onApplyPayment, onC
             ? p.originationDate
             : field === "exp"
               ? (p.expirationDate ?? "")
-              : p.paymentCents > 0
-                ? (p.paymentCents / 100).toFixed(2)
-                : ""
+              : field === "principal"
+                ? (p.principalCents / 100).toFixed(2)
+                : p.paymentCents > 0
+                  ? (p.paymentCents / 100).toFixed(2)
+                  : ""
     );
   }, []);
 
@@ -231,6 +233,10 @@ export function PlansPanel({ account, categories, reloadKey, onApplyPayment, onC
       } else if (ed.field === "exp") {
         // Expiration is optional; blank clears it.
         await window.ledger.updateLoanPlan({ id: ed.planId, expirationDate: text || null });
+      } else if (ed.field === "principal") {
+        const cents = parseCents(text);
+        if (cents == null || cents <= 0) { setError("Enter a valid principal (greater than zero)."); return; }
+        await window.ledger.updateLoanPlan({ id: ed.planId, principalCents: cents });
       } else {
         const cents = parseCents(text) ?? 0;
         if (cents < 0) { setError("Enter a valid installment amount."); return; }
@@ -260,6 +266,7 @@ export function PlansPanel({ account, categories, reloadKey, onApplyPayment, onC
             <tr>
               <th>Plan</th>
               <th className="num">Remaining</th>
+              <th className="num">Principal</th>
               <th className="num">APR</th>
               <th className="num">Payments left</th>
               <th>Originated</th>
@@ -302,6 +309,28 @@ export function PlansPanel({ account, categories, reloadKey, onApplyPayment, onC
                     >
                       {formatCents(b.remainingCents, currency)}
                     </span>
+                  </td>
+                  {/* Principal — double-click to edit (e.g. a provider "adjustment"). */}
+                  <td className="num">
+                    {editing?.planId === p.id && editing.field === "principal" ? (
+                      <input
+                        className="holdings-edit"
+                        autoFocus
+                        value={draft}
+                        placeholder="0.00"
+                        style={{ width: 90, textAlign: "right" }}
+                        onChange={(e) => setDraft(e.target.value)}
+                        onBlur={() => void commitEdit()}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") { e.preventDefault(); void commitEdit(); }
+                          else if (e.key === "Escape") { e.preventDefault(); setEditing(null); }
+                        }}
+                      />
+                    ) : (
+                      <span title="Double-click to edit the principal (adjusts the amount owed)" onDoubleClick={() => beginEdit(p, "principal")}>
+                        {formatCents(p.principalCents, currency)}
+                      </span>
+                    )}
                   </td>
                   {/* APR — double-click to edit (percent). */}
                   <td className="num">
@@ -415,6 +444,7 @@ export function PlansPanel({ account, categories, reloadKey, onApplyPayment, onC
             <tr>
               <td>Total</td>
               <td className="num">{formatCents(totalRemaining, currency)}</td>
+              <td className="num">{formatCents(balances.reduce((s, b) => s + b.plan.principalCents, 0), currency)}</td>
               <td className="num"></td>
               <td className="num"></td>
               <td></td>
