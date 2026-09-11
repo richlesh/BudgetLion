@@ -214,6 +214,21 @@ export function LedgerGrid({
         const other = ownerId ? accountNameById.get(ownerId) : undefined;
         return `From ${other ?? "account"}`;
       }
+      // Owned split with a transfer leg (plus categories): auto-label the payee
+      // after the transfer counterparty, like a plain transfer. Only when every
+      // transfer leg targets the SAME other account (otherwise it's ambiguous, so
+      // keep the stored payee). Direction from the leg sign: a negative (outflow)
+      // transfer leg means money left this account → "To X"; positive → "From X".
+      if (r.isSplit && r.splits && r.splits.length > 0) {
+        const xferLegs = r.splits.filter((s) => s.transferAccountId != null);
+        const targets = new Set(xferLegs.map((s) => s.transferAccountId as string));
+        if (targets.size === 1) {
+          const targetId = [...targets][0];
+          const name = accountNameById.get(targetId) ?? "account";
+          const net = xferLegs.reduce((sum, s) => sum + s.amountCents, 0);
+          return net <= 0 ? `To ${name}` : `From ${name}`;
+        }
+      }
       return t.payee ?? "";
     },
     [account.id, accountNameById]
