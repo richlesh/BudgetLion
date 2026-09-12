@@ -72,13 +72,14 @@ export function isLicensed(): boolean {
 }
 
 /**
- * Record ONE AI usage (one dedupe scan, or one AI import/extract — not one model
- * call): increment the persistent counter and, every 5th use, show the purchase
- * splash. Never nags a validly licensed user. Returns the new count.
+ * Record ONE nag event — an AI usage (one dedupe scan, or one AI import/extract —
+ * not one model call) or one reconcile action: increment the persistent counter
+ * and, every 10th event, show the purchase splash. Never nags a validly licensed
+ * user. Returns the new count.
  */
 export function recordAiUsage(): number {
   const count = recordAiRequest();
-  if (count > 0 && count % 5 === 0 && !isLicensed()) {
+  if (count > 0 && count % 10 === 0 && !isLicensed()) {
     showSplash();
   }
   return count;

@@ -5,3 +5,4 @@ dist-electron/
 .idea/
 *.log
 license.cjs
+generate*.py

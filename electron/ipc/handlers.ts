@@ -233,7 +233,12 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC.bulkUpdateTransactions, (_e, updates: UpdateTransactionInput[]) =>
     repo.bulkUpdateTransactions(updates)
   );
-  ipcMain.handle(IPC.reconcileAccount, (_e, input: ReconcileInput) => repo.reconcileAccount(input));
+  ipcMain.handle(IPC.reconcileAccount, (_e, input: ReconcileInput) => {
+    // A reconcile action counts as a nag event (like an AI usage) for the
+    // unlicensed purchase splash.
+    recordAiUsage();
+    return repo.reconcileAccount(input);
+  });
   ipcMain.handle(IPC.setTransactionsReconciled, (_e, ids: string[], accountId: string, reconciled: boolean) =>
     repo.setTransactionsReconciled(ids, accountId, reconciled)
   );
