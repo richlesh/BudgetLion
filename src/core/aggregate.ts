@@ -77,13 +77,22 @@ function flowByCategory(
   scope: ChartScope,
   direction: FlowDirection
 ): Array<{ categoryId: string | null; amountCents: number }> {
-  const scopeSigned = scopeSignedAmount(tx, scope);
   const wantOutflow = direction === "expense";
-  // Skip transactions whose net scope effect is on the other side.
-  if (wantOutflow ? scopeSigned >= 0 : scopeSigned <= 0) return [];
-
   const txSplits = splits.filter((s) => s.transactionId === tx.id && s.deletedAt == null);
+
   if (txSplits.length > 0) {
+    // Split transactions are evaluated PER CATEGORY LEG, independent of the
+    // transaction's net scope effect. This is what lets a mixed-sign paycheck
+    // (gross income + tax/deduction expense legs) and a transfer-bearing payment
+    // (e.g. a mortgage payment whose interest leg is a real expense) contribute
+    // their category legs even though their NET effect would otherwise gate them
+    // out (a paycheck nets to income; a loan payment nets to an internal transfer).
+    // For an account scope, only count legs of a transaction this account owns
+    // (the from/to side the legs are signed against).
+    if (scope.kind === "account") {
+      const owns = tx.fromAccountId === scope.accountId || tx.toAccountId === scope.accountId;
+      if (!owns) return [];
+    }
     const out: Array<{ categoryId: string | null; amountCents: number }> = [];
     for (const s of txSplits) {
       if (s.transferAccountId) continue; // transfer leg, not spending/income
@@ -95,7 +104,10 @@ function flowByCategory(
     return out;
   }
 
-  // Unsplit: the whole flow belongs to the inline category (or uncategorized).
+  // Unsplit: gate by the transaction's net scope effect (internal transfers
+  // excluded), then attribute the whole flow to its inline category.
+  const scopeSigned = scopeSignedAmount(tx, scope);
+  if (wantOutflow ? scopeSigned >= 0 : scopeSigned <= 0) return [];
   return [{ categoryId: tx.categoryId, amountCents: Math.abs(scopeSigned) }];
 }
 
@@ -318,18 +330,64 @@ export function spendingByMonth(
     if (!touchesScope(tx, scope)) continue;
     if (!inRange(tx.date, range)) continue;
 
-    const signed = scopeSignedAmount(tx, scope);
-    if (signed === 0) continue;
+    const { spending, income } = monthlyFlow(tx, data.splits, scope);
+    if (spending === 0 && income === 0) continue;
     const month = tx.date.slice(0, 7); // YYYY-MM
     const bucket = months.get(month) ?? { spending: 0, income: 0 };
-    if (signed < 0) bucket.spending += Math.abs(signed);
-    else bucket.income += signed;
+    bucket.spending += spending;
+    bucket.income += income;
     months.set(month, bucket);
   }
 
   return Array.from(months.entries())
     .map(([month, v]) => ({ month, spendingCents: v.spending, incomeCents: v.income }))
     .sort((a, b) => (a.month < b.month ? -1 : 1));
+}
+
+/**
+ * Split-aware spending/income contribution of a transaction to the monthly bar
+ * chart, in positive-magnitude cents. Consistent with `flowByCategory`:
+ *   - Split transactions attribute each CATEGORY leg to spending (negative leg)
+ *     or income (positive leg); transfer legs are ignored. This holds even when
+ *     the transaction is also an internal transfer (e.g. a mortgage payment whose
+ *     interest leg is a real expense) or a mixed-sign paycheck (gross income +
+ *     tax/deduction expense legs).
+ *   - Unsplit transactions use the scope's net effect, excluding pure internal
+ *     transfers (both sides tracked), exactly as before.
+ * Leg amounts are interpreted from the owning account's perspective, matching how
+ * they are stored; for an account scope we only count legs of a transaction the
+ * scope actually owns (from/to), which is guaranteed by `touchesScope` upstream.
+ */
+function monthlyFlow(
+  tx: Transaction,
+  splits: TransactionSplit[],
+  scope: ChartScope
+): { spending: number; income: number } {
+  const txSplits = splits.filter((s) => s.transactionId === tx.id && s.deletedAt == null);
+
+  if (txSplits.length > 0) {
+    // For an account scope, only count the split when this account is the split's
+    // owning side (the from/to that the legs are signed against). For all-accounts
+    // scope, every split's category legs are real spending/income.
+    if (scope.kind === "account") {
+      const owns = tx.fromAccountId === scope.accountId || tx.toAccountId === scope.accountId;
+      if (!owns) return { spending: 0, income: 0 };
+    }
+    let spending = 0;
+    let income = 0;
+    for (const s of txSplits) {
+      if (s.transferAccountId) continue; // transfer leg — internal movement
+      if (s.amountCents < 0) spending += Math.abs(s.amountCents);
+      else if (s.amountCents > 0) income += s.amountCents;
+    }
+    return { spending, income };
+  }
+
+  // Unsplit: net scope effect (internal transfers excluded by scopeSignedAmount).
+  const signed = scopeSignedAmount(tx, scope);
+  if (signed < 0) return { spending: Math.abs(signed), income: 0 };
+  if (signed > 0) return { spending: 0, income: signed };
+  return { spending: 0, income: 0 };
 }
 
 /** Default range covering the transactions present (earliest..latest), for UI init. */

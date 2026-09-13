@@ -6,3 +6,5 @@ dist-electron/
 *.log
 license.cjs
 generate*.py
+__pycache__/
+*.pyc
