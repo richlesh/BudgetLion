@@ -132,6 +132,21 @@ function now(): string {
   return new Date().toISOString();
 }
 
+/**
+ * Max bound parameters per statement. SQLite's compile-time limit is 999 on many
+ * builds (up to 32766 on newer ones); 900 is a safe chunk size that keeps IN(...)
+ * batches well under any limit. Used to split large id lists into multiple queries.
+ */
+const SQL_MAX_VARS = 900;
+
+/** Split an array into chunks of at most `size` items. */
+function chunk<T>(items: T[], size: number = SQL_MAX_VARS): T[][] {
+  if (items.length <= size) return items.length ? [items] : [];
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
 // ---- Accounts ----
 
 export function listAccounts(): Account[] {
@@ -308,6 +323,37 @@ export function deleteAccount(accountId: string): void {
 
 // ---- Transactions ----
 
+/**
+ * A cheap "signature" of an account's ledger inputs: the count and the latest
+ * updated_at across the transactions that touch it (either side, or via a
+ * transfer-leg split), plus the account's own updated_at (opening balance/date).
+ * Used to validate a cached built ledger without rebuilding it — if the signature
+ * is unchanged, the cache is still correct. Any add/edit/delete/undo bumps
+ * updated_at (soft-deletes set deleted_at AND updated_at), so this detects changes
+ * including deletions.
+ */
+export function ledgerSignature(accountId: string): string {
+  const db = getDb();
+  const tx = db
+    .prepare(
+      `SELECT COUNT(*) AS n, COALESCE(MAX(updated_at), '') AS maxu
+         FROM transactions
+        WHERE (from_account_id = ? OR to_account_id = ?)`
+    )
+    .get(accountId, accountId) as { n: number; maxu: string };
+  const leg = db
+    .prepare(
+      `SELECT COUNT(*) AS n, COALESCE(MAX(s.updated_at), '') AS maxu
+         FROM transaction_splits s
+        WHERE s.transfer_account_id = ?`
+    )
+    .get(accountId) as { n: number; maxu: string };
+  const acct = db
+    .prepare(`SELECT COALESCE(updated_at, '') AS u FROM accounts WHERE id = ?`)
+    .get(accountId) as { u: string } | undefined;
+  return `${tx.n}:${tx.maxu}|${leg.n}:${leg.maxu}|${acct?.u ?? ""}`;
+}
+
 /** All non-deleted transactions touching a given account (either side). */
 export function transactionsForAccount(accountId: string): Transaction[] {
   const db = getDb();
@@ -334,13 +380,17 @@ export function allTransactions(): Transaction[] {
 export function transactionsByIds(ids: string[]): Transaction[] {
   if (ids.length === 0) return [];
   const db = getDb();
-  const placeholders = ids.map(() => "?").join(",");
-  const rows = db
-    .prepare(
-      `SELECT * FROM transactions WHERE deleted_at IS NULL AND id IN (${placeholders})`
-    )
-    .all(...ids) as TransactionRow[];
-  return rows.map(toTransaction);
+  const result: Transaction[] = [];
+  for (const batch of chunk(ids)) {
+    const placeholders = batch.map(() => "?").join(",");
+    const rows = db
+      .prepare(
+        `SELECT * FROM transactions WHERE deleted_at IS NULL AND id IN (${placeholders})`
+      )
+      .all(...batch) as TransactionRow[];
+    for (const r of rows) result.push(toTransaction(r));
+  }
+  return result;
 }
 
 export function createTransaction(input: NewTransactionInput): Transaction {
@@ -546,25 +596,31 @@ export function bulkDeleteTransactions(ids: string[]): void {
 /** Throw if any of the given transactions is reconciled (protects them from deletion). */
 function assertNotReconciled(db: ReturnType<typeof getDb>, ids: string[]): void {
   if (ids.length === 0) return;
-  const placeholders = ids.map(() => "?").join(",");
-  const row = db
-    .prepare(
-      `SELECT COUNT(*) AS n FROM transactions
-        WHERE deleted_at IS NULL AND reconciled != 0 AND id IN (${placeholders})`
-    )
-    .get(...ids) as { n: number };
-  if (row.n > 0) {
-    throw new Error("Reconciled transactions can't be deleted. Un-reconcile them first.");
+  for (const batch of chunk(ids)) {
+    const placeholders = batch.map(() => "?").join(",");
+    const row = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM transactions
+          WHERE deleted_at IS NULL AND reconciled != 0 AND id IN (${placeholders})`
+      )
+      .get(...batch) as { n: number };
+    if (row.n > 0) {
+      throw new Error("Reconciled transactions can't be deleted. Un-reconcile them first.");
+    }
   }
   // Also block when a split transfer leg (counterparty side) is reconciled.
-  const legRow = db
-    .prepare(
-      `SELECT COUNT(*) AS n FROM transaction_splits
-        WHERE deleted_at IS NULL AND reconciled != 0 AND transaction_id IN (${placeholders})`
-    )
-    .get(...ids) as { n: number };
-  if (legRow.n > 0) {
-    throw new Error("Reconciled transactions can't be deleted. Un-reconcile them first.");
+  // Also block when a split transfer leg (counterparty side) is reconciled.
+  for (const batch of chunk(ids)) {
+    const placeholders = batch.map(() => "?").join(",");
+    const legRow = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM transaction_splits
+          WHERE deleted_at IS NULL AND reconciled != 0 AND transaction_id IN (${placeholders})`
+      )
+      .get(...batch) as { n: number };
+    if (legRow.n > 0) {
+      throw new Error("Reconciled transactions can't be deleted. Un-reconcile them first.");
+    }
   }
 }
 
@@ -793,17 +849,19 @@ export function splitsForTransactions(txIds: string[]): Map<string, TransactionS
   const out = new Map<string, TransactionSplit[]>();
   if (txIds.length === 0) return out;
   const db = getDb();
-  const placeholders = txIds.map(() => "?").join(",");
-  const rows = db
-    .prepare(
-      `SELECT * FROM transaction_splits
-        WHERE deleted_at IS NULL AND transaction_id IN (${placeholders})`
-    )
-    .all(...txIds) as SplitRow[];
-  for (const r of rows) {
-    const list = out.get(r.transaction_id) ?? [];
-    list.push(toSplit(r));
-    out.set(r.transaction_id, list);
+  for (const batch of chunk(txIds)) {
+    const placeholders = batch.map(() => "?").join(",");
+    const rows = db
+      .prepare(
+        `SELECT * FROM transaction_splits
+          WHERE deleted_at IS NULL AND transaction_id IN (${placeholders})`
+      )
+      .all(...batch) as SplitRow[];
+    for (const r of rows) {
+      const list = out.get(r.transaction_id) ?? [];
+      list.push(toSplit(r));
+      out.set(r.transaction_id, list);
+    }
   }
   return out;
 }
@@ -2118,41 +2176,44 @@ export function tradeInfoByTxnId(txnIds: string[]): Map<string, LedgerTradeInfo>
   const out = new Map<string, LedgerTradeInfo>();
   if (txnIds.length === 0) return out;
   const db = getDb();
-  const placeholders = txnIds.map(() => "?").join(",");
-  const rows = db
-    .prepare(
-      `SELECT it.action        AS action,
-              it.quantity_micro AS quantity_micro,
-              it.price_micros   AS price_micros,
-              it.cash_txn_id    AS cash_txn_id,
-              it.income_txn_id  AS income_txn_id,
-              a.symbol          AS symbol,
-              a.name            AS asset_name
-         FROM investment_transactions it
-         JOIN assets a ON a.id = it.asset_id
-        WHERE it.deleted_at IS NULL
-          AND (it.cash_txn_id IN (${placeholders}) OR it.income_txn_id IN (${placeholders}))`
-    )
-    .all(...txnIds, ...txnIds) as Array<{
-    action: string;
-    quantity_micro: number;
-    price_micros: number;
-    cash_txn_id: string | null;
-    income_txn_id: string | null;
-    symbol: string | null;
-    asset_name: string;
-  }>;
-  for (const r of rows) {
-    const info: LedgerTradeInfo = {
-      action: r.action as LedgerTradeInfo["action"],
-      symbol: r.symbol,
-      assetName: r.asset_name,
-      units: r.quantity_micro / MICRO,
-      // price_micros is per-share micro-cents => cents = /MICRO.
-      pricePerUnitCents: Math.round(r.price_micros / MICRO),
-    };
-    for (const id of [r.cash_txn_id, r.income_txn_id]) {
-      if (id && txnIds.includes(id)) out.set(id, info);
+  const idSet = new Set(txnIds);
+  for (const batch of chunk(txnIds, Math.floor(SQL_MAX_VARS / 2))) {
+    const placeholders = batch.map(() => "?").join(",");
+    const rows = db
+      .prepare(
+        `SELECT it.action        AS action,
+                it.quantity_micro AS quantity_micro,
+                it.price_micros   AS price_micros,
+                it.cash_txn_id    AS cash_txn_id,
+                it.income_txn_id  AS income_txn_id,
+                a.symbol          AS symbol,
+                a.name            AS asset_name
+           FROM investment_transactions it
+           JOIN assets a ON a.id = it.asset_id
+          WHERE it.deleted_at IS NULL
+            AND (it.cash_txn_id IN (${placeholders}) OR it.income_txn_id IN (${placeholders}))`
+      )
+      .all(...batch, ...batch) as Array<{
+      action: string;
+      quantity_micro: number;
+      price_micros: number;
+      cash_txn_id: string | null;
+      income_txn_id: string | null;
+      symbol: string | null;
+      asset_name: string;
+    }>;
+    for (const r of rows) {
+      const info: LedgerTradeInfo = {
+        action: r.action as LedgerTradeInfo["action"],
+        symbol: r.symbol,
+        assetName: r.asset_name,
+        units: r.quantity_micro / MICRO,
+        // price_micros is per-share micro-cents => cents = /MICRO.
+        pricePerUnitCents: Math.round(r.price_micros / MICRO),
+      };
+      for (const id of [r.cash_txn_id, r.income_txn_id]) {
+        if (id && idSet.has(id)) out.set(id, info);
+      }
     }
   }
   return out;

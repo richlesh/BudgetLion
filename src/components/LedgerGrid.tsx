@@ -68,6 +68,22 @@ interface Props {
   /** Hide the running-balance column (e.g. Search results, where a per-account
    *  running balance across a filtered set is meaningless). */
   hideRunningBalance?: boolean;
+  /**
+   * Large-account mode. When `rowCount` is provided (and `getPage` is set), the
+   * grid uses AG Grid's INFINITE row model: it holds only visible windows and
+   * fetches them via `getPage(offset, limit)`, instead of loading every row.
+   * `rows` is ignored in this mode. `bumpKey` forces the datasource to refresh
+   * (e.g. after an edit/add/delete) — change it to reload visible pages.
+   */
+  rowCount?: number;
+  getPage?: (
+    offset: number,
+    limit: number,
+    sort?: { colId: string; dir: "asc" | "desc" } | null
+  ) => Promise<LedgerRow[]>;
+  bumpKey?: number;
+  /** In infinite mode, whether the account has any reconciled row (opening-row lock). */
+  accountHasReconciledOverride?: boolean;
 }
 
 // Flat row shape fed to AG Grid.
@@ -121,6 +137,10 @@ export function LedgerGrid({
   memoSuggestions,
   onSelectionChange,
   hideRunningBalance,
+  rowCount,
+  getPage,
+  bumpKey,
+  accountHasReconciledOverride,
 }: Props) {
   // Keep the latest callbacks/data in refs so `columnDefs` can be built once and
   // stay referentially stable. If columnDefs changed identity on every edit (e.g.
@@ -306,61 +326,70 @@ export function LedgerGrid({
 
   // True when the account has ANY reconciled transaction (owned side or a split
   // transfer leg targeting it). Used to lock/color the synthetic opening row.
+  // In infinite mode we can't scan every row, so accept an override from the parent.
+  const infinite = rowCount != null && getPage != null;
   const accountHasReconciled = useMemo(
     () =>
+      accountHasReconciledOverride ??
       rows.some(
         (r) => r.kind === "transaction" && r.transaction && isReconciledForAccount(r.transaction, account.id, r.splits)
       ),
-    [rows, account.id]
+    [rows, account.id, accountHasReconciledOverride]
+  );
+
+  const toGridRow = useCallback(
+    (r: LedgerRow): GridRow => {
+      if (r.kind === "opening") {
+        return {
+          id: OPENING_ROW_ID,
+          date: account.openingBalanceDate ?? account.createdAt.slice(0, 10),
+          payee: "Opening balance",
+          memo: "",
+          categoryName: "",
+          signedAmountCents: r.signedAmountCents * sign,
+          runningBalanceCents: r.runningBalanceCents * sign,
+          isTransfer: false,
+          isOpening: true,
+          isSplit: false,
+          isForeignSplit: false,
+          splitTooltip: "",
+          isTrade: false,
+          reconciled: accountHasReconciled,
+          reconcileLocked: accountHasReconciled,
+        };
+      }
+      const t = r.transaction!;
+      return {
+        id: t.id,
+        date: t.date,
+        payee: payeeFor(r),
+        memo: memoFor(r),
+        categoryName: categoryFor(r),
+        // Amount cell: prefer a display-only override (Search shows the matched
+        // split-leg amount) but keep the running balance from the true effect.
+        signedAmountCents: (r.displayAmountCents ?? r.signedAmountCents) * sign,
+        runningBalanceCents: r.runningBalanceCents * sign,
+        isTransfer: !!(t.fromAccountId && t.toAccountId),
+        isOpening: false,
+        isSplit: !!r.isSplit,
+        // A split the current account doesn't own (appears only via a transfer
+        // leg) is view-only — its amount/fields must be edited from the owner.
+        isForeignSplit:
+          !!r.isSplit && t.fromAccountId !== account.id && t.toAccountId !== account.id,
+        splitTooltip: splitTooltipFor(r),
+        isTrade: !!r.trade,
+        reconciled: isReconciledForAccount(t, account.id, r.splits),
+        reconcileLocked: isReconciledEitherSide(t, r.splits),
+      };
+    },
+    [account.openingBalanceDate, account.createdAt, account.id, sign, accountHasReconciled,
+     payeeFor, memoFor, categoryFor, splitTooltipFor]
   );
 
   const rowData: GridRow[] = useMemo(
-    () =>
-      rows.map((r) => {
-        if (r.kind === "opening") {
-          return {
-            id: OPENING_ROW_ID,
-            date: account.openingBalanceDate ?? account.createdAt.slice(0, 10),
-            payee: "Opening balance",
-            memo: "",
-            categoryName: "",
-          signedAmountCents: r.signedAmountCents * sign,
-          runningBalanceCents: r.runningBalanceCents * sign,
-            isTransfer: false,
-            isOpening: true,
-            isSplit: false,
-            isForeignSplit: false,
-            splitTooltip: "",
-            isTrade: false,
-            reconciled: accountHasReconciled,
-            reconcileLocked: accountHasReconciled,
-          };
-        }
-        const t = r.transaction!;
-        return {
-          id: t.id,
-          date: t.date,
-          payee: payeeFor(r),
-          memo: memoFor(r),
-          categoryName: categoryFor(r),
-          // Amount cell: prefer a display-only override (Search shows the matched
-          // split-leg amount) but keep the running balance from the true effect.
-          signedAmountCents: (r.displayAmountCents ?? r.signedAmountCents) * sign,
-          runningBalanceCents: r.runningBalanceCents * sign,
-          isTransfer: !!(t.fromAccountId && t.toAccountId),
-          isOpening: false,
-          isSplit: !!r.isSplit,
-          // A split the current account doesn't own (appears only via a transfer
-          // leg) is view-only — its amount/fields must be edited from the owner.
-          isForeignSplit:
-            !!r.isSplit && t.fromAccountId !== account.id && t.toAccountId !== account.id,
-          splitTooltip: splitTooltipFor(r),
-          isTrade: !!r.trade,
-          reconciled: isReconciledForAccount(t, account.id, r.splits),
-          reconcileLocked: isReconciledEitherSide(t, r.splits),
-        };
-      }),
-    [rows, categoryFor, splitTooltipFor, sign, payeeFor, memoFor, account.openingBalanceDate, account.createdAt, account.id, accountHasReconciled]
+    () => rows.map((r) => toGridRow(r)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rows, toGridRow]
   );
 
   const money = useCallback(
@@ -466,6 +495,9 @@ export function LedgerGrid({
         field: "runningBalanceCents",
         headerName: "Balance",
         editable: false,
+        // Running balance is only meaningful in chronological order, so sorting by
+        // it makes no sense — disable it in both client-side and infinite modes.
+        sortable: false,
         width: 140,
         type: "rightAligned",
         valueFormatter: money,
@@ -476,14 +508,16 @@ export function LedgerGrid({
         width: 90,
         // Must return a React node (not a raw DOM element): returning an
         // HTMLElement here triggered React error #31 and blanked the window.
-        cellRenderer: (p: { data: GridRow }) =>
-          // No Delete action on the synthetic opening-balance row.
-          p.data.isOpening ? null : (
+        cellRenderer: (p: { data?: GridRow }) =>
+          // No Delete action on the synthetic opening-balance row, and nothing for
+          // rows that haven't loaded yet (infinite row model shows blank cells for
+          // pending rows, where `data` is undefined).
+          !p.data || p.data.isOpening ? null : (
             <button
               className="secondary icon-btn"
               title="Delete transaction"
               aria-label="Delete transaction"
-              onClick={() => onDeleteRef.current(p.data.id)}
+              onClick={() => onDeleteRef.current(p.data!.id)}
             >
               <TrashIcon />
             </button>
@@ -546,8 +580,71 @@ export function LedgerGrid({
       gridApiRef.current = e.api;
       applySavedWidths();
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [applySavedWidths]
   );
+
+  // ---- Infinite row model datasource (large-account mode) ----
+  // Keep a ref to the latest getPage/mapper so the datasource object stays stable
+  // while always calling current closures. rowByIdRef accumulates loaded rows so
+  // the category editor can preselect the row's current value.
+  const getPageRef = useRef(getPage);
+  getPageRef.current = getPage;
+  const toGridRowRef = useRef(toGridRow);
+  toGridRowRef.current = toGridRow;
+  const rowCountRef = useRef(rowCount);
+  rowCountRef.current = rowCount;
+
+  const datasourceRef = useRef<{ getRows: (params: {
+    startRow: number; endRow: number;
+    sortModel?: Array<{ colId: string; sort: "asc" | "desc" }>;
+    successCallback: (rows: GridRow[], lastRow?: number) => void;
+    failCallback: () => void;
+  }) => void } | null>(null);
+  if (datasourceRef.current == null) {
+    datasourceRef.current = {
+      getRows: (params) => {
+        const fetch = getPageRef.current;
+        const total = rowCountRef.current ?? 0;
+        if (!fetch) {
+          params.successCallback([], 0);
+          return;
+        }
+        const limit = params.endRow - params.startRow;
+        const sm = params.sortModel && params.sortModel.length > 0 ? params.sortModel[0] : null;
+        const sort = sm ? { colId: sm.colId, dir: sm.sort } : null;
+        fetch(params.startRow, limit, sort)
+          .then((ledgerRows) => {
+            const gridRows = ledgerRows.map((r) => {
+              const gr = toGridRowRef.current(r);
+              if (r.transaction) rowByIdRef.current.set(r.transaction.id, r);
+              return gr;
+            });
+            const lastRow =
+              params.startRow + gridRows.length < total ? undefined : total;
+            params.successCallback(gridRows, lastRow);
+          })
+          .catch(() => params.failCallback());
+      },
+    };
+  }
+
+  // After a data change (bumpKey) — an edit/add/delete — refresh the infinite
+  // cache so changed rows and shifted running balances reload. The grid is NOT
+  // remounted on an edit (its key is account-scoped), so purge its cache here.
+  // Attachment on mount/account-switch is handled by the datasource prop + key.
+  const firstBumpRef = useRef(bumpKey);
+  useEffect(() => {
+    if (!infinite) return;
+    const api = gridApiRef.current;
+    if (!api) return;
+    // Skip the initial mount (the datasource prop already loaded the first block).
+    if (firstBumpRef.current === bumpKey) return;
+    firstBumpRef.current = bumpKey;
+    api.setRowCount(rowCount ?? 0, false);
+    api.purgeInfiniteCache();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bumpKey]);
 
   // Saved widths may arrive after the grid is ready (settings load asynchronously),
   // so re-apply whenever they change and the grid exists.
@@ -616,8 +713,19 @@ export function LedgerGrid({
   return (
     <div className={"grid-wrap " + (dark ? "ag-theme-alpine-dark" : "ag-theme-alpine")}>
       <AgGridReact<GridRow>
+        key={infinite ? `inf:${account.id}` : `cs:${account.id}`}
         theme="legacy"
-        rowData={rowData}
+        {...(infinite
+          ? {
+              rowModelType: "infinite" as const,
+              datasource: datasourceRef.current!,
+              cacheBlockSize: 100,
+              cacheOverflowSize: 2,
+              maxConcurrentDatasourceRequests: 2,
+              infiniteInitialRowCount: rowCount ?? 1,
+              maxBlocksInCache: 100,
+            }
+          : { rowData })}
         columnDefs={columnDefs}
         onCellValueChanged={onCellValueChanged}
         onCellContextMenu={onCellContextMenu}

@@ -368,6 +368,30 @@ def now_iso() -> str:
         f"{datetime.now(timezone.utc).microsecond // 1000:03d}Z"
 
 
+def finalize_wal(conn: sqlite3.Connection) -> None:
+    """Merge the write-ahead log into the main database file after inserting.
+
+    BudgetLion runs SQLite in WAL mode, so committed rows first land in a
+    `-wal` sidecar file. If BudgetLion has the database OPEN while this program
+    writes, its read lock prevents a full checkpoint, the new rows stay in the
+    -wal file, and the app's already-loaded view won't include them — so it can
+    look like 'nothing was inserted'. We attempt a TRUNCATE checkpoint and warn
+    if it can't complete (which means another process — almost certainly the
+    BudgetLion app — is holding the database open).
+    """
+    try:
+        row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    except sqlite3.Error:
+        return
+    # row = (busy, log_frames, checkpointed_frames); busy != 0 => couldn't finish.
+    if row is not None and row[0] != 0:
+        print("\n  WARNING: The database appears to be OPEN in BudgetLion right now.")
+        print("  Your rows were committed, but they are still in the write-ahead")
+        print("  log and BudgetLion won't see them until you close and reopen the")
+        print("  database (File → Open). Ideally, close BudgetLion before running")
+        print("  this tool.")
+
+
 def list_credit_card_accounts(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
         """
@@ -740,6 +764,7 @@ def credit_card_purchases_flow() -> None:
         category_ids = ensure_categories(conn, CATEGORY_DATA, dry_run=False)
         with conn:  # single atomic transaction
             insert_rows(conn, rows, category_ids)
+        finalize_wal(conn)
         print(f"\nDone. Inserted {len(rows)} charges into '{params.account_name}'.")
         print(f"To remove this batch later, delete transactions where "
               f"import_id = '{batch_tag}'.")
@@ -967,6 +992,7 @@ def credit_card_payments_flow() -> None:
             run.execute("ROLLBACK")
             raise
 
+        finalize_wal(run)
         print(f"\nDone. Inserted {len(interest_rows)} interest charges and "
               f"{len(payment_rows)} payments.")
         print(f"To remove this batch later, delete transactions where "
@@ -1337,6 +1363,7 @@ def paychecks_flow() -> None:
             conn.execute("ROLLBACK")
             raise
 
+        finalize_wal(conn)
         print(f"\nDone. Created {n_checks} paychecks and {n_buys} SWPPX purchases.")
         print(f"To remove this batch later, delete transactions where "
               f"import_id = '{batch_tag}' (and their splits / investment rows).")
@@ -1518,6 +1545,7 @@ def mortgage_payments_flow() -> None:
             conn.execute("ROLLBACK")
             raise
 
+        finalize_wal(conn)
         print(f"\nDone. Created {n_made} loan payments.")
         print(f"  Principal paid: ${total_principal / 100:,.2f}   "
               f"Interest: ${total_interest / 100:,.2f}   "
@@ -1678,6 +1706,7 @@ def installment_plans_flow() -> None:
             conn.execute("ROLLBACK")
             raise
 
+        finalize_wal(conn)
         print(f"\nDone. Created plan '{label}' and {n_made} payments.")
         print(f"  Principal paid: ${total_principal / 100:,.2f}   "
               f"Interest: ${total_interest / 100:,.2f}   "
@@ -1790,6 +1819,7 @@ def transfers_flow() -> None:
             conn.execute("ROLLBACK")
             raise
 
+        finalize_wal(conn)
         print(f"\nDone. Created {len(tdates)} transfers "
               f"'{from_acct['name']}' -> '{to_acct['name']}'.")
         print(f"To remove this batch later, delete transactions where "
@@ -1917,6 +1947,7 @@ def escrow_disbursements_flow() -> None:
             conn.execute("ROLLBACK")
             raise
 
+        finalize_wal(conn)
         print(f"\nDone. Created {n_ins} insurance and {n_tax} property-tax "
               f"payments from '{escrow_acct['name']}'.")
         print(f"To remove this batch later, delete transactions where "

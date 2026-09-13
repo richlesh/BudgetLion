@@ -30,8 +30,11 @@ import type {
   NewLoanPlanInput,
   UpdateLoanPlanInput,
   RecordPlanPurchaseInput,
+  LedgerRow,
 } from "../../src/shared/types.js";
 import { buildLedger, currentBalance } from "../../src/core/balances.js";
+import { displaySign } from "../../src/core/money.js";
+import { categoryDisplayName } from "../../src/core/categories.js";
 import {
   accountWorth,
   holdingsForAssets,
@@ -61,6 +64,145 @@ import {
   dbRestore,
   dbSaveAs,
 } from "../db/manage.js";
+
+/**
+ * Cached full ledger for the most recently paged account, so a windowed
+ * getLedgerPage/getLedgerCount can serve slices without rebuilding on every
+ * page request. The cache is validated against a cheap DB "signature" (row
+ * count + max updated_at), so any add/edit/delete/undo automatically invalidates
+ * it — no manual wiring into mutation handlers required.
+ *
+ * We cache exactly ONE account's ledger (the one being scrolled). Building the
+ * full ledger is O(n log n) and fast even at 250k rows; the win is not
+ * re-serializing ~31 MB over IPC and not loading every row into the grid.
+ */
+let ledgerCache: { accountId: string; signature: string; rows: LedgerRow[] } | null = null;
+
+/** Build (or reuse a cached) full ledger for an account, validated by signature. */
+function buildLedgerCached(accountId: string): LedgerRow[] {
+  const signature = repo.ledgerSignature(accountId);
+  if (ledgerCache && ledgerCache.accountId === accountId && ledgerCache.signature === signature) {
+    return ledgerCache.rows;
+  }
+  const account = repo.listAccounts().find((a) => a.id === accountId);
+  if (!account) throw new Error(`Account not found: ${accountId}`);
+  const owned = repo.transactionsForAccount(accountId);
+  const counterpartyIds = repo.transactionIdsWithTransferSplitTo(accountId);
+  const ownedIds = new Set(owned.map((t) => t.id));
+  const extra = repo.transactionsByIds(counterpartyIds.filter((id) => !ownedIds.has(id)));
+  const txns = [...owned, ...extra];
+  const splitsByTx = repo.splitsForTransactions(txns.map((t) => t.id));
+  const tradeByTxn = repo.tradeInfoByTxnId(txns.map((t) => t.id));
+  const rows = buildLedger(account, txns, splitsByTx, tradeByTxn);
+  ledgerCache = { accountId, signature, rows };
+  return rows;
+}
+
+/**
+ * Reorder a built ledger by a grid column for the infinite row model's
+ * server-side sort. The synthetic opening row is always pinned first. Each row
+ * keeps its own (chronological) running balance — sorting reorders rows, it does
+ * not re-accumulate balances (matching AG Grid's client-side sort behavior).
+ *
+ * Supported keys map to the visible column: date, payee, memo, amount
+ * (signedAmountCents, display-signed), and category (matching the renderer's
+ * Category-cell display: "Split", a transfer's other-account name, or the
+ * category display name). Running-balance sort is not supported (only meaningful
+ * in date order) and returns the natural chronological order unchanged.
+ */
+function sortLedgerRows(
+  base: LedgerRow[],
+  colId: string,
+  dir: "asc" | "desc",
+  accountId: string
+): LedgerRow[] {
+  if (colId === "runningBalanceCents") return base;
+  const factor = dir === "desc" ? -1 : 1;
+  const opening = base.filter((r) => r.kind === "opening");
+  const txRows = base.filter((r) => r.kind !== "opening");
+
+  // For category sorting, replicate the renderer's Category-cell display value:
+  //   split -> "Split"; transfer -> the OTHER account's name; else the category
+  //   display name (or "" when uncategorized). Built lazily and only for category.
+  let categoryDisplay: ((r: LedgerRow) => string) | null = null;
+  if (colId === "categoryName") {
+    const categories = repo.listCategories();
+    const accounts = repo.listAccounts();
+    const acctNameById = new Map(accounts.map((a) => [a.id, a.name]));
+    const catNameById = new Map(categories.map((c) => [c.id, categoryDisplayName(c, categories)]));
+    categoryDisplay = (r) => {
+      if (r.isSplit) return "split"; // sorts together; case-insensitive key below
+      const t = r.transaction;
+      if (!t) return "";
+      const isTransfer = !!(t.fromAccountId && t.toAccountId);
+      if (isTransfer) {
+        const otherId = t.fromAccountId === accountId ? t.toAccountId : t.fromAccountId;
+        return (otherId && acctNameById.get(otherId)) || "";
+      }
+      return t.categoryId ? catNameById.get(t.categoryId) ?? "" : "";
+    };
+  }
+
+  const key = (r: LedgerRow): string | number => {
+    const t = r.transaction;
+    switch (colId) {
+      case "payee":
+        return (t?.payee ?? "").toLowerCase();
+      case "memo":
+        return (t?.memo ?? "").toLowerCase();
+      case "categoryName":
+        return (categoryDisplay ? categoryDisplay(r) : "").toLowerCase();
+      case "signedAmountCents":
+        // Sort by the DISPLAYED amount so it matches what the user sees. Liability
+        // accounts (credit card/loan/installment) flip the sign for display, so
+        // multiply by the account's display sign here.
+        return r.signedAmountCents * displaySignForAccount(accountId);
+      case "date":
+      default:
+        return t?.date ?? "";
+    }
+  };
+
+  const sorted = txRows
+    .map((r, i) => ({ r, i, k: key(r) }))
+    .sort((a, b) => {
+      if (a.k < b.k) return -1 * factor;
+      if (a.k > b.k) return 1 * factor;
+      return a.i - b.i; // stable: preserve chronological order among equals
+    })
+    .map((x) => x.r);
+
+  return [...opening, ...sorted];
+}
+
+/** Display-sign for an account by id (−1 for liabilities), for matching the UI. */
+function displaySignForAccount(accountId: string): 1 | -1 {
+  const acct = repo.listAccounts().find((a) => a.id === accountId);
+  return acct ? displaySign(acct.type) : 1;
+}
+
+/**
+ * Filter a built ledger to transaction rows whose date falls within
+ * [dateFrom, dateTo] (inclusive; either bound may be null/omitted). Each retained
+ * row keeps its true chronological running balance, so a date window behaves like
+ * a statement view with a carried-forward balance. The synthetic opening row is
+ * omitted when a filter is active (its balance is already folded into the running
+ * balance of the visible rows).
+ */
+function filterLedgerByDate(
+  rows: LedgerRow[],
+  dateFrom?: string | null,
+  dateTo?: string | null
+): LedgerRow[] {
+  if (!dateFrom && !dateTo) return rows;
+  return rows.filter((r) => {
+    if (r.kind === "opening") return false;
+    const d = r.transaction?.date ?? "";
+    if (dateFrom && d < dateFrom) return false;
+    if (dateTo && d > dateTo) return false;
+    return true;
+  });
+}
 
 export function registerIpcHandlers(): void {
   ipcMain.handle(IPC.listAccounts, () => repo.listAccounts());
@@ -186,21 +328,43 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC.getCategoryUsage, () => repo.categoryUsageCounts());
 
   ipcMain.handle(IPC.getLedger, (_e, accountId: string) => {
-    const accounts = repo.listAccounts();
-    const account = accounts.find((a) => a.id === accountId);
-    if (!account) throw new Error(`Account not found: ${accountId}`);
-    // Transactions where this account is the owning side, PLUS transactions whose
-    // transfer-leg splits reference this account (e.g. the loan side of a split
-    // loan payment owned by checking).
-    const owned = repo.transactionsForAccount(accountId);
-    const counterpartyIds = repo.transactionIdsWithTransferSplitTo(accountId);
-    const ownedIds = new Set(owned.map((t) => t.id));
-    const extra = repo.transactionsByIds(counterpartyIds.filter((id) => !ownedIds.has(id)));
-    const txns = [...owned, ...extra];
-    const splitsByTx = repo.splitsForTransactions(txns.map((t) => t.id));
-    const tradeByTxn = repo.tradeInfoByTxnId(txns.map((t) => t.id));
-    return buildLedger(account, txns, splitsByTx, tradeByTxn);
+    return buildLedgerCached(accountId);
   });
+
+  // Windowed ledger for very large accounts: a count plus a page slice. The
+  // full ledger is built once and cached (invalidated on any mutation), so pages
+  // are cheap and preserve buildLedger's exact ordering + running balances.
+  ipcMain.handle(
+    IPC.getLedgerCount,
+    (_e, accountId: string, dateFrom?: string | null, dateTo?: string | null): number => {
+      return filterLedgerByDate(buildLedgerCached(accountId), dateFrom, dateTo).length;
+    }
+  );
+
+  ipcMain.handle(
+    IPC.getLedgerPage,
+    (
+      _e,
+      accountId: string,
+      offset: number,
+      limit: number,
+      sort?: { colId: string; dir: "asc" | "desc" } | null,
+      dateFrom?: string | null,
+      dateTo?: string | null
+    ): LedgerRow[] => {
+      const built = filterLedgerByDate(buildLedgerCached(accountId), dateFrom, dateTo);
+      // Default (no sort or Date asc): the natural chronological order buildLedger
+      // already produced — slice directly. Otherwise sort a COPY by the requested
+      // column. Each row keeps its true (chronological) running balance, matching
+      // how a client-side sort behaves (it reorders rows, not the balances).
+      const rows = sort && !(sort.colId === "date" && sort.dir === "asc")
+        ? sortLedgerRows(built, sort.colId, sort.dir, accountId)
+        : built;
+      const start = Math.max(0, Math.floor(offset));
+      const end = Math.min(rows.length, start + Math.max(0, Math.floor(limit)));
+      return rows.slice(start, end);
+    }
+  );
 
   ipcMain.handle(IPC.tradeInfoByTxnIds, (_e, txnIds: string[]) => {
     const map = repo.tradeInfoByTxnId(txnIds);

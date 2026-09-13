@@ -6,7 +6,7 @@
 
 # BudgetLion User Guide
 
-**Version 1.5.0**
+**Version 1.6.0**
 
 BudgetLion is a cross-platform personal-finance ledger with double-entry accounting for Linux, macOS, and Windows. Track accounts, split transactions, forecast recurring income and expenses, and visualize your spending with confidence.
 

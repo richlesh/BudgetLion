@@ -68,6 +68,13 @@ const api: LedgerApi = {
   deleteCategory: (id: string) => ipcRenderer.invoke(IPC.deleteCategory, id),
   getCategoryUsage: () => ipcRenderer.invoke(IPC.getCategoryUsage),
   getLedger: (accountId: string) => ipcRenderer.invoke(IPC.getLedger, accountId),
+  getLedgerCount: (accountId: string, dateFrom?: string | null, dateTo?: string | null) =>
+    ipcRenderer.invoke(IPC.getLedgerCount, accountId, dateFrom ?? null, dateTo ?? null),
+  getLedgerPage: (accountId: string, offset: number, limit: number,
+                  sort?: { colId: string; dir: "asc" | "desc" } | null,
+                  dateFrom?: string | null, dateTo?: string | null) =>
+    ipcRenderer.invoke(IPC.getLedgerPage, accountId, offset, limit, sort ?? null,
+                       dateFrom ?? null, dateTo ?? null),
   tradeInfoByTxnIds: (txnIds: string[]) => ipcRenderer.invoke(IPC.tradeInfoByTxnIds, txnIds),
   createTransaction: (input: NewTransactionInput) =>
     ipcRenderer.invoke(IPC.createTransaction, input),

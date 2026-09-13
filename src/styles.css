@@ -251,6 +251,26 @@ body,
   flex: 1;
 }
 
+.ledger-date-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ledger-date-filter input[type="date"] {
+  font-size: 12px;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  /* Inherit the document color scheme so the native calendar picker + its
+     indicator icon render dark in dark mode. */
+  color-scheme: inherit;
+}
+
 button {
   background: var(--accent);
   color: white;

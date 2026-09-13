@@ -1,6 +1,6 @@
 ![app_icon_256](resources/app_icon_256.png)
 
-# BudgetLion v1.5.0
+# BudgetLion v1.6.0
 
 A cross-platform personal-finance ledger with double-entry accounting, built with Electron, React, and SQLite.
 
@@ -31,6 +31,8 @@ A cross-platform personal-finance ledger with double-entry accounting, built wit
 - **Resizable, persistent columns** — Column widths are saved between sessions
 - **Movable sidebar divider** — Drag to resize the accounts panel; the width persists
 - **Icon toolbar** — Quick-access icon buttons for Charts, Forecast, Category Report, Net Worth Report, Print, Import, Export, New Transaction, New Paycheck, and Reconcile (each with a tooltip)
+- **Date-range filter** — From/To date pickers in the ledger toolbar limit the ledger to transactions within the range (defaults to Jan 1 of the current year through today); each shown row keeps its true running balance, so a range reads like a statement with a carried-forward balance
+- **Scales to very large ledgers** — Accounts with many thousands of transactions load on demand via a windowed (virtualized) grid instead of loading every row at once, keeping the ledger responsive; sorting and the date filter for these accounts are applied efficiently in the background
 - **Reconcile** — A Reconcile button on the ledger toolbar opens the reconciliation dialog for the selected account
 
 ### Split Transactions
@@ -94,6 +96,7 @@ A cross-platform personal-finance ledger with double-entry accounting, built wit
 - **Spending/Income pie** — Breakdown by category with an Expenses ⟷ Income toggle
 - **Drill down & inspect** — Single-click a pie wedge to drill into its subcategories; **double-click** any wedge (including rolled-up ones and "Other") to open a Search of every transaction that accumulated into it, scoped to the chart's account, date range, and expenses/income side
 - **Monthly bar chart** — Spending vs. income by month
+- **Split-aware totals** — Both the pie and monthly bar charts attribute each split's category legs to the right category and month, so a paycheck's tax/deduction legs and a loan/mortgage payment's interest leg are counted; principal, escrow, 401(k), and plain transfers are correctly excluded as internal movements
 - **Scope & date range** — Chart a single account or all accounts over any date range
 - **Export** — Export any chart as PNG or SVG
 
@@ -199,6 +202,23 @@ npm run typecheck   # Type-check the renderer and Electron projects
 
 The renderer lives in `src/` (React + Vite); the Electron main process, preload, database, and IPC live in `electron/`.
 
+### Test data generator
+
+`tools/budgetlion_stress.py` is an interactive, dependency-free Python script for
+populating a database with realistic example/stress-test data (close BudgetLion,
+or reopen the database afterward, since it writes directly to the SQLite file):
+
+```bash
+python3 tools/budgetlion_stress.py
+```
+
+It offers a menu: **Setup** a fresh database with a starter set of accounts,
+categories, assets, and 401(k) holdings; then generate **credit-card purchases**,
+**credit-card payments** (with statement interest), **paychecks** (gross/tax/401(k)
+splits plus a same-date fund purchase priced from Yahoo), **mortgage/loan payments**
+(amortized principal + interest + optional escrow), **escrow disbursements**,
+**BNPL/installment plans**, and **account-to-account transfers**.
+
 ---
 
 ## Project Structure
@@ -229,6 +249,7 @@ BudgetLion/
 │   └── shared/               # shared types + IPC contract
 ├── dialogs/                  # static HTML for splash/about/license/settings
 ├── resources/                # icons + ai-vendors.json
+├── tools/                    # dev utilities (budgetlion_stress.py data generator)
 ├── package.json              # npm/electron-builder config
 ├── LICENSE                   # GPL 3.0 license
 └── .github/workflows/        # CI/CD build workflows

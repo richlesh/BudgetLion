@@ -70,6 +70,23 @@ export function App() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
+  // Large-account (infinite row model) support: when a ledger exceeds this many
+  // rows, the grid pages rows in via getLedgerPage instead of loading all of them.
+  const LEDGER_INFINITE_THRESHOLD = 5000;
+  const [ledgerCount, setLedgerCount] = useState<number | null>(null);
+  const [ledgerInfinite, setLedgerInfinite] = useState(false);
+  const [ledgerBumpKey, setLedgerBumpKey] = useState(0);
+  const [ledgerHasReconciled, setLedgerHasReconciled] = useState(false);
+  // Ledger date-range filter (toolbar). Defaults: Jan 1 of the current year → today.
+  const [ledgerFrom, setLedgerFrom] = useState<string>(
+    () => `${new Date().getFullYear()}-01-01`
+  );
+  const [ledgerTo, setLedgerTo] = useState<string>(() => {
+    const d = new Date();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${d.getFullYear()}-${mm}-${dd}`;
+  });
   const [showAccountDialog, setShowAccountDialog] = useState(false);
   const [showTxDialog, setShowTxDialog] = useState(false);
   const [showPaycheckDialog, setShowPaycheckDialog] = useState(false);
@@ -249,9 +266,73 @@ export function App() {
     setCategories(await window.ledger.listCategories());
   }, []);
 
+  const ledgerFromRef = useRef(ledgerFrom);
+  ledgerFromRef.current = ledgerFrom;
+  const ledgerToRef = useRef(ledgerTo);
+  ledgerToRef.current = ledgerTo;
+
   const refreshLedger = useCallback(async (accountId: string) => {
-    setLedger(await window.ledger.getLedger(accountId));
+    // Decide between the client-side (small) and infinite (large) paths using a
+    // cheap count. If the count/paging API is unavailable or errors for any
+    // reason, fall back to loading the full ledger so the grid still renders.
+    const from = ledgerFromRef.current || null;
+    const to = ledgerToRef.current || null;
+    let count: number | null = null;
+    try {
+      if (typeof window.ledger.getLedgerCount === "function") {
+        count = await window.ledger.getLedgerCount(accountId, from, to);
+      }
+    } catch {
+      count = null;
+    }
+    if (count != null && count > LEDGER_INFINITE_THRESHOLD) {
+      // Large account: page rows in on demand. Don't load all rows into state.
+      setLedgerCount(count);
+      setLedgerInfinite(true);
+      setLedger([]);
+      let firstPage: LedgerRow[] = [];
+      try {
+        firstPage = await window.ledger.getLedgerPage(accountId, 0, 500, null, from, to);
+      } catch {
+        firstPage = [];
+      }
+      setLedgerHasReconciled(
+        firstPage.some(
+          (r) => r.kind === "transaction" && r.transaction != null && (r.transaction.reconciled ?? 0) !== 0
+        )
+      );
+      setLedgerBumpKey((k) => k + 1);
+    } else {
+      // Small account (or count unavailable): classic full load (filtered in the
+      // renderer by the toolbar date range).
+      setLedgerInfinite(false);
+      setLedgerCount(count);
+      setLedger(await window.ledger.getLedger(accountId));
+    }
   }, []);
+
+  // Re-load the ledger when the toolbar date range changes (for the selected
+  // account). Client-side rows are additionally filtered in the render.
+  useEffect(() => {
+    if (selectedId) void refreshLedger(selectedId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ledgerFrom, ledgerTo]);
+
+  // Client-side (small account) ledger filtered by the toolbar date range. The
+  // opening row is dropped when a filter is active (matching the server path);
+  // retained rows keep their true running balance.
+  const filteredLedger = useMemo(() => {
+    const from = ledgerFrom || null;
+    const to = ledgerTo || null;
+    if (!from && !to) return ledger;
+    return ledger.filter((r) => {
+      if (r.kind === "opening") return false;
+      const d = r.transaction?.date ?? "";
+      if (from && d < from) return false;
+      if (to && d > to) return false;
+      return true;
+    });
+  }, [ledger, ledgerFrom, ledgerTo]);
 
   // Scan the selected account for duplicate transactions and open the review
   // dialog on the first confirmed pair. `useAI` chooses AI-backed payee matching
@@ -1572,6 +1653,22 @@ export function App() {
           <>
             <div className="toolbar">
               <h2>{selected.name}</h2>
+              <label className="ledger-date-filter" title="Show transactions on or after this date">
+                <span>From</span>
+                <input
+                  type="date"
+                  value={ledgerFrom}
+                  onChange={(e) => setLedgerFrom(e.target.value)}
+                />
+              </label>
+              <label className="ledger-date-filter" title="Show transactions on or before this date">
+                <span>To</span>
+                <input
+                  type="date"
+                  value={ledgerTo}
+                  onChange={(e) => setLedgerTo(e.target.value)}
+                />
+              </label>
               <button
                 className={"secondary icon-btn" + (showCharts ? " active-toggle" : "")}
                 onClick={() => setShowCharts((v) => !v)}
@@ -1865,12 +1962,16 @@ export function App() {
                 onColumnWidthsChange={handleForecastColumnWidthsChange}
               />
             )}
-            {selected.type === "asset" ? null : ledger.length === 0 ? (
-              <div className="empty">No transactions yet. Add one to get started.</div>
+            {selected.type === "asset" ? null : (!ledgerInfinite && filteredLedger.length === 0) ? (
+              <div className="empty">
+                {ledger.length === 0
+                  ? "No transactions yet. Add one to get started."
+                  : "No transactions in the selected date range."}
+              </div>
             ) : (
               <LedgerGrid
                 account={selected}
-                rows={ledger}
+                rows={filteredLedger}
                 categories={categories}
                 accounts={accounts}
                 dark={dark}
@@ -1884,6 +1985,18 @@ export function App() {
                 payeeSuggestions={payeeSuggestions}
                 memoSuggestions={memoSuggestions}
                 onSelectionChange={setSelectedTxIds}
+                rowCount={ledgerInfinite ? ledgerCount ?? undefined : undefined}
+                getPage={
+                  ledgerInfinite
+                    ? (offset, limit, sort) =>
+                        window.ledger.getLedgerPage(
+                          selected.id, offset, limit, sort,
+                          ledgerFrom || null, ledgerTo || null
+                        )
+                    : undefined
+                }
+                bumpKey={ledgerBumpKey}
+                accountHasReconciledOverride={ledgerInfinite ? ledgerHasReconciled : undefined}
               />
             )}
           </>

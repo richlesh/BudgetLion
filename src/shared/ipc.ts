@@ -256,6 +256,23 @@ export interface LedgerApi {
 
   // Transactions / ledger
   getLedger(accountId: string): Promise<LedgerRow[]>;
+  /** Number of ledger rows for an account (includes the synthetic opening row).
+   *  Optional date bounds filter to transactions within [dateFrom, dateTo]. */
+  getLedgerCount(accountId: string, dateFrom?: string | null, dateTo?: string | null): Promise<number>;
+  /**
+   * A windowed slice of an account's ledger, preserving the same ordering and
+   * running balances as getLedger. Used by the grid's infinite row model for very
+   * large accounts so the whole ledger need not be loaded at once. Optional
+   * `sort` and date bounds are applied server-side before slicing.
+   */
+  getLedgerPage(
+    accountId: string,
+    offset: number,
+    limit: number,
+    sort?: { colId: string; dir: "asc" | "desc" } | null,
+    dateFrom?: string | null,
+    dateTo?: string | null
+  ): Promise<LedgerRow[]>;
   /**
    * Investment trade info (ticker/shares/price) for the given transaction ids,
    * keyed by transaction id. Used to render the derived trade memo in views that
@@ -432,6 +449,8 @@ export const IPC = {
   deleteCategory: "categories:delete",
   getCategoryUsage: "categories:usage",
   getLedger: "ledger:get",
+  getLedgerCount: "ledger:count",
+  getLedgerPage: "ledger:page",
   tradeInfoByTxnIds: "ledger:trade-info",
   createTransaction: "tx:create",
   updateTransaction: "tx:update",
