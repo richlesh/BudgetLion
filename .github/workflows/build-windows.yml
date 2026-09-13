@@ -60,7 +60,7 @@ jobs:
           @"
           const LICENSE_SALT = "${{ secrets.LICENSE_SALT }}";
           module.exports = { LICENSE_SALT };
-          "@ | Set-Content license.js
+          "@ | Set-Content license.cjs
         shell: powershell
 
       - name: Build renderer + main

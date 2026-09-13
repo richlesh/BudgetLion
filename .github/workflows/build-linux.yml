@@ -53,8 +53,8 @@ jobs:
 
       - name: Inject license salt
         run: |
-          echo "const LICENSE_SALT = \"${{ secrets.LICENSE_SALT }}\";" > license.js
-          echo "module.exports = { LICENSE_SALT };" >> license.js
+          echo "const LICENSE_SALT = \"${{ secrets.LICENSE_SALT }}\";" > license.cjs
+          echo "module.exports = { LICENSE_SALT };" >> license.cjs
 
       - name: Build renderer + main
         run: npm run build
