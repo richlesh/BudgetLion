@@ -13,6 +13,38 @@
 
 import type { PlanBalance } from "../shared/types";
 
+/**
+ * Memo prefix that marks a category leg as a late fee (vs. interest) in a plan's
+ * history. The Adjust-plan writer prefixes fee-leg memos with this; planLedger()
+ * classifies category legs by whether their memo starts with it. Kept here so the
+ * writer (renderer) and the reader (repository) agree on the marker.
+ */
+export const FEE_MEMO_PREFIX = "Late fee";
+
+/**
+ * Signed principal paydown contributed by a transfer leg that targets the
+ * installment account and carries a plan_id. Positive reduces the plan's
+ * remaining balance (a payment/credit); negative raises it (a charge/adjustment).
+ *
+ * The stored `amountCents` is signed from the OWNING account's perspective, so:
+ *   - when the installment account OWNS the transaction (it is the from- or
+ *     to-side, including a self-referential transfer leg), amountCents already IS
+ *     its signed delta → paydown = amountCents;
+ *   - otherwise the transaction is owned by a funding account (the installment
+ *     account is only the transfer target) and the leg is that funder's outflow
+ *     (negative) into the installment account → paydown = -amountCents.
+ * Mirrors the SQL in repository.planBalances()/planLedger().
+ */
+export function principalPaydownCents(
+  amountCents: number,
+  installmentAccountId: string,
+  fromAccountId: string | null,
+  toAccountId: string | null
+): number {
+  const owns = fromAccountId === installmentAccountId || toAccountId === installmentAccountId;
+  return owns ? amountCents : -amountCents;
+}
+
 /** How a payment is distributed to one plan. */
 export interface PlanAllocation {
   planId: string;

@@ -30,6 +30,7 @@ import type {
   NewLoanPlanInput,
   UpdateLoanPlanInput,
   RecordPlanPurchaseInput,
+  AdjustPlanInput,
   LedgerRow,
 } from "../../src/shared/types.js";
 import { buildLedger, currentBalance } from "../../src/core/balances.js";
@@ -277,6 +278,12 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC.listInvestmentTxns, (_e, accountId: string) =>
     repo.investmentTxnsForAccount(accountId)
   );
+  ipcMain.handle(IPC.investmentTxnsForAsset, (_e, assetId: string) =>
+    repo.investmentTxnsForAsset(assetId)
+  );
+  ipcMain.handle(IPC.updateTradeShares, (_e, id: string, units: number) =>
+    repo.updateTradeShares(id, units)
+  );
   // Security holdings for an account: shares and market value per security.
   ipcMain.handle(IPC.getSecurityHoldings, (_e, accountId: string): SecurityHolding[] => {
     const assets = repo.listAssets(accountId).filter((a) => a.assetClass === "security");
@@ -386,6 +393,10 @@ export function registerIpcHandlers(): void {
     repo.deleteTransaction(id);
   });
 
+  ipcMain.handle(IPC.cancelPendingTransaction, (_e, id: string) => {
+    repo.cancelPendingTransaction(id);
+  });
+
   ipcMain.handle(IPC.buildLoanPaymentSplit, (_e, txId: string) =>
     repo.buildLoanPaymentSplit(txId)
   );
@@ -448,6 +459,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC.recordPlanPurchase, (_e, input: RecordPlanPurchaseInput) =>
     repo.recordPlanPurchase(input)
   );
+  ipcMain.handle(IPC.adjustPlan, (_e, input: AdjustPlanInput) => repo.adjustPlan(input));
 
   ipcMain.handle(
     IPC.getProjection,

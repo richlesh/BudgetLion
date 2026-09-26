@@ -169,8 +169,13 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
   const isCashDiv = action === "div";
   const needsShares = action !== "div"; // buy/sell/reinvest/grant/add move shares
   const isAdd = action === "add"; // opening / gift / transfer-in: no cash or income
-  // Grant, cash dividend, and reinvested dividend are income and can be categorized.
-  const isIncome = action === "grant" || action === "div" || action === "reinvest";
+  // "Shares only" actions add shares to the holding with no cash movement and no
+  // price/value entry: 'add' (opening/gift/transfer-in) and 'reinvest' (a dividend
+  // reinvested into more shares — the user enters just the shares acquired).
+  const sharesOnly = action === "add" || action === "reinvest";
+  // Grant and cash dividend are income and can be categorized. (Reinvest is
+  // shares-only and carries no separate income amount.)
+  const isIncome = action === "grant" || action === "div";
 
   // The ticker to price: the new-security field when creating, else the selected
   // existing security's symbol. Trimmed/uppercased; empty when none.
@@ -288,9 +293,9 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
         setError("Enter a positive number of shares.");
         return;
       }
-      // For 'add' (opening/gift/transfer-in) the cost basis is OPTIONAL; other
-      // actions require a valid price/amount.
-      if (!isAdd && (!(effectivePriceCents >= 0) || effectiveGrossCents <= 0)) {
+      // For shares-only actions ('add' opening/gift/transfer-in, and 'reinvest')
+      // the cost basis is OPTIONAL; other actions require a valid price/amount.
+      if (!sharesOnly && (!(effectivePriceCents >= 0) || effectiveGrossCents <= 0)) {
         setError("Enter a valid price per share or amount.");
         return;
       }
@@ -407,6 +412,8 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
                 />
               </div>
             </div>
+            {!sharesOnly && (
+            <>
             <div className="field">
               <label>
                 {action === "grant" ? "Grant price per share" : "Price per Share"}
@@ -476,6 +483,8 @@ export function NewInvestmentDialog({ account, categories, onCancel, onSubmit }:
                 />
               </div>
             </div>
+            </>
+            )}
           </>
         )}
 

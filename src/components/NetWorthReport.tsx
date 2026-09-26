@@ -8,7 +8,7 @@ interface Props {
 
 /** Liability account types (their worth reduces net worth). */
 function isLiabilityType(t: Account["type"]): boolean {
-  return t === "credit_card" || t === "loan";
+  return t === "credit_card" || t === "loan" || t === "installment";
 }
 
 interface Line {
@@ -19,7 +19,7 @@ interface Line {
 
 /**
  * One-page Net Worth summary: assets (checking/savings/investment/asset) less
- * liabilities (credit card/loan), with subtotals and total net worth. Reads
+ * liabilities (credit card/loan/installment), with subtotals and total net worth. Reads
  * per-account worth (cash + holdings) from getAllWorth. Printable.
  */
 export function NetWorthReport({ onClose }: Props) {

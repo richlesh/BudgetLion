@@ -38,6 +38,7 @@ import type {
   NewLoanPlanInput,
   RecordPlanPurchaseInput,
   UpdateLoanPlanInput,
+  AdjustPlanInput,
   PlanBalance,
   PlanLedgerEntry,
 } from "./types";
@@ -230,6 +231,10 @@ export interface LedgerApi {
   deleteInvestmentTxn(id: string): Promise<void>;
   /** Investment transactions for an account. */
   listInvestmentTxns(accountId: string): Promise<InvestmentTransaction[]>;
+  /** Investment transactions (lots) for a single security, chronological. */
+  investmentTxnsForAsset(assetId: string): Promise<InvestmentTransaction[]>;
+  /** Change a share-moving lot's share count, keeping cash/income legs in sync. */
+  updateTradeShares(id: string, units: number): Promise<void>;
   /** Per-security holdings for an account: shares and market value. */
   getSecurityHoldings(accountId: string): Promise<SecurityHolding[]>;
   /** Import normalized investment-history rows as trades. Returns trade count. */
@@ -282,6 +287,11 @@ export interface LedgerApi {
   createTransaction(input: NewTransactionInput): Promise<Transaction>;
   updateTransaction(input: UpdateTransactionInput): Promise<void>;
   deleteTransaction(id: string): Promise<void>;
+  /**
+   * Back out a just-created, immediately-cancelled transaction with NO undo
+   * footprint (discards its create entry and deletes it without journaling).
+   */
+  cancelPendingTransaction(id: string): Promise<void>;
   /** Auto-compute a principal/interest split for a loan-payment transfer. */
   buildLoanPaymentSplit(txId: string): Promise<LoanPaymentSplitResult>;
   /** Delete many transactions as a single undo step. */
@@ -335,6 +345,11 @@ export interface LedgerApi {
   planHasPurchase(planId: string): Promise<boolean>;
   /** Record an originating purchase for an existing plan (retroactive). Returns the txn id. */
   recordPlanPurchase(input: RecordPlanPurchaseInput): Promise<string>;
+  /**
+   * Apply a manual adjustment to a single plan: a signed principal change and/or
+   * a late fee. Returns the ids of the transactions created (0, 1, or 2).
+   */
+  adjustPlan(input: AdjustPlanInput): Promise<string[]>;
 
   // Accounts/Categories JSON data exchange
   openJsonFile(): Promise<OpenedFile | null>;
@@ -437,6 +452,8 @@ export const IPC = {
   recordTrade: "invtx:record",
   deleteInvestmentTxn: "invtx:delete",
   listInvestmentTxns: "invtx:list",
+  investmentTxnsForAsset: "invtx:list-for-asset",
+  updateTradeShares: "invtx:update-shares",
   getSecurityHoldings: "invtx:holdings",
   commitInvestmentImport: "invtx:import",
   refreshPrices: "prices:refresh",
@@ -455,6 +472,7 @@ export const IPC = {
   createTransaction: "tx:create",
   updateTransaction: "tx:update",
   deleteTransaction: "tx:delete",
+  cancelPendingTransaction: "tx:cancel-pending",
   buildLoanPaymentSplit: "tx:loan-split",
   bulkDeleteTransactions: "tx:bulk-delete",
   reconcileAccount: "tx:reconcile",
@@ -483,6 +501,7 @@ export const IPC = {
   planLastInterestCategory: "plans:lastInterestCategory",
   planHasPurchase: "plans:hasPurchase",
   recordPlanPurchase: "plans:recordPurchase",
+  adjustPlan: "plans:adjust",
   saveTextFile: "export:text",
   saveDataUrl: "export:dataurl",
   exportPdf: "export:pdf",

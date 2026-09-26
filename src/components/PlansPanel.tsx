@@ -6,6 +6,7 @@ import { categoryOptions, categoriesForDirection } from "../core/categories";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { TrashIcon } from "./TrashIcon";
 import { PlanLedgerDialog } from "./PlanLedgerDialog";
+import { AdjustPlanDialog } from "./AdjustPlanDialog";
 
 interface Props {
   account: Account; // an installment / BNPL account
@@ -55,6 +56,8 @@ export function PlansPanel({ account, categories, reloadKey, onApplyPayment, onC
   const [deleteFor, setDeleteFor] = useState<LoanPlan | null>(null);
   // Plan whose transaction-history dialog is open (double-click the Remaining cell).
   const [historyFor, setHistoryFor] = useState<LoanPlan | null>(null);
+  // Plan whose "Adjust plan…" dialog is open, with its current remaining balance.
+  const [adjustFor, setAdjustFor] = useState<{ plan: LoanPlan; remainingCents: number } | null>(null);
   // Inline edit: which plan's field is being edited (label / rate / payment) + draft.
   const [editing, setEditing] = useState<{ planId: string; field: "label" | "rate" | "payment" | "orig" | "exp" | "principal" } | null>(null);
   const [draft, setDraft] = useState("");
@@ -428,6 +431,14 @@ export function PlansPanel({ account, categories, reloadKey, onApplyPayment, onC
                       </button>
                     )}
                     <button
+                      className="secondary"
+                      title="Adjust this plan's principal (credit/charge) or add a late fee"
+                      style={{ marginRight: 6, fontSize: 12 }}
+                      onClick={() => setAdjustFor({ plan: p, remainingCents: b.remainingCents })}
+                    >
+                      Adjust…
+                    </button>
+                    <button
                       className="secondary icon-btn"
                       title="Close (delete) this plan"
                       aria-label={`Delete ${p.label}`}
@@ -544,6 +555,25 @@ export function PlansPanel({ account, categories, reloadKey, onApplyPayment, onC
       )}
       {historyFor && (
         <PlanLedgerDialog plan={historyFor} currency={currency} onClose={() => setHistoryFor(null)} />
+      )}
+      {adjustFor && (
+        <AdjustPlanDialog
+          plan={adjustFor.plan}
+          remainingCents={adjustFor.remainingCents}
+          currency={currency}
+          categories={categories}
+          onCancel={() => setAdjustFor(null)}
+          onSubmit={async (input) => {
+            try {
+              await window.ledger.adjustPlan(input);
+              setAdjustFor(null);
+              await load();
+              onChanged?.();
+            } catch (e) {
+              setError(e instanceof Error ? e.message : "Could not apply the adjustment.");
+            }
+          }}
+        />
       )}
       {recordFor && (
         <div className="dialog-backdrop dialog-backdrop-top" onClick={() => setRecordFor(null)}>

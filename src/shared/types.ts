@@ -285,6 +285,31 @@ export interface RecordPlanPurchaseInput {
   splits?: PurchaseCategoryLeg[];
 }
 
+/**
+ * A manual adjustment to a single installment/BNPL plan. Posted as ONE
+ * transaction owned by the installment account (no external cash source), with:
+ *   - an optional SIGNED principal adjustment (a transfer leg tagged with the
+ *     plan): positive reduces the plan's remaining balance (a credit), negative
+ *     raises it (a charge). Offset to `principalCategoryId`.
+ *   - an optional late fee (a category expense leg tagged with the plan) that is
+ *     recorded/attributed to the plan but does NOT change its remaining balance.
+ * At least one of a non-zero principal adjustment or a positive fee is required.
+ */
+export interface AdjustPlanInput {
+  planId: string;
+  date: string;
+  /** Signed principal change in cents: >0 reduces the balance, <0 raises it. */
+  principalAdjustmentCents?: number;
+  /** Category for the principal adjustment's offset leg (e.g. "Adjustment"). */
+  principalCategoryId?: string | null;
+  /** Late fee amount in cents (>= 0); does not affect the remaining balance. */
+  feeCents?: number;
+  /** Expense category for the late fee leg (e.g. "Late Fee"). */
+  feeCategoryId?: string | null;
+  /** Optional memo applied to the adjustment transaction. */
+  memo?: string | null;
+}
+
 /** A plan plus its COMPUTED remaining balance and payment progress. */
 export interface PlanBalance {
   plan: LoanPlan;
@@ -300,10 +325,16 @@ export interface PlanLedgerEntry {
   date: string;
   payee: string | null;
   memo: string | null;
-  /** Principal applied to the plan by this entry (positive cents). */
+  /**
+   * Signed principal paydown applied to the plan by this entry (cents).
+   * Positive reduces the remaining balance (a payment/credit); negative raises
+   * it (a principal charge/adjustment).
+   */
   principalCents: number;
   /** Interest paid alongside this principal on the same transaction (positive cents). */
   interestCents: number;
+  /** Late fees / other non-interest costs attributed to the plan (positive cents). */
+  feeCents: number;
   /** Remaining plan balance after this entry (cents). */
   runningBalanceCents: number;
 }

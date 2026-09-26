@@ -5,6 +5,7 @@ import { formatCents, parsePriceCents } from "../core/money";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { HoldingHistoryPanel } from "./HoldingHistoryPanel";
 import { ValuationsEditor } from "./ValuationsEditor";
+import { TradesEditor } from "./TradesEditor";
 
 interface Props {
   account: Account; // an investment account
@@ -34,6 +35,7 @@ export function HoldingsPanel({ account, reloadKey, dark = false }: Props) {
   const [menu, setMenu] = useState<{ x: number; y: number; items: ContextMenuItem[] } | null>(null);
   const [historyFor, setHistoryFor] = useState<SecurityHolding | null>(null);
   const [valuationsFor, setValuationsFor] = useState<SecurityHolding | null>(null);
+  const [tradesFor, setTradesFor] = useState<SecurityHolding | null>(null);
   // Inline edit state: which holding's field (symbol/name) is being edited, and
   // the current draft text.
   const [editing, setEditing] = useState<{ assetId: string; field: "symbol" | "name" } | null>(null);
@@ -222,6 +224,7 @@ export function HoldingsPanel({ account, reloadKey, dark = false }: Props) {
                       y: e.clientY,
                       items: [
                         { label: "History…", onClick: () => setHistoryFor(h) },
+                        { label: "Edit Transactions…", onClick: () => setTradesFor(h) },
                         { label: "Edit Valuations…", onClick: () => setValuationsFor(h) },
                       ],
                     });
@@ -388,6 +391,13 @@ export function HoldingsPanel({ account, reloadKey, dark = false }: Props) {
           holding={valuationsFor}
           currency={currency}
           onClose={() => setValuationsFor(null)}
+          onChanged={() => void load()}
+        />
+      )}
+      {tradesFor && (
+        <TradesEditor
+          holding={tradesFor}
+          onClose={() => setTradesFor(null)}
           onChanged={() => void load()}
         />
       )}

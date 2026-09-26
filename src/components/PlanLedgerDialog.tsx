@@ -29,11 +29,14 @@ export function PlanLedgerDialog({ plan, currency, onClose }: Props) {
 
   const totalPrincipal = rows.reduce((s, r) => s + r.principalCents, 0);
   const totalInterest = rows.reduce((s, r) => s + r.interestCents, 0);
+  const totalFee = rows.reduce((s, r) => s + r.feeCents, 0);
   const remaining = rows.length > 0 ? rows[rows.length - 1].runningBalanceCents : plan.principalCents;
 
   // Projected future payments (amortization tail): continue the schedule from the
   // current remaining balance and the count of payments already posted, applying
   // the plan's installment monthly until it pays off (or the term is reached).
+  // A "payment" is a transaction that reduced the balance (positive principal).
+  // Charges (negative principal) and fee-only rows don't count toward the count.
   const paymentsMade = rows.filter((r) => r.principalCents > 0).length;
   const future = useMemo(
     () =>
@@ -76,6 +79,7 @@ export function PlanLedgerDialog({ plan, currency, onClose }: Props) {
                 <th>Payee / memo</th>
                 <th className="num">Principal</th>
                 <th className="num">Interest</th>
+                <th className="num">Fees</th>
                 <th className="num">Balance</th>
               </tr>
             </thead>
@@ -86,17 +90,27 @@ export function PlanLedgerDialog({ plan, currency, onClose }: Props) {
                 <td className="account-type">Original balance</td>
                 <td className="num">—</td>
                 <td className="num">—</td>
+                <td className="num">—</td>
                 <td className="num">{formatCents(plan.principalCents, currency)}</td>
               </tr>
               {rows.length === 0 ? (
-                <tr><td colSpan={5} className="empty">No payments recorded for this plan yet.</td></tr>
+                <tr><td colSpan={6} className="empty">No payments recorded for this plan yet.</td></tr>
               ) : (
                 rows.map((r, i) => (
                   <tr key={`${r.transactionId}-${i}`}>
                     <td>{r.date}</td>
                     <td>{r.payee ?? ""}{r.memo ? ` — ${r.memo}` : ""}</td>
-                    <td className="num">{r.principalCents > 0 ? formatCents(r.principalCents, currency) : "—"}</td>
+                    {/* Signed principal: a credit reduces the balance (shown as-is),
+                        a charge/adjustment raises it (shown parenthesized). */}
+                    <td className="num">
+                      {r.principalCents === 0
+                        ? "—"
+                        : r.principalCents > 0
+                          ? formatCents(r.principalCents, currency)
+                          : `(${formatCents(-r.principalCents, currency)})`}
+                    </td>
                     <td className="num">{r.interestCents > 0 ? formatCents(r.interestCents, currency) : "—"}</td>
+                    <td className="num">{r.feeCents > 0 ? formatCents(r.feeCents, currency) : "—"}</td>
                     <td className="num">{formatCents(r.runningBalanceCents, currency)}</td>
                   </tr>
                 ))
@@ -105,7 +119,7 @@ export function PlanLedgerDialog({ plan, currency, onClose }: Props) {
               {future.length > 0 && (
                 <>
                   <tr>
-                    <td colSpan={5} className="account-type" style={{ paddingTop: 10, fontWeight: 700 }}>
+                    <td colSpan={6} className="account-type" style={{ paddingTop: 10, fontWeight: 700 }}>
                       Projected payoff schedule
                     </td>
                   </tr>
@@ -115,6 +129,7 @@ export function PlanLedgerDialog({ plan, currency, onClose }: Props) {
                       <td className="account-type">Payment {f.paymentNumber}{plan.numPayments > 0 ? ` of ${plan.numPayments}` : ""} (projected)</td>
                       <td className="num">{formatCents(f.principalCents, currency)}</td>
                       <td className="num">{f.interestCents > 0 ? formatCents(f.interestCents, currency) : "—"}</td>
+                      <td className="num">—</td>
                       <td className="num">{formatCents(f.remainingCents, currency)}</td>
                     </tr>
                   ))}
@@ -127,6 +142,7 @@ export function PlanLedgerDialog({ plan, currency, onClose }: Props) {
                 <td></td>
                 <td className="num">{formatCents(totalPrincipal, currency)}</td>
                 <td className="num">{formatCents(totalInterest, currency)}</td>
+                <td className="num">{formatCents(totalFee, currency)}</td>
                 <td className="num">{formatCents(remaining, currency)}</td>
               </tr>
             </tfoot>

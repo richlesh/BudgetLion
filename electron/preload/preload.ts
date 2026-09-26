@@ -23,6 +23,7 @@ import type {
   NewLoanPlanInput,
   UpdateLoanPlanInput,
   RecordPlanPurchaseInput,
+  AdjustPlanInput,
 } from "../../src/shared/types.js";
 
 const api: LedgerApi = {
@@ -51,6 +52,10 @@ const api: LedgerApi = {
   deleteInvestmentTxn: (id: string) => ipcRenderer.invoke(IPC.deleteInvestmentTxn, id),
   listInvestmentTxns: (accountId: string) =>
     ipcRenderer.invoke(IPC.listInvestmentTxns, accountId),
+  investmentTxnsForAsset: (assetId: string) =>
+    ipcRenderer.invoke(IPC.investmentTxnsForAsset, assetId),
+  updateTradeShares: (id: string, units: number) =>
+    ipcRenderer.invoke(IPC.updateTradeShares, id, units),
   getSecurityHoldings: (accountId: string) =>
     ipcRenderer.invoke(IPC.getSecurityHoldings, accountId),
   commitInvestmentImport: (accountId: string, rows: InvestmentImportRow[]) =>
@@ -81,6 +86,8 @@ const api: LedgerApi = {
   updateTransaction: (input: UpdateTransactionInput) =>
     ipcRenderer.invoke(IPC.updateTransaction, input),
   deleteTransaction: (id: string) => ipcRenderer.invoke(IPC.deleteTransaction, id),
+  cancelPendingTransaction: (id: string) =>
+    ipcRenderer.invoke(IPC.cancelPendingTransaction, id),
   buildLoanPaymentSplit: (txId: string) =>
     ipcRenderer.invoke(IPC.buildLoanPaymentSplit, txId),
   bulkDeleteTransactions: (ids: string[]) =>
@@ -132,6 +139,7 @@ const api: LedgerApi = {
   planHasPurchase: (planId: string) => ipcRenderer.invoke(IPC.planHasPurchase, planId),
   recordPlanPurchase: (input: RecordPlanPurchaseInput) =>
     ipcRenderer.invoke(IPC.recordPlanPurchase, input),
+  adjustPlan: (input: AdjustPlanInput) => ipcRenderer.invoke(IPC.adjustPlan, input),
 
   // Accounts/Categories JSON data exchange
   openJsonFile: (): Promise<OpenedFile | null> => ipcRenderer.invoke(IPC.openJsonFile),

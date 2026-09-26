@@ -43,10 +43,39 @@ const redoStack: UndoEntry[] = [];
 // wrapper already".
 let captureDepth = 0;
 
+// When > 0, withUndo runs its mutation but records NOTHING. Used to back out a
+// pending action (e.g. a freshly-created transaction the user then cancels) so it
+// leaves no undo footprint at all.
+let suppressDepth = 0;
+
 /** Clear both stacks (call on DB open/new/save-as/restore). */
 export function clearUndo(): void {
   undoStack.length = 0;
   redoStack.length = 0;
+}
+
+/**
+ * Run `fn` (a covered mutation) WITHOUT recording any undo entry. Nested withUndo
+ * calls inside are also suppressed. Use this to reverse a not-yet-committed action
+ * whose own create entry is being discarded via `discardLastUndoEntry`, so the
+ * pair leaves the undo history exactly as it was before the action began.
+ */
+export function runWithoutUndo<T>(fn: () => T): T {
+  suppressDepth++;
+  try {
+    return fn();
+  } finally {
+    suppressDepth--;
+  }
+}
+
+/**
+ * Discard the most recent undo entry (and never a redo entry). Returns true when
+ * one was dropped. Used to erase an action's create step when the action is being
+ * fully backed out (so undo won't resurrect it).
+ */
+export function discardLastUndoEntry(): boolean {
+  return undoStack.pop() !== undefined;
 }
 
 export function canUndo(): boolean {
@@ -115,6 +144,11 @@ function snapshot(
  * Captures before/after for those transactions and all their split rows.
  */
 export function withUndo(label: string, txIds: string[], fn: () => string[] | void): void {
+  // Suppressed: run the mutation but record nothing (backing out a pending action).
+  if (suppressDepth > 0) {
+    fn();
+    return;
+  }
   // Nested call (inside a bulk wrapper): just run; the outer call captures it all.
   if (captureDepth > 0) {
     fn();

@@ -36,13 +36,15 @@ import type {
   PurchaseCategoryLeg,
   PlanBalance,
   PlanLedgerEntry,
+  AdjustPlanInput,
 } from "../../src/shared/types.js";
 import { ClearedState } from "../../src/shared/types.js";
 import { MICRO } from "../../src/shared/types.js";
+import { FEE_MEMO_PREFIX } from "../../src/core/installment.js";
 import { tradeCashCents } from "../../src/core/worth.js";
 import { loanBalanceAsOf, computeLoanPaymentSplit } from "../../src/core/loanSplit.js";
 import { getDb } from "./index.js";
-import { withUndo } from "./undo.js";
+import { withUndo, runWithoutUndo, discardLastUndoEntry } from "./undo.js";
 
 // ---- Row shapes (snake_case, as stored) ----
 
@@ -582,6 +584,22 @@ export function deleteTransaction(id: string): void {
   withUndo("Delete transaction", Array.from(affectedTxIds), () => {
     run();
   });
+}
+
+/**
+ * Back out a transaction that was JUST created and immediately cancelled by the
+ * user (e.g. a New-Transaction transfer into an installment account when the
+ * follow-up Apply-payment dialog is cancelled). Unlike deleteTransaction, this
+ * leaves NO undo footprint: it discards the transaction's own "Add transaction"
+ * entry (assumed to be the most recent undo step, since the cancel follows the
+ * create with no intervening action) and performs the soft-delete without
+ * recording a new entry. Net effect on the undo history: as if it never happened.
+ */
+export function cancelPendingTransaction(id: string): void {
+  // Drop the create's undo entry (the most recent step).
+  discardLastUndoEntry();
+  // Soft-delete the transaction + its splits without journaling.
+  runWithoutUndo(() => deleteTransaction(id));
 }
 
 /** Delete many transactions as a SINGLE undo step. */
@@ -1714,6 +1732,95 @@ export function recordPlanPurchase(input: RecordPlanPurchaseInput): string {
   );
 }
 
+/**
+ * Apply a manual adjustment to a single plan. Posts up to two transactions, each
+ * OWNED BY the installment account (no external cash source):
+ *
+ *   1. Signed principal adjustment (when principalAdjustmentCents != 0). A pure
+ *      balance correction: a single self-referential transfer leg tagged with the
+ *      plan (transfer_account_id = the installment account), so planBalances()
+ *      counts it as principal. Positive reduces the remaining balance (a credit);
+ *      negative raises it (a charge). Owned by the installment account so the
+ *      leg's sign equals the account's signed delta (see principalPaydownCents).
+ *      No category offset is possible on a self-transfer (the leg consumes the
+ *      whole owning total); the chosen "Adjustment" category, if any, is only used
+ *      to label the memo for reporting context.
+ *
+ *   2. Late fee (when feeCents > 0). A normal expense on the installment account
+ *      (from-owned, single category leg) tagged with the plan so it appears in the
+ *      plan's history; being a CATEGORY leg it never affects the remaining balance.
+ *      Its memo is prefixed with FEE_MEMO_PREFIX so planLedger() classifies it as a
+ *      fee rather than interest.
+ *
+ * Returns the ids of the transactions created (0, 1, or 2). Throws when neither a
+ * non-zero principal adjustment nor a positive fee is supplied.
+ */
+export function adjustPlan(input: AdjustPlanInput): string[] {
+  const plan = getLoanPlan(input.planId);
+  if (!plan) throw new Error("Plan not found.");
+  const principal = Math.trunc(input.principalAdjustmentCents ?? 0);
+  const fee = Math.max(0, Math.trunc(input.feeCents ?? 0));
+  if (principal === 0 && fee === 0) {
+    throw new Error("Enter a principal adjustment and/or a late fee.");
+  }
+  const accountId = plan.account_id;
+  const created: string[] = [];
+  const baseMemo = input.memo?.trim() || null;
+
+  // 1) Signed principal adjustment as a self-transfer, owned by the installment
+  //    account (to = account). A positive leg reduces the balance; negative raises
+  //    it. amountCents is the magnitude; the owning signed total is +magnitude.
+  if (principal !== 0) {
+    const magnitude = Math.abs(principal);
+    const reduces = principal > 0; // credit reduces the plan's remaining balance
+    const leg: NewSplitInput = {
+      // to-owned self-transfer: positive leg = paydown, negative = charge.
+      amountCents: reduces ? magnitude : -magnitude,
+      transferAccountId: accountId,
+      planId: input.planId,
+      memo: baseMemo ?? (reduces ? "Principal adjustment (credit)" : "Principal adjustment (charge)"),
+    };
+    // For a charge (negative paydown) the account's signed total is negative, so
+    // the transaction is owned by the FROM side; for a credit it is to-owned.
+    const tx = createTransaction({
+      date: input.date,
+      payee: plan.label,
+      memo: baseMemo ?? "Plan adjustment",
+      amountCents: magnitude,
+      fromAccountId: reduces ? null : accountId,
+      toAccountId: reduces ? accountId : null,
+      categoryId: null,
+      splits: [leg],
+    });
+    created.push(tx.id);
+  }
+
+  // 2) Late fee: a normal expense on the installment account (from-owned single
+  //    category leg), tagged with the plan. Category leg → never affects principal.
+  if (fee > 0) {
+    const feeMemo = `${FEE_MEMO_PREFIX}${baseMemo ? ` — ${baseMemo}` : ""}`;
+    const leg: NewSplitInput = {
+      amountCents: -fee, // from-owned expense: outflow leg is negative
+      categoryId: input.feeCategoryId ?? null,
+      planId: input.planId,
+      memo: feeMemo,
+    };
+    const tx = createTransaction({
+      date: input.date,
+      payee: plan.label,
+      memo: feeMemo,
+      amountCents: fee,
+      fromAccountId: accountId,
+      toAccountId: null,
+      categoryId: null,
+      splits: [leg],
+    });
+    created.push(tx.id);
+  }
+
+  return created;
+}
+
 export function updateLoanPlan(input: UpdateLoanPlanInput): void {
   const db = getDb();
   const fields: string[] = [];
@@ -1750,39 +1857,76 @@ export function deleteLoanPlan(id: string): void {
 
 /**
  * Per-plan computed balances for an account. A plan's remaining balance is its
- * principal minus the PRINCIPAL payments attributed to it via split legs
- * (transaction_splits.plan_id). Interest legs are category legs and are excluded
- * by only counting transfer legs targeting the installment account. `paymentsMade`
- * counts distinct non-deleted transactions with a principal leg for the plan.
+ * principal minus the SIGNED principal paydown attributed to it via split legs
+ * (transaction_splits.plan_id). Only transfer legs targeting the installment
+ * account count toward principal; category legs (interest, late fees, other
+ * adjustments booked to a category) never affect the remaining balance.
+ *
+ * "Paydown" is measured as the installment account's own signed delta for that
+ * leg (positive reduces the balance, negative increases it):
+ *   - when the installment account OWNS the transaction (it is the from- or
+ *     to-side, including a self-referential transfer leg), the stored amount_cents
+ *     already IS its signed delta → paydown = amount_cents.
+ *   - when the transaction is owned by a funding account (the installment account
+ *     is only the transfer target), the leg is that funder's outflow (negative)
+ *     into the installment account → paydown = -amount_cents.
+ * This lets a signed principal ADJUSTMENT move the balance either way: a to-owned
+ * positive leg (credit) pays it down; a from-owned negative leg (charge) raises it.
+ *
+ * `paymentsMade` counts distinct non-deleted transactions whose NET principal
+ * effect on the plan is a paydown (> 0), used to number the projected schedule.
  */
 export function planBalances(accountId: string): PlanBalance[] {
   const db = getDb();
   const plans = listLoanPlans(accountId);
   if (plans.length === 0) return [];
 
-  // Principal paid per plan = sum of |amount| of non-deleted transfer legs that
-  // target THIS account and carry a plan_id, from non-deleted transactions.
+  // Signed principal paydown per plan (see doc comment for the sign convention).
   const rows = db
     .prepare(
       `SELECT s.plan_id AS plan_id,
-              SUM(ABS(s.amount_cents)) AS principal_paid,
-              COUNT(DISTINCT s.transaction_id) AS payments
+              SUM(CASE WHEN t.from_account_id = @acct OR t.to_account_id = @acct
+                       THEN s.amount_cents ELSE -s.amount_cents END) AS principal_paid
          FROM transaction_splits s
          JOIN transactions t ON t.id = s.transaction_id
         WHERE s.deleted_at IS NULL
           AND t.deleted_at IS NULL
           AND s.plan_id IS NOT NULL
-          AND s.transfer_account_id = ?
+          AND s.transfer_account_id = @acct
         GROUP BY s.plan_id`
     )
-    .all(accountId) as Array<{ plan_id: string; principal_paid: number; payments: number }>;
-  const paidByPlan = new Map<string, { principal: number; payments: number }>();
-  for (const r of rows) paidByPlan.set(r.plan_id, { principal: r.principal_paid, payments: r.payments });
+    .all({ acct: accountId }) as Array<{ plan_id: string; principal_paid: number }>;
+
+  // Distinct transactions that made a net paydown for the plan (for numbering).
+  const payRows = db
+    .prepare(
+      `SELECT plan_id, COUNT(*) AS payments FROM (
+         SELECT s.plan_id AS plan_id, s.transaction_id AS tx,
+                SUM(CASE WHEN t.from_account_id = @acct OR t.to_account_id = @acct
+                         THEN s.amount_cents ELSE -s.amount_cents END) AS net
+           FROM transaction_splits s
+           JOIN transactions t ON t.id = s.transaction_id
+          WHERE s.deleted_at IS NULL
+            AND t.deleted_at IS NULL
+            AND s.plan_id IS NOT NULL
+            AND s.transfer_account_id = @acct
+          GROUP BY s.plan_id, s.transaction_id
+       ) WHERE net > 0
+       GROUP BY plan_id`
+    )
+    .all({ acct: accountId }) as Array<{ plan_id: string; payments: number }>;
+
+  const paidByPlan = new Map<string, number>();
+  for (const r of rows) paidByPlan.set(r.plan_id, r.principal_paid);
+  const paymentsByPlan = new Map<string, number>();
+  for (const r of payRows) paymentsByPlan.set(r.plan_id, r.payments);
 
   return plans.map((plan) => {
-    const paid = paidByPlan.get(plan.id) ?? { principal: 0, payments: 0 };
-    const remaining = Math.max(0, plan.principalCents - paid.principal);
-    return { plan, remainingCents: remaining, paymentsMade: paid.payments };
+    const paid = paidByPlan.get(plan.id) ?? 0;
+    // A paydown reduces the balance; a charge (negative paydown) raises it.
+    // Never below zero, but a positive adjustment may exceed the original principal.
+    const remaining = Math.max(0, plan.principalCents - paid);
+    return { plan, remainingCents: remaining, paymentsMade: paymentsByPlan.get(plan.id) ?? 0 };
   });
 }
 
@@ -1800,30 +1944,43 @@ export function planLedger(planId: string): PlanLedgerEntry[] {
   );
   if (!plan) return [];
 
-  // One row per transaction touching this plan, with principal (transfer legs) and
-  // interest (category legs) summed, ordered oldest-first for the running balance.
+  // One row per transaction touching this plan. Principal = SIGNED paydown from
+  // transfer legs targeting the installment account (positive reduces the balance,
+  // negative — a charge/adjustment — raises it), using the same sign convention as
+  // planBalances(). Category legs are non-principal costs, classified as fees when
+  // their memo marks them a fee (see FEE_MEMO_PREFIX) and interest otherwise.
   const rows = db
     .prepare(
       `SELECT t.id AS tx_id, t.date AS date, t.payee AS payee, t.memo AS memo,
-              SUM(CASE WHEN s.transfer_account_id IS NOT NULL THEN ABS(s.amount_cents) ELSE 0 END) AS principal,
-              SUM(CASE WHEN s.category_id IS NOT NULL THEN ABS(s.amount_cents) ELSE 0 END) AS interest
+              SUM(CASE WHEN s.transfer_account_id IS NOT NULL
+                       THEN (CASE WHEN t.from_account_id = @acct OR t.to_account_id = @acct
+                                  THEN s.amount_cents ELSE -s.amount_cents END)
+                       ELSE 0 END) AS principal,
+              SUM(CASE WHEN s.category_id IS NOT NULL
+                        AND (s.memo IS NULL OR s.memo NOT LIKE @feeLike)
+                       THEN ABS(s.amount_cents) ELSE 0 END) AS interest,
+              SUM(CASE WHEN s.category_id IS NOT NULL
+                        AND s.memo IS NOT NULL AND s.memo LIKE @feeLike
+                       THEN ABS(s.amount_cents) ELSE 0 END) AS fee
          FROM transaction_splits s
          JOIN transactions t ON t.id = s.transaction_id
-        WHERE s.deleted_at IS NULL AND t.deleted_at IS NULL AND s.plan_id = ?
+        WHERE s.deleted_at IS NULL AND t.deleted_at IS NULL AND s.plan_id = @plan
         GROUP BY t.id
         ORDER BY t.date ASC, t.created_at ASC, t.id ASC`
     )
-    .all(planId) as Array<{
+    .all({ acct: plan.account_id, plan: planId, feeLike: `${FEE_MEMO_PREFIX}%` }) as Array<{
     tx_id: string;
     date: string;
     payee: string | null;
     memo: string | null;
     principal: number;
     interest: number;
+    fee: number;
   }>;
 
   let running = plan.principal_cents;
   return rows.map((r) => {
+    // Positive principal pays down; negative (a charge) adds back. Floor at zero.
     running = Math.max(0, running - r.principal);
     return {
       transactionId: r.tx_id,
@@ -1832,6 +1989,7 @@ export function planLedger(planId: string): PlanLedgerEntry[] {
       memo: r.memo,
       principalCents: r.principal,
       interestCents: r.interest,
+      feeCents: r.fee,
       runningBalanceCents: running,
     };
   });
@@ -2342,10 +2500,11 @@ export function recordTrade(input: NewTradeInput): InvestmentTransaction {
       const intoAccount = tradeCents > 0;
       const category = input.action === "div" ? input.categoryId ?? null : null;
       cashTxnId = insertCashTxn(tradeCents, intoAccount, label, category);
-    } else if (input.action === "add") {
-      // 'Add shares' has no cash movement, but we record a $0 cash transaction so
-      // the opening/gift/transfer-in appears as a ledger line (with the security
-      // + shares in its memo). It contributes 0 to the account balance.
+    } else if (input.action === "add" || (input.action === "reinvest" && incomeCents === 0)) {
+      // 'Add shares' and a shares-only 'Reinvest' have no cash movement, but we
+      // record a $0 cash transaction so the lot appears as a ledger line (with the
+      // security + shares in its memo). This also lets the user re-date or delete
+      // it from the ledger. It contributes 0 to the account balance.
       cashTxnId = insertCashTxn(0, true, label, null);
     }
     // Fee leg (Option A): a separate categorized expense when a fee category is set.
@@ -2431,6 +2590,96 @@ export function deleteInvestmentTxn(id: string): void {
 }
 
 /**
+ * Update the share count on an existing share-moving investment lot (buy/sell/
+ * reinvest/grant/add), keeping the linked cash (and income) legs consistent.
+ *
+ * The per-share price is held fixed; the new shares recompute the gross value,
+ * the trade cash leg, and — for grant/reinvest — the categorized income leg. The
+ * lot's quantity/cash and the linked `transactions` rows are updated in one DB
+ * transaction. Cash dividends ('div') carry no shares and are rejected.
+ *
+ * `units` is a positive human share count (e.g. 12.5); the action's sign is
+ * applied (sell is negative). Reinvest/'add' move shares but net $0 cash, so only
+ * the lot quantity (and, for reinvest, the income leg) changes.
+ */
+export function updateTradeShares(id: string, units: number): void {
+  const db = getDb();
+  const ts = now();
+  const run = db.transaction(() => {
+    const lot = db
+      .prepare("SELECT * FROM investment_transactions WHERE id = ? AND deleted_at IS NULL")
+      .get(id) as InvTxRow | undefined;
+    if (!lot) throw new Error("Trade not found.");
+    if (lot.action === "div") throw new Error("A cash dividend has no shares to edit.");
+
+    const absUnits = Math.abs(units);
+    if (!Number.isFinite(absUnits) || absUnits <= 0) {
+      throw new Error("Enter a positive number of shares.");
+    }
+
+    // Recompute quantity from the new shares; the action determines the sign.
+    const signedUnits = lot.action === "sell" ? -absUnits : absUnits;
+    const quantityMicro = Math.round(signedUnits * MICRO);
+
+    // Per-share price is stored in micro-cents; recover per-share cents to size
+    // the gross value the same way recordTrade does.
+    const pricePerUnitCents = lot.price_micros / MICRO;
+    const grossCents = Math.round(absUnits * pricePerUnitCents);
+
+    // Fees were either expensed to a separate leg (fee_txn_id set) or folded into
+    // the trade cash leg; mirror recordTrade's split.
+    const feeExpensed = !!lot.fee_txn_id;
+    const tradeFeesCents = feeExpensed ? 0 : Math.max(0, lot.fees_cents);
+    const tradeCents = tradeCashCents(
+      lot.action as InvestmentTransaction["action"],
+      grossCents,
+      tradeFeesCents
+    );
+    const incomeCents =
+      lot.action === "grant" || lot.action === "reinvest" ? grossCents : 0;
+    const cashCents = tradeCents + incomeCents + (feeExpensed ? -Math.max(0, lot.fees_cents) : 0);
+
+    // Update the lot itself.
+    db.prepare(
+      "UPDATE investment_transactions SET quantity_micro = ?, cash_cents = ?, updated_at = ? WHERE id = ?"
+    ).run(quantityMicro, cashCents, ts, id);
+
+    // Update the trade cash leg's magnitude and direction. tradeCents > 0 flows
+    // INTO the account (to_account), < 0 flows OUT (from_account), 0 is a $0 line.
+    if (lot.cash_txn_id) {
+      const intoAccount = tradeCents > 0;
+      db.prepare(
+        `UPDATE transactions
+            SET amount_cents = ?,
+                from_account_id = ?,
+                to_account_id = ?,
+                updated_at = ?
+          WHERE id = ?`
+      ).run(
+        Math.abs(tradeCents),
+        intoAccount ? null : lot.account_id,
+        intoAccount ? lot.account_id : null,
+        ts,
+        lot.cash_txn_id
+      );
+    }
+
+    // Update the categorized income leg (grant/reinvest): money IN of `incomeCents`.
+    if (lot.income_txn_id && incomeCents > 0) {
+      db.prepare(
+        `UPDATE transactions
+            SET amount_cents = ?,
+                to_account_id = ?,
+                from_account_id = NULL,
+                updated_at = ?
+          WHERE id = ?`
+      ).run(incomeCents, lot.account_id, ts, lot.income_txn_id);
+    }
+  });
+  run();
+}
+
+/**
  * Import normalized investment-history rows into an account as trades. Securities
  * are matched to existing assets by (case-insensitive) name within the account,
  * or created once per distinct name. Each row becomes a recordTrade(buy|sell).
@@ -2478,4 +2727,3 @@ export function commitInvestmentImport(
   });
   return run();
 }
-

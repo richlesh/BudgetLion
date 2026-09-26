@@ -34,6 +34,7 @@ import { NewInvestmentDialog } from "./components/NewInvestmentDialog";
 import { HoldingsPanel } from "./components/HoldingsPanel";
 import { PlansPanel } from "./components/PlansPanel";
 import { PlanPaymentDialog } from "./components/PlanPaymentDialog";
+import { AdjustPlanDialog } from "./components/AdjustPlanDialog";
 import { AssetHoldingsPanel } from "./components/AssetHoldingsPanel";
 import { NetWorthReport } from "./components/NetWorthReport";
 import { CategoryReport } from "./components/CategoryReport";
@@ -111,11 +112,21 @@ export function App() {
   const [showImportChooser, setShowImportChooser] = useState(false);
   // Installment/BNPL account whose "Apply payment" dialog is open (null = closed).
   const [planPaymentFor, setPlanPaymentFor] = useState<Account | null>(null);
+  // Installment/BNPL account whose "Adjust plan…" dialog is open (null = closed).
+  // Picker mode: the dialog lists the account's plans so the user chooses one.
+  const [adjustPlanFor, setAdjustPlanFor] = useState<Account | null>(null);
   // An existing transaction being categorized into an installment account: the
   // installment account + the transaction to rewrite as a plan-attributed split.
   const [planApplyExisting, setPlanApplyExisting] = useState<{
     account: Account;
     tx: { id: string; amountCents: number; date: string; fromAccountId: string | null };
+    /**
+     * When true, the transaction was freshly created by the New Transaction flow
+     * purely to seed this dialog, so canceling should back it out (delete it).
+     * The imported/existing-transaction path leaves this false so Cancel keeps the
+     * transaction untouched.
+     */
+    deleteOnCancel?: boolean;
   } | null>(null);
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [showCharts, setShowCharts] = useState(false);
@@ -186,6 +197,13 @@ export function App() {
     fromAccountName?: string;
     /** Called after a successful save (refresh ledger/search as appropriate). */
     onSaved?: () => void | Promise<void>;
+    /**
+     * Called when the editor is cancelled (not saved). Used to back out a
+     * transaction that was created only to seed this editor (e.g. a new transfer
+     * into a loan account), so canceling removes it and scrubs the undo log.
+     * Omitted for editors opened on pre-existing transactions.
+     */
+    onCancel?: () => void | Promise<void>;
   } | null>(null);
   // A paycheck-shaped split opens the full Paycheck editor instead of the generic
   // split editor: editable on the owning (deposit) side, read-only on the TO side.
@@ -561,12 +579,18 @@ export function App() {
       applyFontSettings(s);
     });
     window.ledger.onMenuNewTransaction(() => {
-      if (selectedRef.current) {
+      // Not available for installment/BNPL accounts (use Apply payment / Adjust plan).
+      if (selectedRef.current && selectedRef.current.type !== "installment") {
         setInvTxMode("choose");
         setShowTxDialog(true);
       }
     });
-    window.ledger.onMenuNewPaycheck(() => setShowPaycheckDialog(true));
+    window.ledger.onMenuNewPaycheck(() => {
+      // Not available for installment/BNPL accounts.
+      if (selectedRef.current && selectedRef.current.type !== "installment") {
+        setShowPaycheckDialog(true);
+      }
+    });
     window.ledger.onMenuNewAsset(() => {
       const acct = selectedRef.current;
       if (acct && acct.type === "asset") {
@@ -973,7 +997,8 @@ export function App() {
       isSplit: boolean,
       existingSplits: TransactionSplit[] | undefined,
       signedTotalCents: number,
-      onSaved: () => void | Promise<void>
+      onSaved: () => void | Promise<void>,
+      onCancel?: () => void | Promise<void>
     ) => {
       const isOwner = tx.fromAccountId === account.id || tx.toAccountId === account.id;
       const ownerFromId =
@@ -1049,6 +1074,7 @@ export function App() {
         readOnly: !isOwner,
         fromAccountName,
         onSaved,
+        onCancel,
       });
     },
     [accounts, refreshCategories]
@@ -1089,10 +1115,40 @@ export function App() {
               async () => {
                 if (selectedId) await refreshLedger(selectedId);
                 await refreshAccounts();
+              },
+              // Cancel backs out the just-created transfer with no undo footprint,
+              // so canceling the split dialog behaves as if it was never created.
+              async () => {
+                try {
+                  await window.ledger.cancelPendingTransaction(created.id);
+                  await refreshAccounts();
+                  if (selectedId) await refreshLedger(selectedId);
+                  setHoldingsReloadKey((k) => k + 1);
+                } catch (e) {
+                  setToast(e instanceof Error ? e.message : "Could not remove the transaction.");
+                }
               }
             );
           }
         }
+      }
+      // Installment/BNPL destination: a transfer INTO an installment account is a
+      // plan payment, so open the Apply-payment dialog seeded with the just-created
+      // transaction. This rewrites it as a plan-attributed split (principal +
+      // interest), mirroring the flow used when an existing/imported transaction's
+      // destination is changed to an installment account.
+      if (isPlainTransfer && target?.type === "installment") {
+        setPlanApplyExisting({
+          account: target,
+          tx: {
+            id: created.id,
+            amountCents: Math.abs(created.amountCents),
+            date: created.date,
+            fromAccountId: created.fromAccountId,
+          },
+          // Created just to seed the dialog: Cancel should back it out.
+          deleteOnCancel: true,
+        });
       }
     },
     [selectedId, refreshLedger, refreshAccounts, accounts, openSplitEditor]
@@ -1442,6 +1498,15 @@ export function App() {
               setShowRecurring(true);
             },
           });
+          // "Adjust plan…" — installment/BNPL accounts only. Opens the adjustment
+          // dialog in picker mode so the user chooses which plan to credit/charge
+          // (signed principal) or add a late fee to.
+          if (selected?.type === "installment") {
+            items.push({
+              label: "Adjust plan…",
+              onClick: () => setAdjustPlanFor(selected),
+            });
+          }
           // "Move to account…" — reassign the transaction to another account.
           // Only when the current account is the owning side, it isn't an
           // investment-trade row (moving would desync the holding), and there's
@@ -1829,8 +1894,13 @@ export function App() {
                 <>
                   <button
                     className="icon-btn"
-                    title="Add a new transaction"
+                    title={
+                      selected.type === "installment"
+                        ? "Not available for installment/BNPL accounts — use Apply payment or Adjust plan"
+                        : "Add a new transaction"
+                    }
                     aria-label="New transaction"
+                    disabled={selected.type === "installment"}
                     onClick={() => {
                       setInvTxMode("choose");
                       setShowTxDialog(true);
@@ -1854,8 +1924,13 @@ export function App() {
                   </button>
                   <button
                     className="secondary icon-btn"
-                    title="Enter a paycheck"
+                    title={
+                      selected.type === "installment"
+                        ? "Not available for installment/BNPL accounts"
+                        : "Enter a paycheck"
+                    }
                     aria-label="New paycheck"
+                    disabled={selected.type === "installment"}
                     onClick={() => setShowPaycheckDialog(true)}
                   >
                     <svg
@@ -2207,7 +2282,26 @@ export function App() {
           accounts={accounts}
           categories={categories}
           existingTx={planApplyExisting.tx}
-          onCancel={() => setPlanApplyExisting(null)}
+          onCancel={async () => {
+            const state = planApplyExisting;
+            setPlanApplyExisting(null);
+            // New-transaction flow: the transfer was created only to seed this
+            // dialog, so backing out (Cancel) should delete it so nothing is left
+            // behind. The imported/existing path leaves the transaction untouched.
+            if (state?.deleteOnCancel) {
+              try {
+                // Back out the pending transaction with no undo footprint (its
+                // create entry is discarded and the delete isn't journaled), so
+                // Cancel behaves as if the transaction was never created.
+                await window.ledger.cancelPendingTransaction(state.tx.id);
+                await refreshAccounts();
+                if (selectedId) await refreshLedger(selectedId);
+                setHoldingsReloadKey((k) => k + 1);
+              } catch (e) {
+                setToast(e instanceof Error ? e.message : "Could not remove the transaction.");
+              }
+            }
+          }}
           onSubmit={() => setPlanApplyExisting(null)}
           onApplyToExisting={async (txId, splits) => {
             const fromId = planApplyExisting.tx.fromAccountId;
@@ -2253,6 +2347,26 @@ export function App() {
               setToast("Payment applied across plans.");
             } catch (e) {
               setToast(e instanceof Error ? e.message : "Could not apply the payment.");
+            }
+          }}
+        />
+      )}
+      {adjustPlanFor && (
+        <AdjustPlanDialog
+          accountId={adjustPlanFor.id}
+          currency={adjustPlanFor.currency}
+          categories={categories}
+          onCancel={() => setAdjustPlanFor(null)}
+          onSubmit={async (input) => {
+            setAdjustPlanFor(null);
+            try {
+              await window.ledger.adjustPlan(input);
+              await refreshAccounts();
+              if (selectedId) await refreshLedger(selectedId);
+              setHoldingsReloadKey((k) => k + 1);
+              setToast("Plan adjusted.");
+            } catch (e) {
+              setToast(e instanceof Error ? e.message : "Could not adjust the plan.");
             }
           }}
         />
@@ -2332,7 +2446,11 @@ export function App() {
           readOnly={splitEditor.readOnly}
           currentAccountId={splitEditor.account.id}
           fromAccountName={splitEditor.fromAccountName}
-          onCancel={() => setSplitEditor(null)}
+          onCancel={async () => {
+            const cancel = splitEditor.onCancel;
+            setSplitEditor(null);
+            if (cancel) await cancel();
+          }}
           onSave={saveSplit}
         />
       )}

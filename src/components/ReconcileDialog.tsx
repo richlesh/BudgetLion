@@ -117,13 +117,19 @@ export function ReconcileDialog({ account, accounts, rows, categories, onCancel,
     });
   }
 
-  // Signed (stored) magnitude of an enabled adjustment, per its kind.
+  // Signed (stored/internal) magnitude of an enabled adjustment, per its kind.
+  // Amounts use the internal convention (inflow +, outflow −). Interest on an
+  // asset account is income (inflow, +); on a LIABILITY (credit card / loan /
+  // installment) interest is a charge that INCREASES the amount owed, i.e. an
+  // outflow that makes the balance more negative (−). Fees are always an expense
+  // (outflow, −). Adjustment keeps the user's typed sign.
   function adjSigned(r: AdjRow, kind: "interest" | "fees" | "adjustment"): number {
     if (!r.enabled) return 0;
     const cents = parseCents(r.amount);
     if (cents == null) return 0;
     const mag = Math.abs(cents);
-    return kind === "interest" ? mag : kind === "fees" ? -mag : cents;
+    const interestSigned = isLiability(account.type) ? -mag : mag;
+    return kind === "interest" ? interestSigned : kind === "fees" ? -mag : cents;
   }
 
   // Reconciled balance = opening balance + already-reconciled rows + the checked
@@ -143,16 +149,18 @@ export function ReconcileDialog({ account, accounts, rows, categories, onCancel,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, checked, interest, fees, adjustment, account.openingBalanceCents, account.type, account.id]);
 
-  // Build an adjustment (interest/fees positive = inflow/outflow per kind).
-  // Interest is income (inflow, +); Fees are an expense (outflow, −); Adjustment
-  // takes the user's sign (they can type a negative).
+  // Build an adjustment in the internal convention (inflow +, outflow −).
+  // Interest: income (inflow, +) for an asset account, but a charge that
+  // INCREASES the amount owed (outflow, −) for a LIABILITY. Fees are an expense
+  // (outflow, −). Adjustment takes the user's sign (they can type a negative).
   function buildAdj(r: AdjRow, kind: "interest" | "fees" | "adjustment"): ReconcileAdjustment | null {
     if (!r.enabled) return null;
     const cents = parseCents(r.amount);
     if (cents == null || cents === 0) return null;
     const magnitude = Math.abs(cents);
+    const interestSigned = isLiability(account.type) ? -magnitude : magnitude;
     const signed =
-      kind === "interest" ? magnitude : kind === "fees" ? -magnitude : cents; // adjustment keeps sign
+      kind === "interest" ? interestSigned : kind === "fees" ? -magnitude : cents; // adjustment keeps sign
     return {
       date: r.date,
       description: r.description.trim() || null,
