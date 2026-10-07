@@ -1,9 +1,6 @@
 name: Build and Release macOS
 
 on:
-  push:
-    tags:
-      - '*'
   workflow_dispatch:
     inputs:
       tag:
@@ -47,6 +44,12 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Set version from tag
+        shell: bash
+        run: |
+          RAW="${{ inputs.tag || github.ref_name }}"
+          npm version "${RAW#v}" --no-git-tag-version --allow-same-version
 
       - name: Import Developer ID certificate
         env:
