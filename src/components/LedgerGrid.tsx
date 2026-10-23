@@ -646,6 +646,18 @@ export function LedgerGrid({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bumpKey]);
 
+  // Client-side mode: AG Grid applies new rowData immutably (getRowId is set), so
+  // it refreshes cell values for existing rows but does NOT re-run getRowClass.
+  // That left the green "row-reconciled" class stuck after un-reconciling (and the
+  // reverse after reconciling). Redraw rows on a data change so getRowClass is
+  // re-evaluated against the latest `reconciled` flag.
+  useEffect(() => {
+    if (infinite) return;
+    const api = gridApiRef.current;
+    if (!api) return;
+    api.redrawRows();
+  }, [infinite, rowData]);
+
   // Saved widths may arrive after the grid is ready (settings load asynchronously),
   // so re-apply whenever they change and the grid exists.
   useEffect(() => {

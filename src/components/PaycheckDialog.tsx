@@ -385,7 +385,7 @@ export function PaycheckDialog({
   const title = readOnly ? "Paycheck (view only)" : mode === "edit" ? "Edit Paycheck" : "New Paycheck";
 
   return (
-    <div className="dialog-backdrop" onClick={onCancel}>
+    <div className="dialog-backdrop dialog-backdrop-top" onClick={onCancel}>
       <div className="dialog" style={{ width: 620 }} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <h3>{title}</h3>

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Account, AggregateData, Category, LedgerRow, LedgerTradeInfo, Transaction, TransactionSplit } from "../shared/types";
 import { buildLedger } from "../core/balances";
 import { LedgerGrid } from "./LedgerGrid";
-import { isReconciledEitherSide } from "../core/reconcile";
+import { isReconciledEitherSide, isReconciledForAccount } from "../core/reconcile";
 import { ConfirmDialog } from "./ConfirmDialog";
 import type { CategoryChoice } from "./CategoryAccountEditor";
 import { ContextMenu, type ContextMenuItem } from "./ContextMenu";
@@ -264,6 +264,24 @@ export function SearchResults({ data, criteria, dark, onClose, onReload, onToast
   );
   // True when the user tried to delete a reconciled transaction (shows a notice).
   const [reconciledBlock, setReconciledBlock] = useState(false);
+  // Pending un-reconcile confirmation: the owning account plus the reconciled
+  // transaction ids to clear on THIS account's side.
+  const [pendingUnreconcile, setPendingUnreconcile] = useState<
+    { account: Account; ids: string[] } | null
+  >(null);
+
+  const confirmUnreconcile = useCallback(async () => {
+    if (!pendingUnreconcile || pendingUnreconcile.ids.length === 0) return;
+    const { account, ids } = pendingUnreconcile;
+    setPendingUnreconcile(null);
+    try {
+      await window.ledger.setTransactionsReconciled(ids, account.id, false);
+      onReload();
+      onToast(`Un-reconciled ${ids.length} transaction${ids.length === 1 ? "" : "s"}.`);
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : "Could not un-reconcile.");
+    }
+  }, [pendingUnreconcile, onReload, onToast]);
 
   // Bulk-apply a category/uncategorized/transfer to the given rows in an account.
   const bulkSetCategory = useCallback(
@@ -365,6 +383,7 @@ export function SearchResults({ data, criteria, dark, onClose, onReload, onToast
         headerName: string;
         displayValue: string;
         isOpening: boolean;
+        transactionId: string;
         selectedTransactionIds: string[];
       }) => {
         const items: ContextMenuItem[] = [];
@@ -382,10 +401,25 @@ export function SearchResults({ data, criteria, dark, onClose, onReload, onToast
           });
           items.push({ label: `Bulk Delete (${ids.length})`, onClick: () => void bulkDelete(ids) });
         }
+        // "Un-reconcile" — clear THIS account's reconcile bit for the reconciled
+        // rows among the selection (or the right-clicked row). Mirrors the ledger.
+        if (!info.isOpening) {
+          const sel = ids.length > 1 ? ids : [info.transactionId];
+          const reconciledIds = sel.filter((id) => {
+            const tx = data.transactions.find((t) => t.id === id);
+            return tx ? isReconciledForAccount(tx, account.id, splitsByTx.get(id)) : false;
+          });
+          if (reconciledIds.length > 0) {
+            items.push({
+              label: reconciledIds.length > 1 ? `Un-reconcile (${reconciledIds.length})` : "Un-reconcile",
+              onClick: () => setPendingUnreconcile({ account, ids: reconciledIds }),
+            });
+          }
+        }
         if (items.length === 0) return;
         setMenu({ x: info.x, y: info.y, items });
       },
-    [bulkCategorySubmenu, bulkDelete]
+    [bulkCategorySubmenu, bulkDelete, data.transactions, splitsByTx]
   );
 
   const total = groupAccountIds.reduce(
@@ -394,7 +428,17 @@ export function SearchResults({ data, criteria, dark, onClose, onReload, onToast
   );
 
   return (
-    <div className="dialog-backdrop" onClick={onClose}>
+    <div
+      className="dialog-backdrop"
+      onClick={(e) => {
+        // Only close when the backdrop itself is clicked. Nested overlays
+        // (context menu, confirm dialog) render inside this backdrop, and their
+        // click events bubble up here — without this guard, opening the
+        // Un-reconcile confirmation (or clicking its backdrop) would also
+        // dismiss the whole Search Results dialog.
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <div
         className="dialog search-results"
         style={{ width: "min(1100px, 94vw)", minHeight: "50vh", maxHeight: "90vh" }}
@@ -484,6 +528,20 @@ export function SearchResults({ data, criteria, dark, onClose, onReload, onToast
           destructive={false}
           onConfirm={() => setReconciledBlock(false)}
           onCancel={() => setReconciledBlock(false)}
+        />
+      )}
+      {pendingUnreconcile && pendingUnreconcile.ids.length > 0 && (
+        <ConfirmDialog
+          title="Un-reconcile?"
+          message={
+            `This will clear the reconciled flag for ${pendingUnreconcile.ids.length} transaction` +
+            `${pendingUnreconcile.ids.length === 1 ? "" : "s"} on “${pendingUnreconcile.account.name}”. ` +
+            `They'll become editable and deletable again. Continue?`
+          }
+          confirmLabel="Un-reconcile"
+          destructive={false}
+          onConfirm={confirmUnreconcile}
+          onCancel={() => setPendingUnreconcile(null)}
         />
       )}
     </div>
